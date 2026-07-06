@@ -1,0 +1,16 @@
+name: Cleanup untagged images
+
+on:
+  schedule:
+    - cron: "0 0 * * *"
+
+jobs:
+  clean:
+    name: Delete untagged images
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+        with:
+          delete-untagged: true
