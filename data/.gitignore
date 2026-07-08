@@ -1,0 +1,6 @@
+*
+!.gitignore
+
+# channel configs: only the example is tracked
+!configs/
+!configs/example.yaml

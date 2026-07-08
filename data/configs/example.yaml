@@ -1,0 +1,40 @@
+# Example of a channel config
+
+channel_name: deep-research
+
+opik_project_name: deep-research
+
+max_research_iterations: 10
+
+prompts:
+
+  client_name: ACME
+
+  agent_name: ACME Deep Research
+
+  data_sources_descriptions: |-
+    ## financial report
+
+    Financial report — ACME's quarterly report to investors: results for the period,
+    key figures, and management's commentary on performance and outlook.
+
+    Issue dates: 2015-03-01 to 2025-06-01
+    Issues per year: 4
+    Usual size: 30-60 pages
+
+    Topics:
+    - Revenue, earnings, and other key figures for the quarter
+    - Business highlights, risks, and outlook
+
+    ## newsletter
+
+    Newsletter — ACME's short monthly update on recent developments. The place for
+    timely, point-in-time observations.
+
+    Issue dates: 2020-01-15 to 2025-06-15
+    Issues per year: ~12
+    Usual size: 2-5 pages
+
+    Topics:
+    - Recent developments and announcements
+    - Short commentary on current events

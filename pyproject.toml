@@ -1,6 +1,101 @@
 [project]
 name = "dial-deep-research"
 version = "0.0.0"
-description = "DIAL-native LangChain tool-calling agent that connects to a DIAL Generic RAG MCP server"
+description = "DIAL-native agent for deep research. Uses DIAL Generic RAG MCP server as a data source."
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
+dependencies = [
+    "aidial-sdk[telemetry]>=0.32.0,<0.33.0",
+    "aidial-client>=0.7.1,<0.8.0",
+    "fastapi>=0.121.0,<0.122.0",
+    "uvicorn[standard]>=0.41.0,<0.42.0",
+    "pydantic>=2.11.0,<3.0.0",
+    "pydantic-settings>=2.10.0,<3.0.0",
+    "python-dotenv>=1.2.0,<2.0.0",
+    "langchain>=1.2.0,<2.0.0",
+    "langchain-openai>=1.1.0,<2.0.0",
+    "langchain-mcp-adapters>=0.1.0,<1.0.0",
+    "opik>=2.0.0,<3.0.0",
+    "langgraph>=1.1,<2",
+    "pyyaml>=6.0.0,<7.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "black>=24.10.0",
+    "isort>=5.13.2",
+    "ruff>=0.15.5",
+    "mypy>=1.13.0",
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.28.0",
+    "types-pyyaml>=6.0.0",
+]
+
+# Why this block exists:
+#   We use a src/ layout (code at src/dial_deep_research/, not at the repo root).
+#   That means `src/` is NOT on sys.path by default, so plain
+#   `import dial_deep_research` would fail in tests, in `python -m dial_deep_research`,
+#   and inside Docker.
+#
+#   [build-system] tells `uv sync` how to build the project as a wheel and install
+#   it into .venv/ — after which `import dial_deep_research` just works everywhere.
+#   Hatchling is a lightweight PEP-517 backend; we never invoke it directly.
+#
+#   Alternative we rejected: `sys.path.append(...)` at the top of __main__.py.
+#   That works, but it also requires pytest config (`pythonpath = ["src"]`) and is
+#   runtime path surgery rather than a proper install. The 4 lines below pay for
+#   themselves by making imports behave like a normal installed package.
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dial_deep_research"]
+
+[tool.black]
+line-length = 100
+skip-string-normalization = true
+target-version = ["py313"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+src_paths = ["src", "tests"]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "ICN",  # flake8-import-conventions
+    "LOG",  # flake8-logging
+    "PIE",  # flake8-pie
+    "RET",  # flake8-return
+    "SIM",  # flake8-simplify
+    "TID",  # flake8-tidy-imports
+    "I",    # isort
+    "N",    # pep8-naming
+    "E", "W",  # pycodestyle
+    "F",    # pyflakes
+    "UP",   # pyupgrade
+]
+ignore = [
+    "E501",  # line too long — black handles formatting
+]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = false
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["aidial_sdk.*", "aidial_client.*"]
+follow_untyped_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
