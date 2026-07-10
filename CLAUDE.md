@@ -11,6 +11,9 @@ Never commit secrets, real channel configs, or anything else sensitive: API keys
 client names, production details. Real channel configs and DIAL core `config.json` stay
 untracked; only generic examples like `data/configs/example.yaml` are committed.
 
+This repo is public. Never reference non-public resources in committed content (code,
+comments, docs, commit messages). Committed content must be self-contained.
+
 ## Rules for coding agents (Claude Code, etc)
 
 - Always use simple and clear phrasings, without unnecessary complexity.

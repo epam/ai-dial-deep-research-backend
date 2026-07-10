@@ -3,7 +3,7 @@ SRC_DIRS = src tests scripts
 MYPY_DIRS = src scripts
 
 # Opik trace stack lives in its own Compose project (`name: opik` upstream),
-# so its lifecycle is independent of `up`/`down` here. We pin a specific
+# so its lifecycle is independent of `infra-up`/`infra-down` here. We pin a specific
 # upstream tag rather than tracking `main` / `latest`.
 # The pin is passed inline on `opik-up` (the only command that resolves image tags).
 # `down`/`ps` act on containers by project label, so the variable doesn't need exporting.
@@ -62,22 +62,42 @@ test: install ## Run pytest
 
 ## -------- infra -------- ##
 
-up: ## Start the infra services (DIAL core, chat UI, themes, redis) detached
+infra-up: ## Start the infra services (DIAL core, chat UI, themes, redis) detached
 	docker compose up -d
 
-down: ## Stop the infra services
+infra-down: ## Stop the infra services
 	docker compose down
 
-logs: ## Tail logs from the infra services
+infra-logs: ## Tail logs from the infra services
 	docker compose logs -f
 
-cleanup: ## Stop infra and remove volumes (destroys DIAL core data + logs)
+infra-cleanup: ## Stop infra and remove volumes (destroys DIAL core data + logs)
 	docker compose down --volumes
 
 ## -------- app -------- ##
 
+# Both compose files together: infra + the containerized app.
+APP_COMPOSE = -f docker-compose.yml -f docker-compose.app.yml
+
 app: install ## Run the app on the host via uvicorn (infra must already be up)
 	$(UV) run python -m dial_deep_research
+
+app-build: ## Build the app Docker image
+	docker compose $(APP_COMPOSE) build deep-research
+
+app-logs: ## Tail logs from the app container
+	docker compose $(APP_COMPOSE) logs -f deep-research
+
+## -------- all: infra + app in docker (opt-in) -------- ##
+
+all-up: ## Start infra + the app container (containerized alternative to `infra-up` + `app`)
+	docker compose $(APP_COMPOSE) up -d
+
+all-down: ## Stop infra + the app container
+	docker compose $(APP_COMPOSE) down
+
+all-logs: ## Tail logs from the infra + the app container
+	docker compose $(APP_COMPOSE) logs -f
 
 ## -------- opik -------- ##
 

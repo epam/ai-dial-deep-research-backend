@@ -32,7 +32,7 @@ Infra runs in Docker; the **app runs on your host** via uvicorn. DIAL core reach
 cp .env.example .env
 # fill .env with secrets
 make install
-make up
+make infra-up
 make app
 ```
 
@@ -41,11 +41,11 @@ Then open DIAL Chat UI in the browser, select the **Deep Research** application,
 Tear down:
 
 ```sh
-make down             # stop infra
-make cleanup          # down + remove volumes (destroys DIAL core data)
+make infra-down       # stop infra
+make infra-cleanup    # down + remove volumes (destroys DIAL core data)
 ```
 
-> **Host-first trade-off.** We don't ship a Dockerfile for the app yet. `host.docker.internal` is provided automatically by Docker Desktop on macOS and Windows; on Linux you'd need to add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `core` service in `docker-compose.yml`. We'll revisit when prod deployment becomes real.
+> **Host-first trade-off.** Host-run is the default dev loop (fast restarts, IDE debugging). `host.docker.internal` is provided automatically by Docker Desktop on macOS and Windows; on Linux you'd need to add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `core` service in `docker-compose.yml`. An opt-in containerized run is available too — see [Running the app in Docker](#running-the-app-in-docker-opt-in).
 
 ## Configuration
 
@@ -63,8 +63,28 @@ Configuration comes from two sources:
 ## DIAL core configuration
 
 `dial_conf/core/config.json` is **not committed**.
-Create your own before `make up` — docker-compose mounts it into the `core`
+Create your own before `make infra-up` — docker-compose mounts it into the `core`
 service.
+
+## Running the app in Docker (opt-in)
+
+`docker-compose.app.yml` is a compose overlay that runs the app as a container next to the
+infra, e.g. to test the image itself or container networking:
+
+```sh
+make app-build        # build the app image
+make all-up           # start infra + the app container
+make app-logs         # tail app logs
+make all-down         # stop infra + the app container
+```
+
+Notes:
+
+- For DIAL core to route to the containerized app, the app endpoint in
+  `dial_conf/core/config.json` must be `http://deep-research:5000/...`
+  (not `host.docker.internal`, which is for the host-run app).
+- Inside the container `localhost` means the container itself. Any `.env` URL that points at
+  a service on your host (e.g. `MCP_URL`, Opik) must use `host.docker.internal` instead.
 
 ## Driving the app from the CLI
 
@@ -97,7 +117,7 @@ make opik-up          # first run clones github.com/comet-ml/opik into .opik-loc
 ```
 
 The Opik stack runs as a separate Compose project (`name: opik` upstream),
-so `make up` / `make down` for our infra never touches it — and vice versa.
+so `make infra-up` / `make infra-down` for our infra never touches it — and vice versa.
 
 Tear down:
 

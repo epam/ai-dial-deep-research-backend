@@ -1,0 +1,37 @@
+# Opt-in overlay: run the deep-research app as a container next to the DIAL infra.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.app.yml up -d   (or `make all-up`)
+#
+# Plain `docker compose up` / `make infra-up` still starts infra only.
+# NOTE: for DIAL core to route to the containerized app, the app endpoint in
+# dial_conf/core/config.json must point to http://deep-research:5000 instead of
+# the host-run app (host.docker.internal).
+
+services:
+
+  deep-research:
+    image: dial-deep-research
+    build: .
+    ports:
+      - "${APP_PORT:-5000}:5000"
+    depends_on:
+      - core
+    env_file:
+      - .env
+    environment:
+      # Inside the compose network the app reaches DIAL core directly,
+      # not via the host-published port from .env.
+      DIAL_URL: "http://core:8080"
+      APP_HOST: "0.0.0.0"
+      APP_PORT: "5000"
+      OPIK_TRACING_ENABLED: false
+    volumes:
+      # Channel configs stay untracked and are mounted, not baked into the image.
+      # A relative CHANNEL_CONFIG_PATH from .env resolves against /opt/app, so
+      # data/configs/<name>.yaml keeps working unchanged.
+      - ./data/configs:/opt/app/data/configs:ro
+    extra_hosts:
+      # Lets MCP_URL reach a host-run MCP server via host.docker.internal on Linux;
+      # TODO: will likely fail on macos
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
