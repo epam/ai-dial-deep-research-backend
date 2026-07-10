@@ -18,8 +18,11 @@ research loop grounded in the MCP tools, and streams progress to DIAL as timed s
 
 - [Configuration](#configuration)
 - [Environment variables](#environment-variables)
+  - [Notes on the environment variables](#notes-on-the-environment-variables)
 - [DIAL core configuration](#dial-core-configuration)
 - [Local run](#local-run)
+  - [Prerequisites](#prerequisites)
+  - [Setup](#setup)
 - [Running the app in Docker (opt-in)](#running-the-app-in-docker-opt-in)
 - [Driving the app from the CLI](#driving-the-app-from-the-cli)
 - [LLM tracing with Opik (optional)](#llm-tracing-with-opik-optional)
@@ -61,9 +64,9 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 | `HEARTBEAT_INTERVAL` | `5` | No | Seconds between DIAL keep-alive heartbeats during long-running responses. | |
 | **MCP server** | | | | |
 | `MCP_SERVER_NAME` | | ⚠️ Yes | Logical name for the generic-RAG MCP server connection. | |
-| `MCP_DEPLOYMENT_NAME` | | mode¹ | Deployment mode: DIAL application/deployment id of the generic-RAG MCP server, reached through DIAL Core at `{DIAL_URL}/v1/deployments/{name}/mcp`. Authenticated with the per-request api-key. | |
-| `MCP_URL` | | mode¹ | Local-dev mode: URL of a directly-reachable MCP server. Setting it selects local-dev mode. | |
-| `MCP_API_KEY` | | if `MCP_URL` | Local-dev mode: static key sent as the `api-key` header to `MCP_URL`. Required when `MCP_URL` is set. | |
+| `MCP_DEPLOYMENT_NAME` | | ⚠️ Yes, if `MCP_URL` unset | Deployment mode: DIAL application/deployment id of the generic-RAG MCP server, reached through DIAL Core at `{DIAL_URL}/v1/deployments/{name}/mcp`. Authenticated with the per-request api-key. | |
+| `MCP_URL` | | ⚠️ Yes, if `MCP_DEPLOYMENT_NAME` unset | Local-dev mode: URL of a directly-reachable MCP server. Setting it selects local-dev mode. | |
+| `MCP_API_KEY` | | ⚠️ Yes, if `MCP_DEPLOYMENT_NAME` unset | Local-dev mode: static key sent as the `api-key` header to `MCP_URL`. | |
 | **LLM models** | | | | |
 | `LLM_MODELS_<ENUM_NAME>` | | No | Override the DIAL Core deployment id for a given `LLMModelsEnum` member. E.g. `LLM_MODELS_GPT_5_2_2025_12_11=gpt-5.2-custom-name`. | |
 | **Opik tracing** | | | | |
@@ -73,9 +76,10 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 | `REMOTE_DIAL_URL` | | No | Remote DIAL that `make infra-config` pulls model configs from. Never read by the app. | |
 | `REMOTE_DIAL_API_KEY` | | No | Api-Key for that remote DIAL. Never read by the app. | |
 
-¹ Exactly one **MCP connection mode** must be configured (the app fails fast at startup if neither is): deployment mode via `MCP_DEPLOYMENT_NAME`, or local-dev mode via `MCP_URL` + `MCP_API_KEY`.
+### Notes on the environment variables
 
-NOTE: `DOCKER_DEFAULT_PLATFORM` in `.env.example` is consumed by Docker Compose (not the app): uncomment it on Apple Silicon because the DIAL images ship linux/amd64 only.
+- Exactly one **MCP connection mode** must be configured (the app fails fast at startup otherwise): (1) deployment mode via `MCP_DEPLOYMENT_NAME`, or (2) local-dev mode via `MCP_URL` + `MCP_API_KEY`.
+- `DOCKER_DEFAULT_PLATFORM` in `.env.example` is consumed by Docker Compose (not the app): uncomment it on Apple Silicon because the DIAL images ship linux/amd64 only.
 
 ## DIAL core configuration
 
