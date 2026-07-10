@@ -49,29 +49,29 @@ All env vars are loaded from `.env` at the repo root (see `.env.example` for the
 
 The app authenticates to DIAL Core (LLM calls, file operations, and the deployment-mode MCP) with the **per-request api-key** that DIAL Core forwards with each request — there is no static DIAL service key.
 
-| Variable | Default | Required | Description |
-| -------- | ------- | -------- | ----------- |
-| **App server** | | | |
-| `APP_HOST` | `0.0.0.0` | No | Host interface the app binds to. |
-| `APP_PORT` | `5000` | No | Port the app binds to. |
-| `LOG_LEVEL` | `INFO` | No | Python logging level. One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. |
-| **DIAL Core** | | | |
-| `DIAL_URL` | — | Yes | Where the app finds DIAL Core. No built-in default. |
-| `DIAL_APP_NAME` | `deep-research` | No | OTel service name for traces. |
-| `HEARTBEAT_INTERVAL` | `5` | No | Seconds between DIAL keep-alive heartbeats during long-running responses. |
-| **MCP server** | | | |
-| `MCP_SERVER_NAME` | — | Yes | Logical name for the generic-RAG MCP server connection. |
-| `MCP_DEPLOYMENT_NAME` | — | mode¹ | Deployment mode: DIAL application/deployment id of the generic-RAG MCP server, reached through DIAL Core at `{DIAL_URL}/v1/deployments/{name}/mcp`. Authenticated with the per-request api-key. |
-| `MCP_URL` | — | mode¹ | Local-dev mode: URL of a directly-reachable MCP server. Setting it selects local-dev mode. |
-| `MCP_API_KEY` | — | if `MCP_URL` | Local-dev mode: static key sent as the `api-key` header to `MCP_URL`. Required when `MCP_URL` is set. |
-| **LLM models** | | | |
-| `LLM_MODELS_<ENUM_NAME>` | — | No | Override the DIAL Core deployment id for a given `LLMModelsEnum` member. E.g. `LLM_MODELS_GPT_5_2_2025_12_11=gpt-5.2-custom-name`. |
-| **Opik tracing** | | | |
-| `OPIK_TRACING_ENABLED` | `false` | No | Enable or disable Opik LLM tracing. |
-| `OPIK_PROJECT_NAME` | `deep-research` | No | Opik project traces are grouped under. |
-| **Scripts & config generator** | | | |
-| `REMOTE_DIAL_URL` | — | No | Remote DIAL that `make infra-config` pulls model configs from. Never read by the app. |
-| `REMOTE_DIAL_API_KEY` | — | No | Api-Key for that remote DIAL. Never read by the app. |
+| Variable | Default | Required | Description | Available Values |
+| -------- | ------- |:--------:| ----------- | ---------------- |
+| **App server** | | | | |
+| `APP_HOST` | `0.0.0.0` | No | Host interface the app binds to. | |
+| `APP_PORT` | `5000` | No | Port the app binds to. | |
+| `LOG_LEVEL` | `INFO` | No | Python logging level. | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| **DIAL Core** | | | | |
+| `DIAL_URL` | | ⚠️ Yes | Where the app finds DIAL Core. No built-in default. | |
+| `DIAL_APP_NAME` | `deep-research` | No | OTel service name for traces. | |
+| `HEARTBEAT_INTERVAL` | `5` | No | Seconds between DIAL keep-alive heartbeats during long-running responses. | |
+| **MCP server** | | | | |
+| `MCP_SERVER_NAME` | | ⚠️ Yes | Logical name for the generic-RAG MCP server connection. | |
+| `MCP_DEPLOYMENT_NAME` | | mode¹ | Deployment mode: DIAL application/deployment id of the generic-RAG MCP server, reached through DIAL Core at `{DIAL_URL}/v1/deployments/{name}/mcp`. Authenticated with the per-request api-key. | |
+| `MCP_URL` | | mode¹ | Local-dev mode: URL of a directly-reachable MCP server. Setting it selects local-dev mode. | |
+| `MCP_API_KEY` | | if `MCP_URL` | Local-dev mode: static key sent as the `api-key` header to `MCP_URL`. Required when `MCP_URL` is set. | |
+| **LLM models** | | | | |
+| `LLM_MODELS_<ENUM_NAME>` | | No | Override the DIAL Core deployment id for a given `LLMModelsEnum` member. E.g. `LLM_MODELS_GPT_5_2_2025_12_11=gpt-5.2-custom-name`. | |
+| **Opik tracing** | | | | |
+| `OPIK_TRACING_ENABLED` | `false` | No | Enable or disable Opik LLM tracing. | `true`, `false` |
+| `OPIK_PROJECT_NAME` | `deep-research` | No | Opik project traces are grouped under. | |
+| **Scripts & config generator** | | | | |
+| `REMOTE_DIAL_URL` | | No | Remote DIAL that `make infra-config` pulls model configs from. Never read by the app. | |
+| `REMOTE_DIAL_API_KEY` | | No | Api-Key for that remote DIAL. Never read by the app. | |
 
 ¹ Exactly one **MCP connection mode** must be configured (the app fails fast at startup if neither is): deployment mode via `MCP_DEPLOYMENT_NAME`, or local-dev mode via `MCP_URL` + `MCP_API_KEY`.
 
