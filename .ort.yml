@@ -207,6 +207,14 @@ resolutions:
       reason: "CANT_FIX_EXCEPTION"
       comment: "MIT License: https://github.com/getsentry/sentry-python/blob/master/LICENSE"
 
+    # Dev / testing (Poetry dev group; still reported by ORT evaluator)
+    - message: ".*PyPI::pytest:9\\..*"
+      reason: "CANT_FIX_EXCEPTION"
+      comment: "MIT License: https://github.com/pytest-dev/pytest/blob/main/LICENSE"
+    - message: ".*PyPI::iniconfig:2\\..*"
+      reason: "CANT_FIX_EXCEPTION"
+      comment: "MIT License: https://github.com/pytest-dev/iniconfig/blob/main/LICENSE"
+
     # Dual-license / unmapped declared license warnings
     - message: ".*PyPI::packaging:26\\..*"
       reason: "CANT_FIX_EXCEPTION"
