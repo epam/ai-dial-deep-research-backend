@@ -17,7 +17,6 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
-from dial_deep_research.settings import settings
 from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.llm import LLMModelConfig, get_chat_model
 
@@ -37,14 +36,14 @@ ReviewerNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
 ReportNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
 
 
-def build_researcher_agent(tools: list[BaseTool], today_date: str) -> Any:
+def build_researcher_agent(tools: list[BaseTool], today_date: str, client_name: str) -> Any:
     """Build the researcher: a `create_agent` over the tools, forced to call a tool every step."""
     return create_agent(
         model=get_chat_model(LLMModelConfig()),
         tools=tools,
         system_prompt=RESEARCHER_SYSTEM_PROMPT.format(
             today_date=today_date,
-            client_name=settings.channel.prompts.client_name,
+            client_name=client_name,
         ),
         middleware=[ForceToolChoiceMiddleware()],
     )

@@ -34,6 +34,8 @@ research loop grounded in the MCP tools, and streams progress to DIAL as timed s
 - `uv` (Python package manager)
 - A reachable generic-RAG MCP server (URL + api-key).
 - A `dial_conf/core/config.json` (see [DIAL core configuration](#dial-core-configuration)).
+- DIAL Core >= 0.41.0 — the app registers as a schema-rich application type and Core fetches
+  its schema from the app's schema endpoint. The compose stack already pins a compatible Core.
 
 ## Local run
 
@@ -66,17 +68,62 @@ Configuration comes from two sources:
   deployment concerns: endpoints, keys, ports, knobs.
   See [Environment variables](#environment-variables) for
   the full spec. Startup fails fast if required vars are missing.
-- **Channel config** (a YAML file selected by `CHANNEL_CONFIG_PATH`) carries everything
-  specific to one deployment ("channel") of the app: the deployment id, the client wording
-  injected into prompts, the knowledge-base topics map. Schema:
-  `src/dial_deep_research/channel_config.py`. A ready-to-run example ships at
-  [`data/configs/example.yaml`](./data/configs/example.yaml) — `.env.example` points at it.
+- **Application properties** carry everything specific to one application instance
+  ("channel") of the app: the client wording injected into prompts, the knowledge-base
+  topics map, the research iteration cap. They live in DIAL Core on each application
+  instance and are fetched and validated per request against the JSON schema generated
+  from `src/dial_deep_research/app_properties.py` (committed at
+  [`docs/generated-app-schema.json`](./docs/generated-app-schema.json)). An example ships
+  at
+  [`data/configs/example-application-properties.json`](./data/configs/example-application-properties.json).
+  A request without valid properties gets a friendly "not configured" reply.
 
 ## DIAL core configuration
 
 `dial_conf/core/config.json` is **not committed**.
 Create your own before `make infra-up` — docker-compose mounts it into the `core`
 service.
+
+The app is a **schema-rich application type**: DIAL Core must know the type, and every
+channel is an application **instance** of it. (Core-side custom apps are already enabled in
+this repo's `dial_conf/settings/settings.json` via `"applications": {"includeCustomApps": true}`.)
+
+Register the type with an `applicationTypeSchemas` entry — Core fetches the property schema
+live from the app's schema endpoint:
+
+```json
+"applicationTypeSchemas": [
+  {
+    "$id": "https://mydial.epam.com/custom_application_schemas/deep-research",
+    "$schema": "https://dial.epam.com/application_type_schemas/schema#",
+    "dial:applicationTypeDisplayName": "Deep Research",
+    "dial:applicationTypeCompletionEndpoint": "http://host.docker.internal:5000/openai/deployments/deep-research/chat/completions",
+    "dial:applicationTypeSchemaEndpoint": "http://host.docker.internal:5000/v1/configuration-support/application-schema",
+    "dial:appendApplicationPropertiesHeader": false
+  }
+]
+```
+
+Then add one application instance per channel, referencing the type by its `$id` and
+carrying that channel's `applicationProperties` (shape:
+[`data/configs/example-application-properties.json`](./data/configs/example-application-properties.json)):
+
+```json
+"applications": {
+  "deep-research-acme": {
+    "displayName": "ACME Deep Research",
+    "applicationTypeSchemaId": "https://mydial.epam.com/custom_application_schemas/deep-research",
+    "applicationProperties": {
+      "max_research_iterations": 10,
+      "prompts": {
+        "client_name": "ACME",
+        "agent_name": "ACME Deep Research",
+        "data_sources_descriptions": "## financial report\n\n..."
+      }
+    }
+  }
+}
+```
 
 ## Running the app in Docker (opt-in)
 
@@ -105,10 +152,14 @@ useful for testing without the chat UI:
 
 ```sh
 # fresh conversation
-uv run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite
+uv run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite -d deep-research-acme
 # follow-up turn, threading prior state
-uv run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue
+uv run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue -d deep-research-acme
 ```
+
+`-d`/`--deployment` targets an application instance registered in DIAL Core (falls back to
+the `DEPLOYMENT_ID` env var). Calling the bare `deep-research` type deployment returns the
+"not configured" reply — instances carry the configuration.
 
 ## LLM tracing with Opik (optional)
 
@@ -145,7 +196,6 @@ All env vars are loaded from `.env` at the repo root (see `.env.example` for the
 
 | Env var | Used for |
 | ------- | -------- |
-| `CHANNEL_CONFIG_PATH` | Path to the channel config YAML. See `data/configs/example.yaml` and the schema in `src/dial_deep_research/channel_config.py`. |
 | `MCP_SERVER_NAME` | Logical name for the generic-RAG MCP server connection. |
 | `MCP_URL` | URL of the generic-RAG MCP server. |
 | `MCP_API_KEY` | Service key for the MCP server. |
@@ -163,5 +213,6 @@ All env vars are loaded from `.env` at the repo root (see `.env.example` for the
 | `HEARTBEAT_INTERVAL` | Seconds between DIAL keep-alive heartbeats during long-running responses. |
 | `LLM_MODELS_<ENUM_NAME>` | Override the DIAL Core deployment id for a given `LLMModelsEnum` member. E.g. `LLM_MODELS_GPT_5_2_2025_12_11=gpt-5.2-custom-name`. |
 | `OPIK_TRACING_ENABLED` | Enable or disable Opik LLM tracing. |
+| `OPIK_PROJECT_NAME` | Opik project traces are grouped under (default: `deep-research`). |
 
 NOTE: `DOCKER_DEFAULT_PLATFORM` in `.env.example` is consumed by Docker Compose (not the app): uncomment it on Apple Silicon because the DIAL images ship linux/amd64 only.

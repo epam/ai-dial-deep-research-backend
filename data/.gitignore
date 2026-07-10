@@ -1,6 +1,6 @@
 *
 !.gitignore
 
-# channel configs: only the example is tracked
+# only the example application properties are tracked
 !configs/
-!configs/example.yaml
+!configs/example-application-properties.json

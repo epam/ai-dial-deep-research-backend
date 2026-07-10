@@ -7,9 +7,10 @@ See `pyproject.toml` for `make`-equivalent targets
 
 ## Never commit sensitive info
 
-Never commit secrets, real channel configs, or anything else sensitive: API keys, endpoints,
-client names, production details. Real channel configs and DIAL core `config.json` stay
-untracked; only generic examples like `data/configs/example.yaml` are committed.
+Never commit secrets, real application properties, or anything else sensitive: API keys,
+endpoints, client names, production details. Real per-channel application properties live in
+DIAL Core, and the DIAL core `config.json` stays untracked; only generic examples like
+`data/configs/example-application-properties.json` are committed.
 
 This repo is public. Never reference non-public resources in committed content (code,
 comments, docs, commit messages). Committed content must be self-contained.
@@ -26,9 +27,9 @@ comments, docs, commit messages). Committed content must be self-contained.
 ## Sending a query to the DR server
 
 Use `scripts/send_conversation.py` to drive a chat with the app from the CLI. The server is
-**expected to be already running**; the script does not start it. The base URL, API key, and
-deployment id come from the app settings (`.env` + channel config),
-so the script targets whatever the .env and channel config point to.
+**expected to be already running**; the script does not start it. The base URL and API key
+come from the app settings (`.env`); the target deployment is the application instance
+registered in DIAL Core, passed via `--deployment` (or the `DEPLOYMENT_ID` env var).
 
 The conversation artifact file *is* the `messages` array, so multi-turn state threads verbatim.
 Two modes:
@@ -38,9 +39,9 @@ Two modes:
 
 ```bash
 # fresh conversation
-uv run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite
+uv run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite -d deep-research-acme
 # follow-up turn, threading prior state
-uv run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue
+uv run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue -d deep-research-acme
 ```
 
 Override `--timeout` as needed.
@@ -49,8 +50,8 @@ Override `--timeout` as needed.
 
 - **LLM prompts use triple-quoted multiline strings**, not adjacent/parenthesized string-literal concatenation. Do **not** escape newlines with trailing backslashes to join wrapped lines — let long lines wrap as real newlines (harmless inside an LLM prompt) and keep each source line within the 100-col limit. A leading `"""\` to avoid a blank first line is fine. This keeps prompt copy readable and diff-friendly. Applies to system prompts (`app/preparation/prompts.py`, `app/research/prompts.py`) and any injected/middleware prompt text.
 - **No new aliases on pydantic-settings fields** — rely on the default field-name → env-var mapping (with the class's `env_prefix`). E.g. `heartbeat_interval` under `env_prefix=""` reads `HEARTBEAT_INTERVAL`.
-- **Keep `envvars.md` in sync with the settings.** Update it whenever an env var is added or removed (required or optional alike), and whenever a var's required/optional status changes.
-- **Keep `data/configs/example.yaml` in sync with the channel config schema.** Update it whenever `ChannelConfig` (`src/dial_deep_research/channel_config.py`) changes: fields added, removed, or their meaning/requiredness changed. Field descriptions live in the pydantic schema (`Field(description=...)`), not as comments in the YAML.
+- **Keep the README environment-variables table in sync with the settings.** Update it whenever an env var is added or removed (required or optional alike), and whenever a var's required/optional status changes.
+- **Keep the application-properties artifacts in sync with the model.** When `ApplicationProperties` (`src/dial_deep_research/app_properties.py`) changes: `make format` regenerates `docs/generated-app-schema.json` (and `make lint` fails on drift), but `data/configs/example-application-properties.json` and the README core-config snippets are updated by hand. Field descriptions live in the pydantic schema (`Field(description=...)`), not as comments in the example.
 - **LLM structured-output schemas put the verdict last.** Order fields so a decision/verdict field comes *after* the supporting content that justifies it — the model emits fields in schema order, so reasoning-first yields better decisions. E.g. `questions` before `sufficient`; `revised_plan` (or `problems_found`) before `approved` (or `verdict`). Among the supporting fields themselves, order by logical precedence — a precondition/gating check before any check that only matters once it holds (e.g. `recorded_plan_matches` before `user_approved_a_plan`). Pydantic v2 allows a required field after defaulted ones, so the ordering is free.
 - **Never name a list-element field `index` in anything persisted to `custom_content.state`.** The DIAL SDK's chunk-merge (`aidial_sdk.utils.merge_chunks` / `_indexed_list`) treats any list of dicts whose elements carry an `index` key as an OpenAI-style indexed streaming delta — it re-slots the elements by `index` and strips the key, corrupting the stored value (a 1-based list comes back as `[{}, {…}, …]` with the key gone). Use another name (e.g. `number`) for an ordinal field on a persisted list element.
 

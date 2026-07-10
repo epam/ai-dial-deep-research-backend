@@ -7,11 +7,9 @@ from opik.integrations.langchain import OpikTracer
 _log = logging.getLogger(__name__)
 
 
-def configure_opik(tracing_enabled: bool, project_name: str | None) -> None:
+def configure_opik(tracing_enabled: bool, project_name: str) -> None:
     if not tracing_enabled:
         return
-    if not project_name:
-        raise ValueError("project_name is required when opik tracing is enabled")
     opik.configure(use_local=True, project_name=project_name)
     _log.info("Opik tracing configured (project_name=%s)", project_name)
 

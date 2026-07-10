@@ -1,7 +1,6 @@
 import pytest
 from pydantic import ValidationError
 
-from dial_deep_research.channel_config import ChannelConfig
 from dial_deep_research.settings import Settings
 
 
@@ -49,32 +48,21 @@ def test_empty_required_string_is_rejected(var: str, monkeypatch: pytest.MonkeyP
     assert any(err["loc"] == (var.lower(),) for err in excinfo.value.errors())
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        {"channel_name": ""},
-        {"prompts.client_name": ""},
-        {"prompts.agent_name": ""},
-        {"prompts.data_sources_descriptions": ""},
-    ],
-)
-def test_empty_channel_config_string_is_rejected(overrides: dict[str, str]) -> None:
-    data: dict = {
-        "channel_name": "test-channel",
-        "prompts": {
-            "client_name": "Test Corp",
-            "agent_name": "Test Deep Research",
-            "data_sources_descriptions": "## report\n\nA report.",
-        },
-    }
-    for dotted, value in overrides.items():
-        target = data
-        *parents, leaf = dotted.split(".")
-        for key in parents:
-            target = target[key]
-        target[leaf] = value
-    with pytest.raises(ValidationError):
-        ChannelConfig.model_validate(data)
+def test_opik_project_name_default_loads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPIK_PROJECT_NAME", raising=False)
+    assert Settings().opik_project_name == "deep-research"
+
+
+def test_opik_project_name_override_loads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPIK_PROJECT_NAME", "my-experiment")
+    assert Settings().opik_project_name == "my-experiment"
+
+
+def test_empty_opik_project_name_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPIK_PROJECT_NAME", "")
+    with pytest.raises(ValidationError) as excinfo:
+        Settings()
+    assert any(err["loc"] == ("opik_project_name",) for err in excinfo.value.errors())
 
 
 @pytest.mark.parametrize("var", ["DIAL_URL", "MCP_URL"])

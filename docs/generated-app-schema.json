@@ -1,0 +1,59 @@
+{
+  "$schema": "https://dial.epam.com/application_type_schemas/schema#",
+  "$id": "https://mydial.epam.com/custom_application_schemas/deep-research",
+  "dial:applicationTypeDisplayName": "Deep Research",
+  "dial:appendApplicationPropertiesHeader": false,
+  "description": "One application instance's configuration (\"channel\").",
+  "properties": {
+    "max_research_iterations": {
+      "default": 10,
+      "description": "Max number of research iterations (researcher → reviewer loops) before the report is forced",
+      "minimum": 1,
+      "title": "Max Research Iterations",
+      "type": "integer",
+      "dial:meta": {
+        "dial:propertyKind": "server",
+        "dial:propertyOrder": 1
+      }
+    },
+    "prompts": {
+      "description": "Per-instance content injected into the prompt templates.",
+      "properties": {
+        "client_name": {
+          "description": "Name of the client using the Deep Research",
+          "minLength": 1,
+          "title": "Client Name",
+          "type": "string"
+        },
+        "agent_name": {
+          "description": "Name the agent uses to introduce itself in prompts",
+          "minLength": 1,
+          "title": "Agent Name",
+          "type": "string"
+        },
+        "data_sources_descriptions": {
+          "description": "A topics map of the data sources available in the knowledge base",
+          "minLength": 1,
+          "title": "Data Sources Descriptions",
+          "type": "string"
+        }
+      },
+      "required": [
+        "client_name",
+        "agent_name",
+        "data_sources_descriptions"
+      ],
+      "title": "Prompts",
+      "type": "object",
+      "dial:meta": {
+        "dial:propertyKind": "server",
+        "dial:propertyOrder": 2
+      }
+    }
+  },
+  "required": [
+    "prompts"
+  ],
+  "title": "ApplicationProperties",
+  "type": "object"
+}

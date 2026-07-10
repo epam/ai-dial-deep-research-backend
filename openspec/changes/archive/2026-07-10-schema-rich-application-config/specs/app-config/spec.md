@@ -1,8 +1,7 @@
-# app-config Specification
+# app-config (delta)
 
-## Purpose
-TBD - created by archiving change validate-log-level-setting. Update Purpose after archive.
-## Requirements
+## MODIFIED Requirements
+
 ### Requirement: Validated log level setting
 
 The `Settings` class SHALL expose a `log_level` field restricted to the five stdlib logging level names — `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. Input matching is case-insensitive: the value SHALL be uppercased before comparison, and the normalized uppercase form SHALL be the loaded value. Any value that does not normalize to one of the five allowed names SHALL cause `Settings` instantiation to fail with a Pydantic `ValidationError` that identifies the `log_level` field.
@@ -46,6 +45,21 @@ The `Settings` class SHALL expose a `heartbeat_interval` field of type `int` dri
 #### Scenario: App factory consumes the setting
 - **WHEN** `create_app()` registers the `deep-research` chat completion
 - **THEN** the heartbeat interval passed to `app.add_chat_completion(...)` SHALL equal `settings.heartbeat_interval`, and no integer literal for this parameter SHALL appear in `factory.py`
+
+## REMOVED Requirements
+
+### Requirement: Dedicated OpikSettings class for Opik tracing configuration
+
+**Reason**: The dedicated `OpikSettings` class no longer exists — settings were consolidated
+into the single `Settings` class, and the Opik project name (which had meanwhile moved into
+the YAML channel config) returns to the environment now that channel config is replaced by
+DIAL application properties.
+
+**Migration**: Use the `opik_tracing_enabled` and `opik_project_name` fields on `Settings`
+(env vars `OPIK_TRACING_ENABLED`, `OPIK_PROJECT_NAME`) per the **Opik configuration on the
+consolidated Settings class** requirement below.
+
+## ADDED Requirements
 
 ### Requirement: Opik configuration on the consolidated Settings class
 

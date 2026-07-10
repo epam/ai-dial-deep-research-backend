@@ -35,12 +35,6 @@ RUN adduser --uid 1001 --disabled-password --gecos "" appuser
 COPY --from=builder /opt/app/.venv ./.venv
 ENV PATH="/opt/app/.venv/bin:$PATH"
 
-# Temporary, until channel configs are fetched from DIAL file storage at runtime:
-# bake the committed example config and default to it, so a bare deployment starts.
-# Real deployments override CHANNEL_CONFIG_PATH (e.g. to a mounted config).
-COPY data/configs/example.yaml ./data/configs/example.yaml
-ENV CHANNEL_CONFIG_PATH=data/configs/example.yaml
-
 USER appuser
 
 EXPOSE 5000

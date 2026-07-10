@@ -1,21 +1,18 @@
-"""The single settings model, merging the two config sources.
+"""The single settings model, all env-driven.
 
-Env vars carry deployment concerns (endpoints, keys, ports, knobs). The `channel`
-field carries client-specific behavior (prompt content, names) and is always loaded
-from the YAML at `channel_config_path` — env cannot override it.
+Env vars carry deployment concerns (endpoints, keys, ports, knobs). Everything
+client-specific (prompt content, names, the iteration cap) is NOT here — it arrives
+per request as DIAL application properties (see `app_properties.py`).
 
 When adding a parameter, pick its home by this test: varies per environment for the
 same client → env field here; varies per client on the same infrastructure →
-`ChannelConfig`.
+`ApplicationProperties`.
 """
 
-from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
-from pydantic import BeforeValidator, Field, HttpUrl, SecretStr, model_validator
+from pydantic import BeforeValidator, Field, HttpUrl, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
-from dial_deep_research.channel_config import ChannelConfig
 
 LogLevel = Annotated[
     Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
@@ -44,26 +41,8 @@ class Settings(BaseSettings):
 
     # opik tracing
     opik_tracing_enabled: bool = False
-
-    # channel: everything client-specific, from the YAML file
-    channel_config_path: Path
-    channel: ChannelConfig
-
-    @model_validator(mode="before")
-    @classmethod
-    def _load_channel(cls, data: dict[str, Any]) -> dict[str, Any]:
-        """Fill `channel` from the YAML file.
-
-        Overwrites any env- or init-provided value, so the file stays the only
-        source for channel config. If the path is missing, skip loading and let
-        validation report the missing field.
-        """
-        path = data.get("channel_config_path")
-        if path:
-            data["channel"] = ChannelConfig.from_yaml(path)
-        return data
+    opik_project_name: str = Field(default="deep-research", min_length=1)
 
 
-# Instantiated at import so bad env or a missing/invalid channel config fails at
-# startup, not mid-request.
+# Instantiated at import so bad env fails at startup, not mid-request.
 settings = Settings()

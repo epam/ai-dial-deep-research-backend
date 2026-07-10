@@ -26,7 +26,7 @@ from langchain_core.messages import (
 from opik.integrations.langchain import OpikTracer
 
 from dial_deep_research.app.history import PrepState
-from dial_deep_research.settings import settings
+from dial_deep_research.app_properties import ApplicationProperties
 from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.dial_stages import DialStageToolCallFormatter, PendingToolCall
 
@@ -55,13 +55,17 @@ class ResearchRunner:
         self._separator_pending = True
 
     async def run(
-        self, prep_state: PrepState, opik_tracer: OpikTracer | None = None
+        self,
+        prep_state: PrepState,
+        properties: ApplicationProperties,
+        opik_tracer: OpikTracer | None = None,
     ) -> list[BaseMessage]:
         tools = await load_research_tools()
         graph = build_research_graph(
             tools=tools,
             today_date=datetime.now().date().isoformat(),
-            max_iterations=settings.channel.max_research_iterations,
+            max_iterations=properties.max_research_iterations,
+            client_name=properties.prompts.client_name,
         )
         config: dict[str, Any] = {"recursion_limit": _RECURSION_LIMIT}
         if opik_tracer is not None:

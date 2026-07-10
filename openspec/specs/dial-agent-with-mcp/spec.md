@@ -237,15 +237,19 @@ The app SHALL invoke its LLM through DIAL Core, authenticating with a static `DI
 - **THEN** the underlying HTTP request to DIAL Core SHALL carry the configured `DIAL_API_KEY` value as authentication, regardless of any API key value present on the incoming DIAL chat completion request
 
 ### Requirement: Configuration via environment variables
-The app SHALL be configurable through environment variables documented in `.env.example` and `envvars.md`. The MCP server URL and the MCP API key SHALL be required at process startup. The DIAL API key SHALL be optional with a default of `dial_api_key` (matching the dev key registered in `dial_conf/core/config.json`); deployments shipping a real key SHALL override it via `DIAL_API_KEY`. `LLM_MODELS_<NAME>` env mappings SHALL be supported as overrides for the per-enum-member DIAL Core deployment id; if unset, the app SHALL fall back to the enum member's value (the model id).
+The app SHALL be configurable through environment variables documented in `.env.example` and the README environment-variables table. The MCP server URL and the MCP API key SHALL be required at process startup. The app SHALL NOT require a channel-config file path (`CHANNEL_CONFIG_PATH` is removed); per-channel behavior comes from DIAL application properties (see the **application-config-schema** capability). The DIAL API key SHALL be optional with a default of `dial_api_key` (matching the dev key registered in `dial_conf/core/config.json`); deployments shipping a real key SHALL override it via `DIAL_API_KEY`. `LLM_MODELS_<NAME>` env mappings SHALL be supported as overrides for the per-enum-member DIAL Core deployment id; if unset, the app SHALL fall back to the enum member's value (the model id).
 
 #### Scenario: Missing startup-required variable
 - **WHEN** the process starts without one of `MCP_URL` or `MCP_API_KEY`
 - **THEN** the app SHALL exit non-zero before serving any request, with a log/error message that names the missing variable
 
+#### Scenario: Startup without a channel config file
+- **WHEN** the process starts with the required MCP variables set and no `CHANNEL_CONFIG_PATH` in the environment
+- **THEN** the app SHALL start successfully and register the `deep-research` deployment without reading any local config file
+
 #### Scenario: DIAL_API_KEY default
 - **WHEN** the process starts without `DIAL_API_KEY` set in the environment
-- **THEN** `dial_app_settings.dial_api_key` SHALL resolve to the `dial_api_key` default and the app SHALL start successfully
+- **THEN** `settings.dial_api_key` SHALL resolve to the `dial_api_key` default and the app SHALL start successfully
 
 #### Scenario: LLM_MODELS override resolves at request time
 - **WHEN** a chat completion request is processed and `LLM_MODELS_<NAME>` is set in the environment for the configured model
@@ -257,7 +261,7 @@ The app SHALL be configurable through environment variables documented in `.env.
 
 ### Requirement: Opik tracing of agent runs when configured
 
-The app SHALL attach an `opik.integrations.langchain.OpikTracer` callback to the per-request LangChain agent's streaming invocation **iff** Opik tracing is enabled via configuration (`OpikSettings.tracing_enabled` is true). When attached, the tracer SHALL capture the full hierarchical trace of the turn — the agent graph run, the underlying LLM call, and every MCP tool call (including arguments, results, and errors) — without altering the agent's outputs, the DIAL stages emitted, the assistant message content, or the top-level error funnel. When Opik tracing is not enabled, the agent SHALL run with no Opik callback attached and SHALL produce identical observable behaviour to a build that does not depend on Opik.
+The app SHALL attach an `opik.integrations.langchain.OpikTracer` callback to the per-request LangChain agent's streaming invocation **iff** Opik tracing is enabled via configuration (`Settings.opik_tracing_enabled` is true). When attached, the tracer SHALL capture the full hierarchical trace of the turn — the agent graph run, the underlying LLM call, and every MCP tool call (including arguments, results, and errors) — without altering the agent's outputs, the DIAL stages emitted, the assistant message content, or the top-level error funnel. When Opik tracing is not enabled, the agent SHALL run with no Opik callback attached and SHALL produce identical observable behaviour to a build that does not depend on Opik.
 
 #### Scenario: Tracer attached when enabled
 - **WHEN** `OPIK_TRACING_ENABLED=true` is set and the local Opik stack (started via `make opik-up`) is reachable, and a chat completion request is processed

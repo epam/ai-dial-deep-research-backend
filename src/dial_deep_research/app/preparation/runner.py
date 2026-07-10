@@ -25,6 +25,7 @@ from langchain_core.messages import (
 from opik.integrations.langchain import OpikTracer
 
 from dial_deep_research.app.history import PrepState, reconstruct_history
+from dial_deep_research.app_properties import Prompts
 from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.dial_stages import DialStageToolCallFormatter, PendingToolCall
 
@@ -52,6 +53,7 @@ class PrepAgentRunner:
         request: Request,
         dial: AsyncDial,
         prep_state: PrepState,
+        prompts: Prompts,
         opik_tracer: OpikTracer | None = None,
     ) -> list[BaseMessage]:
         """Run the preparation agent over `prep_state`, streaming output; return its messages.
@@ -60,7 +62,7 @@ class PrepAgentRunner:
         reflects the turn (including `research_started` if `start_research` fired).
         """
         history = await reconstruct_history(request, dial)
-        agent = build_prep_agent(prep_state, datetime.now().date().isoformat())
+        agent = build_prep_agent(prep_state, datetime.now().date().isoformat(), prompts=prompts)
         config: dict[str, Any] = {"callbacks": [opik_tracer]} if opik_tracer is not None else {}
 
         async for mode, payload in agent.astream(

@@ -28,9 +28,12 @@ Modes:
 The file is written only after a successful response, so a failed `continue`
 never corrupts existing history. (`overwrite` clears up front by design.)
 
+The target deployment is the application instance registered in DIAL Core, passed via
+`--deployment` (or the `DEPLOYMENT_ID` env var).
+
 Usage (from the repo root):
-  uv run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite
-  uv run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue
+  uv run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite -d deep-research-acme
+  uv run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue -d deep-research-acme
 """
 
 from __future__ import annotations
@@ -67,6 +70,13 @@ def parse_args() -> argparse.Namespace:
         required=True,
         choices=("overwrite", "continue"),
         help="overwrite: fresh conversation (clears file); continue: thread prior history",
+    )
+    parser.add_argument(
+        "-d",
+        "--deployment",
+        default=None,
+        help="DIAL deployment id of the application instance to call"
+        " (falls back to the DEPLOYMENT_ID env var)",
     )
     parser.add_argument(
         "--timeout",
@@ -112,20 +122,21 @@ def send(
     timeout: float,
     messages: list[dict],
     conversation_id: str,
+    deployment: str,
 ) -> dict:
     """POST the chat-completion request and return `choices[0].message` verbatim.
 
-    The DIAL URL, API key, and deployment id come from the app settings singleton
-    (.env + channel config), so the script targets the same DIAL and deployment the
-    locally configured app runs as. The API key never surfaces on the CLI: it stays
-    a `SecretStr` until the request is built.
+    The DIAL URL and API key come from the app settings singleton (.env); the target
+    deployment is the application instance registered in DIAL Core, passed by the
+    caller. The API key never surfaces on the CLI: it stays a `SecretStr` until the
+    request is built.
     """
     # Imported here, not at module top: importing the settings module instantiates the
     # singleton, which must happen after main() has loaded .env.
     from dial_deep_research.settings import settings
 
     base_url = settings.dial_url.encoded_string().rstrip("/")
-    url = f"{base_url}/openai/deployments/{settings.channel.channel_name}/chat/completions"
+    url = f"{base_url}/openai/deployments/{deployment}/chat/completions"
     headers = {
         "Api-Key": settings.dial_api_key.get_secret_value(),
         "Content-Type": "application/json",
@@ -174,6 +185,10 @@ def main() -> None:
     args = parse_args()
     dotenv.load_dotenv(os.path.join(os.getcwd(), ".env"))
 
+    deployment = args.deployment or os.getenv("DEPLOYMENT_ID")
+    if not deployment:
+        raise SystemExit("no deployment id: pass --deployment or set DEPLOYMENT_ID in the env")
+
     if args.mode == "overwrite":
         if args.file.exists():
             args.file.write_text("", encoding="utf-8")  # clear up front, by design
@@ -188,6 +203,7 @@ def main() -> None:
         timeout=args.timeout,
         messages=messages,
         conversation_id=conversation_id,
+        deployment=deployment,
     )
     messages.append(reply)
     write_messages(args.file, messages)

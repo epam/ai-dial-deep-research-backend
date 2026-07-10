@@ -33,15 +33,24 @@ The compose stack SHALL run an `ai-dial-adapter-dial` service (image `epam/ai-di
 - **THEN** the adapter SHALL be reachable only on the docker network (no host port mapping); host code (the dial-deep-research app) MUST go through DIAL core at `http://localhost:8080` rather than the adapter directly
 
 ### Requirement: Deep Research app registered as a DIAL application
-The DIAL core configuration SHALL register the host-running app as an application (deployment id: `deep-research`, display name: `Deep Research`) whose endpoint points at `http://host.docker.internal:5000/openai/deployments/deep-research/chat/completions`, and SHALL ship a single API key (name: `dial_api_key`, role: `default`) under which the chat UI can invoke that application.
+The DIAL core configuration SHALL register Deep Research as a schema-rich application **type** plus at least one application **instance**, and SHALL ship a single API key (name: `dial_api_key`, role: `default`) under which the chat UI can invoke it:
+
+- An `applicationTypeSchemas` entry SHALL declare the type: display name `Deep Research`, `dial:applicationTypeCompletionEndpoint` pointing at `http://host.docker.internal:5000/openai/deployments/deep-research/chat/completions`, `dial:applicationTypeSchemaEndpoint` pointing at `http://host.docker.internal:5000/v1/configuration-support/application-schema`, and `dial:appendApplicationPropertiesHeader: false`. Core's settings (`dial_conf/settings/settings.json`) SHALL keep `applications.includeCustomApps` enabled.
+- At least one application instance SHALL reference the type via `applicationTypeSchemaId` and carry an `applicationProperties` object valid against the schema (the committed example properties).
+
+Because `dial_conf/core/config.json` is untracked, the README SHALL document generic example snippets for both the `applicationTypeSchemas` entry and an instance, kept in sync with the schema.
 
 #### Scenario: Application visible in chat UI
 - **WHEN** a contributor opens the chat UI after the stack is up
-- **THEN** the application labelled `Deep Research` (deployment id `deep-research`) SHALL appear as a selectable application/agent in the UI
+- **THEN** the application instance of type `Deep Research` SHALL appear as a selectable application/agent in the UI
 
-#### Scenario: Routing to the host-running app
-- **WHEN** a user sends a message to the `Deep Research` application from the chat UI
-- **THEN** the request SHALL be proxied by DIAL core to the host-running app over `host.docker.internal:5000` at the `deep-research` deployment path, and the app SHALL receive it
+#### Scenario: Routing to the host-running app with instance properties
+- **WHEN** a user sends a message to a Deep Research instance from the chat UI
+- **THEN** DIAL core SHALL proxy the request to the host-running app over `host.docker.internal:5000` at the `deep-research` deployment path with the application identity attached, and the turn SHALL run with that instance's `applicationProperties`
+
+#### Scenario: Core loads the schema from the app
+- **WHEN** DIAL core (>= 0.41.0) starts with the `applicationTypeSchemas` entry configured and the host app running
+- **THEN** core SHALL fetch the property schema from the app's schema endpoint and accept instances whose `applicationProperties` validate against it
 
 ### Requirement: Pinned infrastructure images
 The compose file SHALL pin concrete image tags (not `latest`) for the upstream DIAL core, chat UI, themes, redis, and DIAL adapter services: `epam/ai-dial-core:0.42.0`, `epam/ai-dial-chat:0.36.0`, `epam/ai-dial-chat-themes:0.10.0`, `redis:7.2.4-alpine3.19`, `epam/ai-dial-adapter-dial:0.6.0`.
@@ -80,7 +89,7 @@ When running, the local Opik instance SHALL expose:
 - a UI reachable from the host at a stable, documented port,
 - an ingestion endpoint reachable from the host-running deep-research app at `http://localhost:<port>` so the existing host-on-`5000` / Compose-on-Docker pattern (already established for DIAL core) continues to apply.
 
-The repository SHALL NOT ship a `.env.example` (or equivalent) that pre-enables Opik tracing: `OPIK_TRACING_ENABLED` defaults to `False` in `OpikSettings`, and contributors opt in by setting it (and the relevant connection vars) in their own local environment.
+The repository SHALL NOT ship a `.env.example` (or equivalent) that pre-enables Opik tracing: `OPIK_TRACING_ENABLED` defaults to `False` in `Settings`, and contributors opt in by setting it (and the relevant connection vars) in their own local environment.
 
 #### Scenario: `make up` does not start Opik
 - **WHEN** a contributor runs `make up` on a freshly cloned repo

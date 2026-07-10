@@ -46,16 +46,18 @@ check_uv:
 install: check_uv ## Install all dependencies (runtime + dev) from uv.lock
 	$(UV) sync
 
-lint: install ## Run ruff, mypy, then formatting checks (black, isort)
+lint: install ## Run ruff, mypy, formatting checks (black, isort), then the schema drift check
 	$(UV) run ruff check $(SRC_DIRS)
 	$(UV) run mypy --show-error-codes $(MYPY_DIRS)
 	$(UV) run black $(SRC_DIRS) --check
 	$(UV) run isort $(SRC_DIRS) --check-only --diff
+	$(UV) run python scripts/dump_app_schema.py --check
 
-format: install ## Auto-fix everything auto-fixable: ruff, then black, then isort
+format: install ## Auto-fix everything auto-fixable: ruff, black, isort, regenerate the schema artifact
 	$(UV) run ruff check $(SRC_DIRS) --fix
 	$(UV) run black $(SRC_DIRS)
 	$(UV) run isort $(SRC_DIRS)
+	$(UV) run python scripts/dump_app_schema.py
 
 test: install ## Run pytest
 	$(UV) run pytest tests

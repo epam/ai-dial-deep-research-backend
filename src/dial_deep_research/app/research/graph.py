@@ -21,9 +21,11 @@ from .nodes import (
 from .state import ResearchState
 
 
-def build_research_graph(tools: list[BaseTool], today_date: str, max_iterations: int) -> Any:
+def build_research_graph(
+    tools: list[BaseTool], today_date: str, max_iterations: int, client_name: str
+) -> Any:
     """Compile the research graph over the loaded tools and config."""
-    researcher = build_researcher_agent(tools, today_date)
+    researcher = build_researcher_agent(tools, today_date, client_name=client_name)
 
     builder = StateGraph(ResearchState)
     builder.add_node("researcher", researcher)
