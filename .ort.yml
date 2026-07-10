@@ -22,7 +22,7 @@ resolutions:
     - message: ".*PyPI::fastapi:0\\..*"
       reason: "CANT_FIX_EXCEPTION"
       comment: "MIT License: https://github.com/fastapi/fastapi/blob/master/LICENSE"
-    - message: ".*PyPI::starlette:0\\..*"
+    - message: ".*PyPI::starlette:1\\..*"
       reason: "CANT_FIX_EXCEPTION"
       comment: "BSD 3-Clause License: https://github.com/Kludex/starlette/blob/main/LICENSE.md"
     - message: ".*PyPI::sse-starlette:3\\..*"
