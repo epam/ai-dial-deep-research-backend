@@ -53,7 +53,7 @@ All env vars are loaded from `.env` at the repo root (see `.env.example` for the
 The app authenticates to DIAL Core (LLM calls, file operations, and the deployment-mode MCP) with the **per-request api-key** that DIAL Core forwards with each request — there is no static DIAL service key.
 
 | Variable | Default | Required | Description | Available Values |
-| -------- | ------- |:--------:| ----------- | ---------------- |
+| -------- | ------- |--------| ----------- | ---------------- |
 | **App server** | | | | |
 | `APP_HOST` | `0.0.0.0` | No | Host interface the app binds to. | |
 | `APP_PORT` | `5000` | No | Port the app binds to. | |
