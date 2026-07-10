@@ -32,3 +32,4 @@ reports
 .pytest_cache
 .ruff_cache
 .opik-local
+tmp

@@ -1,13 +1,13 @@
 services:
 
   themes:
-    image: epam/ai-dial-chat-themes:0.10.0
+    image: epam/ai-dial-chat-themes:0.17.0
     ports:
       - "3011:8080"
     restart: unless-stopped
 
   chat:
-    image: epam/ai-dial-chat:0.36.0
+    image: epam/ai-dial-chat:0.47.2
     ports:
       - "3010:3000"
     depends_on:
@@ -31,7 +31,7 @@ services:
     restart: unless-stopped
 
   core:
-    image: epam/ai-dial-core:0.42.0
+    image: epam/ai-dial-core:0.45.1
     ports:
       - "8081:8080"
     depends_on:
@@ -49,7 +49,7 @@ services:
     restart: unless-stopped
 
   ai-dial-adapter-dial:
-    image: epam/ai-dial-adapter-dial:0.14.0
+    image: epam/ai-dial-adapter-dial:0.16.0
     environment:
       DIAL_URL: "http://core:8080"
       LOG_LEVEL: "INFO"
