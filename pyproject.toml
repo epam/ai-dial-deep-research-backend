@@ -20,17 +20,15 @@ dependencies = [
     "pyyaml>=6.0.0,<7.0.0",
 ]
 
-[dependency-groups]
-dev = [
-    "black>=24.10.0",
-    "isort>=5.13.2",
-    "ruff>=0.15.5",
-    "mypy>=1.13.0",
-    "pytest>=8.3.0",
-    "pytest-asyncio>=0.24.0",
-    "httpx>=0.28.0",
-    "types-pyyaml>=6.0.0",
-]
+[tool.poetry.group.dev.dependencies]
+black = ">=24.10.0"
+isort = ">=5.13.2"
+ruff = ">=0.15.5"
+mypy = ">=1.13.0"
+pytest = ">=8.3.0"
+pytest-asyncio = ">=0.24.0"
+httpx = ">=0.28.0"
+types-pyyaml = ">=6.0.0"
 
 # Why this block exists:
 #   We use a src/ layout (code at src/dial_deep_research/, not at the repo root).
@@ -38,20 +36,19 @@ dev = [
 #   `import dial_deep_research` would fail in tests, in `python -m dial_deep_research`,
 #   and inside Docker.
 #
-#   [build-system] tells `uv sync` how to build the project as a wheel and install
-#   it into .venv/ — after which `import dial_deep_research` just works everywhere.
-#   Hatchling is a lightweight PEP-517 backend; we never invoke it directly.
+#   [tool.poetry].packages + the poetry-core build backend tell Poetry to build the
+#   project as a wheel and install it into the venv — after which
+#   `import dial_deep_research` just works everywhere. poetry-core is a lightweight
+#   PEP-517 backend; we never invoke it directly.
 #
-#   Alternative we rejected: `sys.path.append(...)` at the top of __main__.py.
-#   That works, but it also requires pytest config (`pythonpath = ["src"]`) and is
-#   runtime path surgery rather than a proper install. The 4 lines below pay for
-#   themselves by making imports behave like a normal installed package.
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+#   CI installs with `poetry install --no-root` (the project itself is not installed),
+#   so tests also put `src` on sys.path via [tool.pytest.ini_options].pythonpath below.
+[tool.poetry]
+packages = [{ include = "dial_deep_research", from = "src" }]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/dial_deep_research"]
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
 
 [tool.black]
 line-length = 100
@@ -100,4 +97,5 @@ follow_untyped_imports = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 # scripts/ is not a package; this lets tests import the script modules directly.
-pythonpath = ["scripts"]
+# src is included too so imports work under CI's `poetry install --no-root`.
+pythonpath = ["scripts", "src"]

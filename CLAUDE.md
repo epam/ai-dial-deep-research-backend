@@ -1,9 +1,9 @@
 # CLAUDE.md — dial-deep-research
 
 DIAL Deep Research: a per-request LangChain tool-calling agent over a generic-RAG MCP server.
-Python 3.13, `uv`-managed, `src/` layout.
+Python 3.13, `poetry`-managed, `src/` layout.
 See `pyproject.toml` for `make`-equivalent targets
-(`make format`, `make lint`, `make test` if present; otherwise `uv run black/ruff/mypy/pytest`).
+(`make format`, `make lint`, `make test` if present; otherwise `poetry run black/ruff/mypy/pytest`).
 
 ## Never commit sensitive info
 
@@ -39,9 +39,9 @@ Two modes:
 
 ```bash
 # fresh conversation
-uv run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite -d deep-research-acme
+poetry run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite -d deep-research-acme
 # follow-up turn, threading prior state
-uv run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue -d deep-research-acme
+poetry run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue -d deep-research-acme
 ```
 
 Override `--timeout` as needed.

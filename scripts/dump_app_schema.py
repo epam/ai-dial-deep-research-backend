@@ -38,7 +38,7 @@ def main() -> None:
     if args.check:
         if not ARTIFACT.exists() or ARTIFACT.read_text(encoding="utf-8") != rendered:
             print(
-                f"{ARTIFACT} is stale; run `uv run python scripts/dump_app_schema.py`",
+                f"{ARTIFACT} is stale; run `poetry run python scripts/dump_app_schema.py`",
                 file=sys.stderr,
             )
             sys.exit(1)

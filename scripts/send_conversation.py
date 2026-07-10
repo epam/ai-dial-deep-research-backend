@@ -32,8 +32,8 @@ The target deployment is the application instance registered in DIAL Core, passe
 `--deployment` (or the `DEPLOYMENT_ID` env var).
 
 Usage (from the repo root):
-  uv run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite -d deep-research-acme
-  uv run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue -d deep-research-acme
+  poetry run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite -d deep-research-acme
+  poetry run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue -d deep-research-acme
 """
 
 from __future__ import annotations

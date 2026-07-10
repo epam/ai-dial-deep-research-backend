@@ -156,7 +156,7 @@ Real client instances stay in the gitignored local file — never commit them.
 
 - Docker Desktop 4.x (Compose V2)
 - Python 3.13
-- `uv` (Python package manager)
+- [Poetry](https://python-poetry.org/docs/#installation) (Python package manager)
 - A generic-RAG MCP server — either registered as a DIAL application (deployment mode) or directly reachable via URL + api-key (local-dev mode).
 - A remote DIAL instance to pull model configs from (`REMOTE_DIAL_URL` + `REMOTE_DIAL_API_KEY`
   in `.env`, consumed by `make infra-config` — see
@@ -218,9 +218,9 @@ useful for testing without the chat UI:
 
 ```sh
 # fresh conversation
-uv run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite -d deep-research-acme
+poetry run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite -d deep-research-acme
 # follow-up turn, threading prior state
-uv run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue -d deep-research-acme
+poetry run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue -d deep-research-acme
 ```
 
 `-d`/`--deployment` targets an application instance registered in DIAL Core (falls back to
