@@ -107,3 +107,10 @@ def test_non_http_url_is_rejected(var: str, raw: str, monkeypatch: pytest.Monkey
     with pytest.raises(ValidationError) as excinfo:
         Settings()
     assert any(err["loc"] == (var.lower(),) for err in excinfo.value.errors())
+
+
+def test_missing_dial_url_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DIAL_URL", raising=False)
+    with pytest.raises(ValidationError) as excinfo:
+        Settings()
+    assert any(err["loc"] == ("dial_url",) for err in excinfo.value.errors())

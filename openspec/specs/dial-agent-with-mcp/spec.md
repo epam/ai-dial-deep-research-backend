@@ -263,9 +263,16 @@ requirement.
 ### Requirement: Configuration via environment variables
 
 The app SHALL be configurable through environment variables documented in `.env.example` and the
-README environment-variables table. The app SHALL NOT require a channel-config file path
-(`CHANNEL_CONFIG_PATH` is removed); per-channel behavior comes from DIAL application properties
-(see the **application-config-schema** capability).
+README environment-variables table. The README environment-variables table SHALL present every
+variable in a single table listing its default and its required status. The app SHALL NOT require
+a channel-config file path (`CHANNEL_CONFIG_PATH` is removed); per-channel behavior comes from
+DIAL application properties (see the **application-config-schema** capability).
+
+`DIAL_URL` SHALL be a required environment variable with no built-in default: the app SHALL NOT
+carry a fallback DIAL Core URL, and SHALL exit non-zero at startup with a message naming
+`DIAL_URL` when it is unset. `.env.example` SHALL document `DIAL_URL` with the local-dev value
+`http://localhost:8080`, so the code carries no localhost default while the local dev loop still
+works.
 
 The MCP connection SHALL be configured in exactly one of two mutually exclusive modes, enforced
 at process startup by a settings validator:
@@ -288,6 +295,15 @@ header propagation**).
 
 `LLM_MODELS_<NAME>` env mappings SHALL be supported as overrides for the per-enum-member DIAL
 Core deployment id; if unset, the app SHALL fall back to the enum member's value (the model id).
+
+#### Scenario: Startup with DIAL_URL set
+- **WHEN** the process starts with a valid MCP mode configured and `DIAL_URL` set
+- **THEN** the app SHALL start successfully and use `DIAL_URL` as the DIAL Core base URL
+
+#### Scenario: Missing DIAL_URL fails fast
+- **WHEN** the process starts with a valid MCP mode configured but no `DIAL_URL` set
+- **THEN** the app SHALL exit non-zero before serving any request, with a message naming
+  `DIAL_URL`, and SHALL NOT fall back to any built-in URL
 
 #### Scenario: Deployment-mode startup
 - **WHEN** the process starts with `MCP_SERVER_NAME` and `MCP_DEPLOYMENT_NAME` set and no `MCP_URL`

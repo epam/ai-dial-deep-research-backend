@@ -30,7 +30,8 @@ class Settings(BaseSettings):
 
     # DIAL. Downstream DIAL Core calls authenticate with the per-request api-key, injected by
     # the SDK's header propagation (see `app/factory.py`), so there is no static key here.
-    dial_url: HttpUrl = HttpUrl("http://localhost:8080")
+    # Required — no built-in default, so a missing DIAL_URL fails fast at startup.
+    dial_url: HttpUrl
     dial_app_name: str = "deep-research"
     heartbeat_interval: int = Field(default=5, ge=1)
 
