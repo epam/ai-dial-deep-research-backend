@@ -16,52 +16,13 @@ A DIAL-native **deep research** application: a LangChain/LangGraph agent that co
 generic-RAG MCP server, clarifies the user's query, aligns on a research plan, runs a
 research loop grounded in the MCP tools, and streams progress to DIAL as timed stages.
 
-- [Prerequisites](#prerequisites)
-- [Local run](#local-run)
 - [Configuration](#configuration)
+- [Environment variables](#environment-variables)
 - [DIAL core configuration](#dial-core-configuration)
+- [Local run](#local-run)
 - [Running the app in Docker (opt-in)](#running-the-app-in-docker-opt-in)
 - [Driving the app from the CLI](#driving-the-app-from-the-cli)
 - [LLM tracing with Opik (optional)](#llm-tracing-with-opik-optional)
-- [Environment variables](#environment-variables)
-
-## Prerequisites
-
-- Docker Desktop 4.x (Compose V2)
-- Python 3.13
-- `uv` (Python package manager)
-- A generic-RAG MCP server — either registered as a DIAL application (deployment mode) or directly reachable via URL + api-key (local-dev mode).
-- A remote DIAL instance to pull model configs from (`REMOTE_DIAL_URL` + `REMOTE_DIAL_API_KEY`
-  in `.env`, consumed by `make infra-config` — see
-  [DIAL core configuration](#dial-core-configuration)).
-- DIAL Core >= 0.41.0 — the app registers as a schema-rich application type and Core fetches
-  its schema from the app's schema endpoint. The compose stack already pins a compatible Core.
-
-## Local run
-
-Infra runs in Docker; the **app runs on your host** via uvicorn. DIAL core reaches the app through `host.docker.internal:5000`.
-
-```sh
-cp .env.example .env
-# fill .env with secrets
-make install
-make infra-config     # build the local DIAL core config (see "DIAL core configuration")
-make infra-up
-make app
-```
-
-Then open DIAL Chat UI in the browser, select the **Deep Research** application, and send your query.
-
-Tear down:
-
-```sh
-make infra-down       # stop infra
-make infra-cleanup    # down + remove volumes (destroys DIAL core data)
-```
-
-> **Host-first trade-off.** Host-run is the default dev loop (fast restarts, IDE debugging). `host.docker.internal` is provided automatically by Docker Desktop on macOS and Windows; on Linux you'd need to add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `core` service in `docker-compose.yml`. An opt-in containerized run is available too — see [Running the app in Docker](#running-the-app-in-docker-opt-in).
-
-> **macOS and port 5000.** AirPlay Receiver binds port 5000, so the app can't. Set e.g. `APP_PORT=5001` in `.env` **before** `make infra-config` — the target bakes the port into the DIAL core routing config (see [DIAL core configuration](#dial-core-configuration)).
 
 ## Configuration
 
@@ -81,6 +42,40 @@ Configuration comes from two sources:
   [`data/configs/example-application-properties.json`](./data/configs/example-application-properties.json).
   A request whose properties fail validation is delivered as a DIAL protocol error (a "not
   configured — contact your administrator" message), not a normal reply.
+
+## Environment variables
+
+All env vars are loaded from `.env` at the repo root (see `.env.example` for the contributor template). The app fails fast at startup if any **required** var is missing.
+
+The app authenticates to DIAL Core (LLM calls, file operations, and the deployment-mode MCP) with the **per-request api-key** that DIAL Core forwards with each request — there is no static DIAL service key.
+
+| Variable | Default | Required | Description |
+| -------- | ------- | -------- | ----------- |
+| **App server** | | | |
+| `APP_HOST` | `0.0.0.0` | No | Host interface the app binds to. |
+| `APP_PORT` | `5000` | No | Port the app binds to. |
+| `LOG_LEVEL` | `INFO` | No | Python logging level. One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. |
+| **DIAL Core** | | | |
+| `DIAL_URL` | — | Yes | Where the app finds DIAL Core. No built-in default. |
+| `DIAL_APP_NAME` | `deep-research` | No | OTel service name for traces. |
+| `HEARTBEAT_INTERVAL` | `5` | No | Seconds between DIAL keep-alive heartbeats during long-running responses. |
+| **MCP server** | | | |
+| `MCP_SERVER_NAME` | — | Yes | Logical name for the generic-RAG MCP server connection. |
+| `MCP_DEPLOYMENT_NAME` | — | mode¹ | Deployment mode: DIAL application/deployment id of the generic-RAG MCP server, reached through DIAL Core at `{DIAL_URL}/v1/deployments/{name}/mcp`. Authenticated with the per-request api-key. |
+| `MCP_URL` | — | mode¹ | Local-dev mode: URL of a directly-reachable MCP server. Setting it selects local-dev mode. |
+| `MCP_API_KEY` | — | if `MCP_URL` | Local-dev mode: static key sent as the `api-key` header to `MCP_URL`. Required when `MCP_URL` is set. |
+| **LLM models** | | | |
+| `LLM_MODELS_<ENUM_NAME>` | — | No | Override the DIAL Core deployment id for a given `LLMModelsEnum` member. E.g. `LLM_MODELS_GPT_5_2_2025_12_11=gpt-5.2-custom-name`. |
+| **Opik tracing** | | | |
+| `OPIK_TRACING_ENABLED` | `false` | No | Enable or disable Opik LLM tracing. |
+| `OPIK_PROJECT_NAME` | `deep-research` | No | Opik project traces are grouped under. |
+| **Scripts & config generator** | | | |
+| `REMOTE_DIAL_URL` | — | No | Remote DIAL that `make infra-config` pulls model configs from. Never read by the app. |
+| `REMOTE_DIAL_API_KEY` | — | No | Api-Key for that remote DIAL. Never read by the app. |
+
+¹ Exactly one **MCP connection mode** must be configured (the app fails fast at startup if neither is): deployment mode via `MCP_DEPLOYMENT_NAME`, or local-dev mode via `MCP_URL` + `MCP_API_KEY`.
+
+NOTE: `DOCKER_DEFAULT_PLATFORM` in `.env.example` is consumed by Docker Compose (not the app): uncomment it on Apple Silicon because the DIAL images ship linux/amd64 only.
 
 ## DIAL core configuration
 
@@ -151,6 +146,46 @@ both parts for a fictional example instance:
 
 Real client instances stay in the gitignored local file — never commit them.
 
+## Local run
+
+### Prerequisites
+
+- Docker Desktop 4.x (Compose V2)
+- Python 3.13
+- `uv` (Python package manager)
+- A generic-RAG MCP server — either registered as a DIAL application (deployment mode) or directly reachable via URL + api-key (local-dev mode).
+- A remote DIAL instance to pull model configs from (`REMOTE_DIAL_URL` + `REMOTE_DIAL_API_KEY`
+  in `.env`, consumed by `make infra-config` — see
+  [DIAL core configuration](#dial-core-configuration)).
+- DIAL Core >= 0.41.0 — the app registers as a schema-rich application type and Core fetches
+  its schema from the app's schema endpoint. The compose stack already pins a compatible Core.
+
+### Setup
+
+Infra runs in Docker; the **app runs on your host** via uvicorn. DIAL core reaches the app through `host.docker.internal:5000`.
+
+```sh
+cp .env.example .env
+# fill .env with secrets
+make install
+make infra-config     # build the local DIAL core config (see "DIAL core configuration")
+make infra-up
+make app
+```
+
+Then open DIAL Chat UI in the browser, select the **Deep Research** application, and send your query.
+
+Tear down:
+
+```sh
+make infra-down       # stop infra
+make infra-cleanup    # down + remove volumes (destroys DIAL core data)
+```
+
+> **Host-first trade-off.** Host-run is the default dev loop (fast restarts, IDE debugging). `host.docker.internal` is provided automatically by Docker Desktop on macOS and Windows; on Linux you'd need to add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `core` service in `docker-compose.yml`. An opt-in containerized run is available too — see [Running the app in Docker](#running-the-app-in-docker-opt-in).
+
+> **macOS and port 5000.** AirPlay Receiver binds port 5000, so the app can't. Set e.g. `APP_PORT=5001` in `.env` **before** `make infra-config` — the target bakes the port into the DIAL core routing config (see [DIAL core configuration](#dial-core-configuration)).
+
 ## Running the app in Docker (opt-in)
 
 `docker-compose.app.yml` is a compose overlay that runs the app as a container next to the
@@ -214,37 +249,3 @@ Tear down:
 ```sh
 make opik-down        # stops Opik containers; .opik-local/ stays for the next `opik-up`
 ```
-
-## Environment variables
-
-All env vars are loaded from `.env` at the repo root (see `.env.example` for the contributor template). The app fails fast at startup if any **required** var is missing.
-
-The app authenticates to DIAL Core (LLM calls, file operations, and the deployment-mode MCP) with the **per-request api-key** that DIAL Core forwards with each request — there is no static DIAL service key.
-
-| Variable | Default | Required | Description |
-| -------- | ------- | -------- | ----------- |
-| **App server** | | | |
-| `APP_HOST` | `0.0.0.0` | No | Host interface the app binds to. |
-| `APP_PORT` | `5000` | No | Port the app binds to. |
-| `LOG_LEVEL` | `INFO` | No | Python logging level. One of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`. |
-| **DIAL Core** | | | |
-| `DIAL_URL` | — | Yes | Where the app finds DIAL Core. No built-in default. |
-| `DIAL_APP_NAME` | `deep-research` | No | OTel service name for traces. |
-| `HEARTBEAT_INTERVAL` | `5` | No | Seconds between DIAL keep-alive heartbeats during long-running responses. |
-| **MCP server** | | | |
-| `MCP_SERVER_NAME` | — | Yes | Logical name for the generic-RAG MCP server connection. |
-| `MCP_DEPLOYMENT_NAME` | — | mode¹ | Deployment mode: DIAL application/deployment id of the generic-RAG MCP server, reached through DIAL Core at `{DIAL_URL}/v1/deployments/{name}/mcp`. Authenticated with the per-request api-key. |
-| `MCP_URL` | — | mode¹ | Local-dev mode: URL of a directly-reachable MCP server. Setting it selects local-dev mode. |
-| `MCP_API_KEY` | — | if `MCP_URL` | Local-dev mode: static key sent as the `api-key` header to `MCP_URL`. Required when `MCP_URL` is set. |
-| **LLM models** | | | |
-| `LLM_MODELS_<ENUM_NAME>` | — | No | Override the DIAL Core deployment id for a given `LLMModelsEnum` member. E.g. `LLM_MODELS_GPT_5_2_2025_12_11=gpt-5.2-custom-name`. |
-| **Opik tracing** | | | |
-| `OPIK_TRACING_ENABLED` | `false` | No | Enable or disable Opik LLM tracing. |
-| `OPIK_PROJECT_NAME` | `deep-research` | No | Opik project traces are grouped under. |
-| **Scripts & config generator** | | | |
-| `REMOTE_DIAL_URL` | — | No | Remote DIAL that `make infra-config` pulls model configs from. Never read by the app. |
-| `REMOTE_DIAL_API_KEY` | — | No | Api-Key for that remote DIAL. Never read by the app. |
-
-¹ Exactly one **MCP connection mode** must be configured (the app fails fast at startup if neither is): deployment mode via `MCP_DEPLOYMENT_NAME`, or local-dev mode via `MCP_URL` + `MCP_API_KEY`.
-
-NOTE: `DOCKER_DEFAULT_PLATFORM` in `.env.example` is consumed by Docker Compose (not the app): uncomment it on Apple Silicon because the DIAL images ship linux/amd64 only.
