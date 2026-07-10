@@ -40,12 +40,47 @@ def test_non_positive_heartbeat_interval_is_rejected(
     )
 
 
-@pytest.mark.parametrize("var", ["MCP_SERVER_NAME", "MCP_URL", "MCP_API_KEY"])
-def test_empty_required_string_is_rejected(var: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(var, "")
+def test_empty_mcp_server_name_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCP_SERVER_NAME", "")
     with pytest.raises(ValidationError) as excinfo:
         Settings()
-    assert any(err["loc"] == (var.lower(),) for err in excinfo.value.errors())
+    assert any(err["loc"] == ("mcp_server_name",) for err in excinfo.value.errors())
+
+
+def test_deployment_mode_loads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MCP_URL", raising=False)
+    monkeypatch.delenv("MCP_API_KEY", raising=False)
+    monkeypatch.setenv("MCP_DEPLOYMENT_NAME", "generic-rag-mcp")
+    settings = Settings()
+    assert settings.mcp_url is None
+    assert settings.mcp_deployment_name == "generic-rag-mcp"
+
+
+def test_local_dev_mode_loads(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCP_URL", "http://localhost:8000/mcp")
+    monkeypatch.setenv("MCP_API_KEY", "local-key")
+    monkeypatch.delenv("MCP_DEPLOYMENT_NAME", raising=False)
+    settings = Settings()
+    assert settings.mcp_url is not None
+    assert settings.mcp_api_key is not None
+    assert settings.mcp_api_key.get_secret_value() == "local-key"
+
+
+def test_local_dev_mode_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MCP_URL", "http://localhost:8000/mcp")
+    monkeypatch.delenv("MCP_API_KEY", raising=False)
+    monkeypatch.delenv("MCP_DEPLOYMENT_NAME", raising=False)
+    with pytest.raises(ValidationError) as excinfo:
+        Settings()
+    assert "MCP_API_KEY" in str(excinfo.value)
+
+
+def test_no_mcp_mode_configured_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MCP_URL", raising=False)
+    monkeypatch.delenv("MCP_DEPLOYMENT_NAME", raising=False)
+    with pytest.raises(ValidationError) as excinfo:
+        Settings()
+    assert "MCP_DEPLOYMENT_NAME" in str(excinfo.value)
 
 
 def test_opik_project_name_default_loads(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -126,10 +126,10 @@ def send(
 ) -> dict:
     """POST the chat-completion request and return `choices[0].message` verbatim.
 
-    The DIAL URL and API key come from the app settings singleton (.env); the target
-    deployment is the application instance registered in DIAL Core, passed by the
-    caller. The API key never surfaces on the CLI: it stays a `SecretStr` until the
-    request is built.
+    The DIAL URL comes from the app settings singleton (.env); the client `Api-Key` comes
+    from the `DIAL_API_KEY` env var (default: the local-stack dev key `dial_api_key`). The
+    target deployment is the application instance registered in DIAL Core, passed by the
+    caller.
     """
     # Imported here, not at module top: importing the settings module instantiates the
     # singleton, which must happen after main() has loaded .env.
@@ -137,8 +137,11 @@ def send(
 
     base_url = settings.dial_url.encoded_string().rstrip("/")
     url = f"{base_url}/openai/deployments/{deployment}/chat/completions"
+    # Client-side key to authenticate to DIAL Core. The app itself no longer holds a static
+    # key (it uses the per-request key), so this client supplies its own, like the chat UI.
+    api_key = os.getenv("DIAL_API_KEY", "dial_api_key")
     headers = {
-        "Api-Key": settings.dial_api_key.get_secret_value(),
+        "Api-Key": api_key,
         "Content-Type": "application/json",
         "X-Conversation-Id": conversation_id,
     }

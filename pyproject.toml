@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "aidial-sdk[telemetry]>=0.32.0,<0.33.0",
-    "aidial-client>=0.7.1,<0.8.0",
+    "aidial-client>=0.14.0,<0.15.0",
     "fastapi>=0.121.0,<0.122.0",
     "uvicorn[standard]>=0.41.0,<0.42.0",
     "pydantic>=2.11.0,<3.0.0",
@@ -99,3 +99,5 @@ follow_untyped_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# scripts/ is not a package; this lets tests import the script modules directly.
+pythonpath = ["scripts"]

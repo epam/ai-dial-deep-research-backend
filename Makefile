@@ -64,6 +64,13 @@ test: install ## Run pytest
 
 ## -------- infra -------- ##
 
+infra-config: install ## Build the local DIAL core config: seed applications.json, pull models from the remote DIAL
+	@test -f dial_conf/core/applications.json || { \
+		cp dial_conf/core/applications-template.json dial_conf/core/applications.json; \
+		echo "seeded dial_conf/core/applications.json from the template"; \
+	}
+	$(UV) run python scripts/generate_dial_config.py
+
 infra-up: ## Start the infra services (DIAL core, chat UI, themes, redis) detached
 	docker compose up -d
 

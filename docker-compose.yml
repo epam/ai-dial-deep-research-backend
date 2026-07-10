@@ -39,11 +39,14 @@ services:
     environment:
       AIDIAL_SETTINGS: "/opt/settings/settings.json"
       JAVA_OPTS: "-Dgflog.config=/opt/settings/gflog.xml"
-      aidial.config.files: '["/opt/config/config.json"]'
+      # Split config, merged by core in list order. All three are produced/kept local
+      # by `make infra-config`: generated models, the app-type registration rendered
+      # with APP_PORT, and the seeded applications. See README "DIAL core configuration".
+      aidial.config.files: '["/opt/config/generated/models.json", "/opt/config/generated/application-schemas.json", "/opt/config/applications.json"]'
       aidial.redis.singleServerConfig.address: "redis://redis:6379"
     volumes:
       - ./dial_conf/settings:/opt/settings:ro
-      - ./dial_conf/core/config.json:/opt/config/config.json:ro
+      - ./dial_conf/core:/opt/config:ro
       - core-logs:/app/log
       - core-data:/app/data
     restart: unless-stopped

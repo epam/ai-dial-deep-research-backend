@@ -1,6 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
+from dial_deep_research.settings import PLACEHOLDER_API_KEY
 from dial_deep_research.utils.llm import (
     LLMModelConfig,
     LLMModelsEnum,
@@ -49,3 +50,11 @@ def test_get_chat_model_wires_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     assert model.deployment_name == "gpt-5.2-2025-12-11"
     assert model.reasoning_effort == ReasoningEffortEnum.LOW.value
     assert model.verbosity == VerbosityEnum.HIGH.value
+
+
+def test_get_chat_model_uses_placeholder_api_key() -> None:
+    # The real per-request key is injected by SDK header propagation; the client is only
+    # ever constructed with the placeholder.
+    model = get_chat_model(LLMModelConfig())
+    assert model.openai_api_key is not None
+    assert model.openai_api_key.get_secret_value() == PLACEHOLDER_API_KEY

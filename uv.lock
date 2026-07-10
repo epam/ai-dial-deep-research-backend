@@ -4,7 +4,7 @@ requires-python = "==3.13.*"
 
 [[package]]
 name = "aidial-client"
-version = "0.7.1"
+version = "0.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiofiles" },
@@ -12,9 +12,9 @@ dependencies = [
     { name = "openai" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8b/41/d29603163c9bd490ebbe52e6ef48839bbf150b7b5b742af2a38e3777ed65/aidial_client-0.7.1.tar.gz", hash = "sha256:67bc74487b923e86fd6de2ca824ee05c13cedd35304350ddbe1e0758943fbe40", size = 34500, upload-time = "2026-04-23T12:18:08.246Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1a/e7/fa1395f4098ee3be57f4a67a2c9210608aff65d7992ef934e890920950fc/aidial_client-0.14.0.tar.gz", hash = "sha256:f64e9bc265458b6495eb30fedf66e91c96d091b8346fa5b785682706e3f49db3", size = 43169, upload-time = "2026-07-08T14:50:18.306Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/87/65/bc35d1d842a50bbd09468ef8b74223455a0837ce91ce3c533baa52eeedae/aidial_client-0.7.1-py3-none-any.whl", hash = "sha256:41d753000ec87a397f6f1176a678ee7eacbc94fe3c9133222e14f7ae9ac0e230", size = 49306, upload-time = "2026-04-23T12:18:09.56Z" },
+    { url = "https://files.pythonhosted.org/packages/34/69/68656877a5fb1f99f948b6294228daffda6c453eab98a65e87caed01bfd0/aidial_client-0.14.0-py3-none-any.whl", hash = "sha256:66de6953324087264c88fed9d6557092aabe1b06599495fd3751b3df8f5fb114", size = 58384, upload-time = "2026-07-08T14:50:19.251Z" },
 ]
 
 [[package]]
@@ -363,7 +363,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aidial-client", specifier = ">=0.7.1,<0.8.0" },
+    { name = "aidial-client", specifier = ">=0.14.0,<0.15.0" },
     { name = "aidial-sdk", extras = ["telemetry"], specifier = ">=0.32.0,<0.33.0" },
     { name = "fastapi", specifier = ">=0.121.0,<0.122.0" },
     { name = "langchain", specifier = ">=1.2.0,<2.0.0" },

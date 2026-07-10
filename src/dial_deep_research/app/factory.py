@@ -29,6 +29,9 @@ def create_app() -> DIALApp:
 
     app = DIALApp(
         dial_url=settings.dial_url.encoded_string(),
+        # Rewrite the outgoing api-key to the per-request key on every call under dial_url
+        # (LLM, DIAL files, the Core-hosted MCP). See utils/llm.py and app/completion.py.
+        propagate_auth_headers=True,
         add_healthcheck=True,
         telemetry_config=TelemetryConfig(
             service_name=settings.dial_app_name,

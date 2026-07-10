@@ -12,7 +12,7 @@ from dial_deep_research.app.history import (
 from dial_deep_research.app.preparation.runner import PrepAgentRunner
 from dial_deep_research.app.research.runner import ResearchRunner
 from dial_deep_research.app_properties import ApplicationProperties
-from dial_deep_research.settings import settings
+from dial_deep_research.settings import PLACEHOLDER_API_KEY, settings
 from dial_deep_research.utils.llm import LLMModelConfig
 from dial_deep_research.utils.tracing import build_opik_tracer, extract_thread_id
 
@@ -62,7 +62,9 @@ class DeepResearchCompletion(ChatCompletion):
         )
         dial = AsyncDial(
             base_url=settings.dial_url.encoded_string(),
-            api_key=settings.dial_api_key.get_secret_value(),
+            # Per-request api-key is injected by the SDK's header propagation; this
+            # placeholder only satisfies the client's construction-time requirement.
+            api_key=PLACEHOLDER_API_KEY,
         )
         prep_state = load_last_prep_state(request)
 
@@ -83,8 +85,13 @@ class DeepResearchCompletion(ChatCompletion):
 
         if prep_state.research_started:
             # start_research fired this turn — run the research graph on the same choice.
+            # The per-request bearer token (when present) is forwarded to the RAG MCP for
+            # per-user access; the api-key is handled by header propagation.
             research_messages = await ResearchRunner(choice).run(
-                prep_state, properties=properties, opik_tracer=opik_tracer
+                prep_state,
+                properties=properties,
+                opik_tracer=opik_tracer,
+                bearer_token=request.bearer_token,
             )
             messages.extend(research_messages)
 

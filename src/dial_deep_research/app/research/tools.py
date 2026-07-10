@@ -20,14 +20,33 @@ from dial_deep_research.utils.json_schema_fixes import hoist_defs_to_root
 FINISH_ITERATION_RESULT = "Research iteration complete; handing off to the reviewer."
 
 
-def build_mcp_client() -> MultiServerMCPClient:
-    """Build a fresh per-request MCP client for the generic-RAG server."""
+def build_mcp_client(bearer_token: str | None = None) -> MultiServerMCPClient:
+    """Build a fresh per-request MCP client for the generic-RAG server.
+
+    Two modes (see `Settings._validate_mcp_mode`):
+    - deployment: the MCP is a DIAL application reached through Core at
+      `{dial_url}/v1/deployments/{mcp_deployment_name}/mcp`. The per-request api-key is
+      supplied by SDK header propagation; the request's bearer token (when present) is
+      forwarded as `Authorization: Bearer` for per-user RAG access.
+    - local dev: a directly-reachable MCP at `mcp_url`, authenticated with the static
+      `mcp_api_key` in the `api-key` header.
+    """
+    if settings.mcp_url is None:
+        base = settings.dial_url.encoded_string().rstrip("/")
+        url = f"{base}/v1/deployments/{settings.mcp_deployment_name}/mcp"
+        headers: dict[str, str] = {}
+        if bearer_token:
+            headers["Authorization"] = f"Bearer {bearer_token}"
+    else:
+        url = settings.mcp_url.encoded_string()
+        api_key = settings.mcp_api_key.get_secret_value() if settings.mcp_api_key else ""
+        headers = {"api-key": api_key}
     return MultiServerMCPClient(
         connections={
             settings.mcp_server_name: {
                 "transport": "streamable_http",
-                "url": settings.mcp_url.encoded_string(),
-                "headers": {"api-key": settings.mcp_api_key.get_secret_value()},
+                "url": url,
+                "headers": headers,
             }
         }
     )
@@ -76,9 +95,9 @@ def _dump_tool_schemas_to_json(tools: list[BaseTool], dp: Path) -> None:
             json.dump(t.args_schema, f, indent=2, default=str, ensure_ascii=False)
 
 
-async def load_research_tools() -> list[BaseTool]:
+async def load_research_tools(bearer_token: str | None = None) -> list[BaseTool]:
     """Fetch the MCP tools, hoist their schemas, add the finish sentinel, wire error handling."""
-    mcp_client = build_mcp_client()
+    mcp_client = build_mcp_client(bearer_token=bearer_token)
     tools = await mcp_client.get_tools()
 
     # TODO: either remove or use envvar

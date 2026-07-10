@@ -1,7 +1,11 @@
 **/*.env*
 !.env.example
 
-dial_conf/core/*.json
+# Local-only DIAL core config: real client instances, the generated models config
+# (embeds the remote key), and the legacy hand-written config.json.
+dial_conf/core/applications.json
+dial_conf/core/generated/
+dial_conf/core/config.json
 dial_conf/core/logs/
 
 .idea

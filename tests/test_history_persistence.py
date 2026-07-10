@@ -22,7 +22,7 @@ from dial_deep_research.app.history import reconstruct_history
 
 
 def _build_request(messages: list[Message]) -> Request:
-    return Request.construct(messages=messages)
+    return Request.model_construct(messages=messages)
 
 
 class _NoOpDial:

@@ -3,9 +3,10 @@
 #   docker compose -f docker-compose.yml -f docker-compose.app.yml up -d   (or `make all-up`)
 #
 # Plain `docker compose up` / `make infra-up` still starts infra only.
-# NOTE: for DIAL core to route to the containerized app, the app endpoint in
-# dial_conf/core/config.json must point to http://deep-research:5000 instead of
-# the host-run app (host.docker.internal).
+# NOTE: for DIAL core to route to the containerized app, the type endpoints in
+# dial_conf/core/generated/application-schemas.json must point to
+# http://deep-research:5000 instead of the host-run app (host.docker.internal);
+# re-apply that edit after re-running `make infra-config`.
 
 services:
 
