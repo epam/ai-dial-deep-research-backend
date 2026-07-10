@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A DIAL chat completion (deployment id `deep-research`, display name `Deep Research`) that runs a per-request LangChain tool-calling agent against a single HTTP MCP server (the generic-RAG service), reached either as a DIAL application through Core (deployment mode) or a directly-reachable endpoint (local-dev mode). Tool calls and tool results stream to DIAL as timed stages; only the agent's final assistant text becomes message content. All failures funnel into a single logged-and-replaced friendly assistant message — no exceptions ever bubble out of the handler. LLM calls, DIAL file operations, and the deployment-mode MCP connection authenticate with the per-request api-key that DIAL Core forwards with each request (via the SDK's auth-header propagation), not a static service key; the per-request bearer token is forwarded to the RAG MCP when present. This capability replaces the original echo placeholder and absorbs the structural DIAL-app surface (protocol conformance, streaming, health) under its own contract.
+A DIAL chat completion (deployment id `deep-research`, display name `Deep Research`) that runs a per-request LangChain tool-calling agent against a single HTTP MCP server (the generic-RAG service), reached either as a DIAL application through Core (deployment mode) or a directly-reachable endpoint (local-dev mode). Tool calls and tool results stream to DIAL as timed stages; only the agent's final assistant text becomes message content. All turn-aborting failures are resolved to a user-safe message (carrying an error reference) and delivered through the DIAL error protocol — a non-200 error body or an in-stream error chunk — never as fake-success HTTP 200 assistant content. LLM calls, DIAL file operations, and the deployment-mode MCP connection authenticate with the per-request api-key that DIAL Core forwards with each request (via the SDK's auth-header propagation), not a static service key; the per-request bearer token is forwarded to the RAG MCP when present. This capability replaces the original echo placeholder and absorbs the structural DIAL-app surface (protocol conformance, streaming, health) under its own contract.
 ## Requirements
 ### Requirement: DIAL-protocol application server
 The repository SHALL implement an application server that conforms to the DIAL application protocol, using the official DIAL Python SDK, exposing a chat completion endpoint consumable by DIAL core under the deployment id `deep-research`.
@@ -177,7 +177,7 @@ The system message provided by the DIAL request SHALL continue to be ignored on 
 
 #### Scenario: Rehydration failure does not abort the turn
 - **WHEN** a request includes an assistant message whose `custom_content.state["messages"]` references a DIAL file that cannot be downloaded (404, network error, or auth failure)
-- **THEN** the reconstructed `ToolMessage` SHALL have the offending image block replaced by a `TextContentBlock` placeholder describing the loss, the failure SHALL be logged server-side, and the turn SHALL proceed normally rather than surfacing the friendly error string
+- **THEN** the reconstructed `ToolMessage` SHALL have the offending image block replaced by a `TextContentBlock` placeholder describing the loss, the failure SHALL be logged server-side, and the turn SHALL proceed normally rather than being delivered as a turn-aborting protocol error
 
 ### Requirement: Tool-message image content uploaded to DIAL files before persistence
 
@@ -206,21 +206,6 @@ Before calling `choice.set_state(...)` at the end of each turn, the app SHALL up
 #### Scenario: Persisted state stays below the DIAL request-body limit on multimodal turns
 - **WHEN** a turn produces one or more tool messages carrying image content totalling more than 1 MB of base64 in aggregate
 - **THEN** the serialized `custom_content.state["messages"]` payload produced for that turn SHALL contain only URL references for those images (no `base64` fields), and DIAL Chat SHALL NOT reject the resulting request with a `413 Body exceeded 1mb limit` error
-
-### Requirement: Top-level error funnel with friendly assistant message
-The app SHALL wrap each chat completion in a top-level exception handler. On any failure (MCP unreachable, MCP tool error, LLM error, malformed model output, etc.), the handler SHALL log the exception server-side and append a fixed friendly error string to the assistant message via `choice.append_content`. The handler SHALL NOT re-raise the exception; the chat completion SHALL complete successfully from DIAL's perspective.
-
-#### Scenario: MCP server unreachable
-- **WHEN** the MCP server cannot be reached at the configured URL during a chat completion
-- **THEN** the app SHALL log the failure server-side and the DIAL response SHALL contain a friendly error string as the assistant message, completing successfully (HTTP 200) from DIAL's perspective
-
-#### Scenario: LLM error mid-turn
-- **WHEN** the LLM call fails after one or more tool stages have already been streamed
-- **THEN** the app SHALL log the failure server-side and append the friendly error string to the existing partial assistant content, completing successfully from DIAL's perspective
-
-#### Scenario: MCP tool execution error
-- **WHEN** an MCP tool raises an error during execution
-- **THEN** the app SHALL log the failure server-side and the DIAL response SHALL end with the friendly error string as part of the assistant message, completing successfully from DIAL's perspective
 
 ### Requirement: MCP authentication via api-key header
 
@@ -347,7 +332,7 @@ Core deployment id; if unset, the app SHALL fall back to the enum member's value
 
 ### Requirement: Opik tracing of agent runs when configured
 
-The app SHALL attach an `opik.integrations.langchain.OpikTracer` callback to the per-request LangChain agent's streaming invocation **iff** Opik tracing is enabled via configuration (`Settings.opik_tracing_enabled` is true). When attached, the tracer SHALL capture the full hierarchical trace of the turn — the agent graph run, the underlying LLM call, and every MCP tool call (including arguments, results, and errors) — without altering the agent's outputs, the DIAL stages emitted, the assistant message content, or the top-level error funnel. When Opik tracing is not enabled, the agent SHALL run with no Opik callback attached and SHALL produce identical observable behaviour to a build that does not depend on Opik.
+The app SHALL attach an `opik.integrations.langchain.OpikTracer` callback to the per-request LangChain agent's streaming invocation **iff** Opik tracing is enabled via configuration (`Settings.opik_tracing_enabled` is true). When attached, the tracer SHALL capture the full hierarchical trace of the turn — the agent graph run, the underlying LLM call, and every MCP tool call (including arguments, results, and errors) — without altering the agent's outputs, the DIAL stages emitted, the assistant message content, or the way turn-aborting failures are delivered. When Opik tracing is not enabled, the agent SHALL run with no Opik callback attached and SHALL produce identical observable behaviour to a build that does not depend on Opik.
 
 #### Scenario: Tracer attached when enabled
 - **WHEN** `OPIK_TRACING_ENABLED=true` is set and the local Opik stack (started via `make opik-up`) is reachable, and a chat completion request is processed
@@ -359,7 +344,7 @@ The app SHALL attach an `opik.integrations.langchain.OpikTracer` callback to the
 
 #### Scenario: Tracing failure does not break the turn
 - **WHEN** Opik tracing is enabled but the configured Opik instance is unreachable mid-turn
-- **THEN** the chat completion SHALL still complete successfully (the agent SHALL produce its assistant text and tool stages as usual), with any tracer-side exception either swallowed by LangChain's callback machinery or absorbed by the existing top-level error funnel — i.e. tracing failures SHALL never produce a non-200 response and SHALL never replace successful assistant content with the friendly error string
+- **THEN** the chat completion SHALL still complete successfully (the agent SHALL produce its assistant text and tool stages as usual), with any tracer-side exception swallowed by LangChain's callback machinery — i.e. tracing failures SHALL NOT abort the turn: they SHALL never produce an error response and SHALL never replace successful assistant content with a delivered error
 
 #### Scenario: Tool error is captured as a tool span
 - **WHEN** Opik tracing is enabled and an MCP tool raises an error during a turn (caught by `handle_tool_error`)
@@ -455,4 +440,133 @@ api-key only.
 - **WHEN** the incoming request carries a bearer token and the agent invokes the LLM
 - **THEN** the LLM request SHALL NOT include an `Authorization: Bearer` header (the bearer is
   forwarded only to the RAG MCP, per the **MCP authentication** requirement)
+
+### Requirement: Failures delivered as DIAL protocol errors
+
+The app SHALL resolve every turn-aborting failure to an accurate, user-safe message and deliver it
+through the **DIAL error protocol**, never as fake-success HTTP 200 assistant content. This applies
+whether an exception reaches the top-level handler or a known turn-aborting condition holds (a turn
+"cannot produce its intended answer").
+
+**Cause resolution.** The app SHALL normalize the failure into a common view (HTTP status, error
+`code`, error `type`, internal message, and user-safe `display_message`) extracted best-effort
+from the supported exception shapes (`openai` LLM errors, `aidial_sdk.exceptions.HTTPException`,
+raw `httpx` errors); normalization SHALL be total — a malformed or absent error body yields an
+empty view, never a second exception. The app SHALL then choose the user-facing message by a fixed
+precedence, most-specific first:
+
+1. the upstream's own `display_message`, used verbatim (rendered as plain text and length-capped),
+   with nothing appended;
+2. a curated error-`code` map (at least `content_filter` and `context_length_exceeded`);
+3. a status/type map with wording specific to the failing surface (AI model vs a required
+   service), including timeout and connectivity causes;
+4. a dedicated mid-stream rule for a plain `openai.APIError` (an LLM that failed after the report
+   node began streaming) that carries no usable status or code;
+5. curated messages for known internal conditions (research step-budget exhaustion; the two
+   turn-aborting app conditions below);
+6. a generic fallback.
+
+Each resolution SHALL be classified retryable or not; the app SHALL append a single "try again
+later" sentence only to retryable resolutions, and SHALL NOT append it to a `display_message`
+resolution or to any non-retryable resolution (which carries its own advice). User-facing text
+SHALL contain only the upstream `display_message` (user-safe by DIAL contract) or curated wording
+— never a raw stack trace, endpoint, header, or the internal error message.
+
+**Error reference.** Every failure handled at the top level SHALL be stamped with a short opaque
+reference (8 hex characters) that appears in both the user-facing message (suffixed as
+`(error reference: <ref>)`) and a single server log record that also carries the stack trace, the
+normalized internal details, and the retryable classification.
+
+**Delivery.** The handler SHALL raise `aidial_sdk.exceptions.HTTPException` built from the
+resolution (`display_message` and `message` both set to the composed user-facing text + reference;
+`code` and `type` propagated from the normalized details) so the SDK delivers it as a non-200
+error body (for non-streaming requests, or failures before the choice opens) or as an in-stream
+`{"error": ...}` chunk terminating the open 200 stream (for streaming requests, i.e. any failure
+after the choice opens). Any partial report content already streamed SHALL remain visible with the
+error rendered beneath it. The app SHALL NOT append the error as ordinary assistant `content`, and
+SHALL NOT persist state on a turn that aborts.
+
+**Outgoing-status policy.** The app SHALL NOT emit a status DIAL Core's balancer treats as
+retriable (429, 502, 503, 504). A client-attributable status (one of 400, 401, 403, 404, 409, 413,
+422) SHALL pass through; every other cause — upstream rate limits and outages, stream failures,
+timeouts, unknown internal errors — SHALL be emitted as 500. The true cause SHALL be preserved in
+`code`, so a 500 MAY carry `code: "429"`; consumers classify by `code`, not `status_code`.
+
+**Turn-aborting app conditions.** The two outcomes that previously rendered as friendly assistant
+content SHALL instead be delivered as protocol errors: an application whose properties cannot be
+**validated** (unconfigured) SHALL resolve to a non-retryable "not configured — contact your
+administrator" message (outgoing 500), and a conversation whose research has already been handed
+off SHALL resolve to a non-retryable "start a new conversation" message (outgoing 409). A failure
+to **fetch** the properties from DIAL Core (as opposed to validate them) SHALL propagate to the
+top-level handler and resolve through the status/type map to a service message, rather than being
+reported as "not configured".
+
+**Absorbed failures are unaffected.** Failures that are deliberately swallowed and never abort the
+turn SHALL NOT trigger this path: per-tool errors caught by `handle_tool_error` (surfaced as an
+`error ❌` stage), Opik-tracing failures, and image-rehydration failures. These continue to let the
+turn complete normally.
+
+#### Scenario: Upstream failure carrying a display message
+- **WHEN** an LLM call fails with an error whose DIAL body carries a `display_message`
+- **THEN** the app SHALL deliver that `display_message` verbatim (plain text, length-capped) as the
+  user-facing error text with the error reference appended, and SHALL NOT append a "try again
+  later" sentence to it
+
+#### Scenario: LLM failure mid-stream after partial content
+- **WHEN** the report node has already streamed some assistant content and the LLM then fails
+  mid-stream (a plain `openai.APIError` with no usable status/code)
+- **THEN** the app SHALL deliver an in-stream `{"error": ...}` chunk terminating the stream, the
+  already-streamed partial content SHALL remain visible, and the error text SHALL be the dedicated
+  mid-stream message (retryable, so "try again later"-suffixed) plus the error reference — never the
+  generic fallback
+
+#### Scenario: Context-length and content-filter causes get actionable text
+- **WHEN** the model rejects the request with `code: "context_length_exceeded"` or
+  `code: "content_filter"`
+- **THEN** the code map SHALL resolve it to the actionable message (shorten the messages / rephrase
+  the message) ahead of the status ladder, classified non-retryable
+
+#### Scenario: MCP server unreachable
+- **WHEN** the MCP server cannot be reached at the configured endpoint during a turn
+- **THEN** the app SHALL log the failure with an error reference and deliver a DIAL protocol error
+  whose user-facing text is the resolved service/connectivity message plus the reference — not an
+  HTTP 200 completion carrying error content
+
+#### Scenario: Genuinely unknown failure is stamped and logged
+- **WHEN** an unexpected exception with no usable error body reaches the top-level handler
+- **THEN** the app SHALL deliver the generic fallback message suffixed with an error reference, and
+  SHALL write one server log record carrying that same reference together with the stack trace, so
+  the reference the user reports can be grepped to the log entry
+
+#### Scenario: Never emits a balancer-retriable status
+- **WHEN** the resolved cause is an upstream 429, 502, 503, or 504 (or a mid-stream failure whose
+  backfilled status is one of these)
+- **THEN** the app SHALL emit outgoing HTTP 500 with the true cause preserved in `code` (e.g.
+  `code: "429"`), and SHALL NOT emit 429/502/503/504
+
+#### Scenario: Failed turn is kept out of LLM-visible history
+- **WHEN** a turn aborts and is delivered as a protocol error
+- **THEN** the app SHALL NOT write the error text into assistant `content` and SHALL NOT persist
+  turn state, so a subsequent turn (e.g. after DIAL Chat regenerates) does not replay the error
+  text to the model
+
+#### Scenario: Unconfigured application delivered as a protocol error
+- **WHEN** a request's DIAL application properties cannot be validated
+- **THEN** the app SHALL deliver a non-retryable protocol error (outgoing HTTP 500) whose text is
+  the "not configured — contact your administrator" message plus an error reference, and SHALL NOT
+  run any agent or append the message as assistant content
+
+#### Scenario: Research-already-handed-off delivered as a protocol error
+- **WHEN** a request arrives on a conversation whose research was already handed off on an earlier
+  turn
+- **THEN** the app SHALL deliver a non-retryable protocol error (outgoing HTTP 409) whose text is
+  the "start a new conversation" message plus an error reference, and SHALL NOT append that message
+  as assistant content nor persist any state for the turn
+
+#### Scenario: Property fetch failure is not masked as "not configured"
+- **WHEN** fetching the application properties from DIAL Core fails (e.g. Core unreachable or a
+  5xx), as opposed to the properties failing validation
+- **THEN** the failure SHALL propagate to the top-level handler and resolve through the status/type
+  map to a service message with the appropriate retryability, rather than being reported as "not
+  configured"
 

@@ -1,14 +1,16 @@
 """Per-request application-properties resolution through the HTTP surface.
 
-Tests inject properties via the `X-DIAL-APPLICATION-PROPERTIES` header — the SDK
-honors it when present, so no DIAL Core round-trip is needed. Missing/invalid
-properties must produce the friendly configuration error without running any agent.
+Tests inject properties via the `X-DIAL-APPLICATION-PROPERTIES` header — the SDK honors it when
+present, so no DIAL Core round-trip is needed. A **validation** failure means the app is
+misconfigured and is delivered as a protocol error; a **fetch** failure (Core unreachable) is
+delivered as a service error, not masked as "not configured".
 """
 
 import json
 
 import httpx
 import pytest
+from aidial_sdk.chat_completion import Request
 from fastapi.testclient import TestClient
 
 import dial_deep_research.app.completion as completion_module
@@ -39,19 +41,34 @@ def _content(response: httpx.Response) -> str:
     return response.json()["choices"][0]["message"]["content"]
 
 
-def test_missing_properties_returns_friendly_error(client: TestClient) -> None:
-    response = _post_completion(client)
-    assert response.status_code == 200
-    assert "not configured" in _content(response)
+def _error(response: httpx.Response) -> dict:
+    return response.json()["error"]
 
 
-def test_invalid_properties_returns_friendly_error(client: TestClient) -> None:
+def test_invalid_properties_delivered_as_protocol_error(client: TestClient) -> None:
     invalid = {"prompts": {**VALID_PROPERTIES["prompts"], "client_name": ""}}
     response = _post_completion(
         client, headers={"X-DIAL-APPLICATION-PROPERTIES": json.dumps(invalid)}
     )
-    assert response.status_code == 200
-    assert "not configured" in _content(response)
+    # Not a 200 completion carrying content — a real protocol error.
+    assert response.status_code == 500
+    assert "choices" not in response.json()
+    assert "not configured" in _error(response)["display_message"]
+
+
+def test_property_fetch_failure_delivered_as_service_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _boom(self) -> dict:
+        raise httpx.ConnectError("core unreachable", request=httpx.Request("GET", "https://core"))
+
+    monkeypatch.setattr(Request, "request_dial_application_properties", _boom)
+    response = _post_completion(client)
+    # A fetch failure is a service error, not a misconfiguration.
+    assert response.status_code == 500
+    display = _error(response)["display_message"]
+    assert "not configured" not in display
+    assert "required service" in display
 
 
 def test_valid_properties_reach_the_prep_agent(

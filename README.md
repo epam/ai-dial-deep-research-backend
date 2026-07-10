@@ -79,7 +79,8 @@ Configuration comes from two sources:
   [`docs/generated-app-schema.json`](./docs/generated-app-schema.json)). An example ships
   at
   [`data/configs/example-application-properties.json`](./data/configs/example-application-properties.json).
-  A request without valid properties gets a friendly "not configured" reply.
+  A request whose properties fail validation is delivered as a DIAL protocol error (a "not
+  configured — contact your administrator" message), not a normal reply.
 
 ## DIAL core configuration
 
