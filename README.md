@@ -171,7 +171,7 @@ Infra runs in Docker; the **app runs on your host** via uvicorn. DIAL core reach
 ```sh
 cp .env.example .env
 # fill .env with secrets
-make install
+make install          # runtime + dev deps; use `make install-all` if you want Opik tracing
 make infra-config     # build the local DIAL core config (see "DIAL core configuration")
 make infra-up
 make app
@@ -232,6 +232,13 @@ the `DEPLOYMENT_ID` env var). Calling the bare `deep-research` type deployment r
 The agent's per-turn LangChain run can be traced into [Opik](https://github.com/comet-ml/opik) — every turn becomes one hierarchical trace covering the agent graph, the LLM calls, and every MCP tool call. **Off by default**; opt in per-developer.
 
 Only local Opik is supported for now. Non-local Opik is not yet supported.
+
+The `opik` Python package is an **optional dependency** (the `tracing` extra): it pulls a
+large dependency tree and is only used for local tracing, so the production Docker image
+omits it. `make install-all` installs it (via `poetry install --all-extras`). Tracing is off
+by default, so the opik-less image runs normally; if you set `OPIK_TRACING_ENABLED=true` in
+an environment where the `tracing` extra is not installed, the app **fails fast at startup**
+with a clear error rather than silently running untraced.
 
 Enable with the following envvar
 

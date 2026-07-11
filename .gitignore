@@ -37,3 +37,4 @@ reports
 .ruff_cache
 .opik-local
 tmp
+.coverage

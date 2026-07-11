@@ -15,10 +15,15 @@ dependencies = [
     "langchain>=1.2.0,<2.0.0",
     "langchain-openai>=1.1.0,<2.0.0",
     "langchain-mcp-adapters>=0.1.0,<1.0.0",
-    "opik>=2.0.0,<3.0.0",
     "langgraph>=1.1,<2",
     "pyyaml>=6.0.0,<7.0.0",
 ]
+
+# opik (LLM tracing) is an optional extra: it pulls a large dependency tree (litellm and
+# friends) and is only used for local tracing, so the production image omits it. Enable it
+# locally with `poetry install --all-extras` (what `make install-all` runs) or `-E tracing`.
+[project.optional-dependencies]
+tracing = ["opik>=2.0.0,<3.0.0"]
 
 [tool.poetry.group.dev.dependencies]
 black = ">=24.10.0"
@@ -88,10 +93,23 @@ ignore = [
 python_version = "3.13"
 ignore_missing_imports = false
 plugins = ["pydantic.mypy"]
+# Opt into flow/correctness error codes that mypy leaves off even under --strict.
+# `possibly-undefined` in particular catches names bound on only some paths (e.g. a variable
+# assigned inside a try/except or a single if-branch) — use-before-assignment bugs that type
+# checks alone miss. `warn_unreachable` is deliberately NOT enabled: it false-positives when
+# type narrowing is invalidated by a later in-place mutation across a call.
+enable_error_code = ["possibly-undefined", "redundant-expr", "truthy-bool"]
 
 [[tool.mypy.overrides]]
 module = ["aidial_sdk.*", "aidial_client.*"]
 follow_untyped_imports = true
+
+# opik is an optional extra (the `tracing` extra) and is absent in CI/the prod image.
+# Tolerate the missing import so `make lint` passes without it; when opik IS installed
+# (local dev via `make install-all`) mypy still type-checks it normally.
+[[tool.mypy.overrides]]
+module = ["opik.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

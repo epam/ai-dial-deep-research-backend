@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aidial_sdk.chat_completion import Choice
 from langchain_core.messages import (
@@ -23,7 +23,6 @@ from langchain_core.messages import (
     HumanMessage,
     ToolMessage,
 )
-from opik.integrations.langchain import OpikTracer
 
 from dial_deep_research.app.history import PrepState
 from dial_deep_research.app_properties import ApplicationProperties
@@ -33,6 +32,10 @@ from dial_deep_research.utils.dial_stages import DialStageToolCallFormatter, Pen
 from .graph import build_research_graph
 from .state import build_initial_state
 from .tools import load_research_tools
+
+if TYPE_CHECKING:
+    # opik is an optional extra; only needed for the type annotation here.
+    from opik.integrations.langchain import OpikTracer
 
 logger = logging.getLogger(__name__)
 

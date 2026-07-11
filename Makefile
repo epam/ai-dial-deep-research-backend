@@ -43,8 +43,18 @@ check_poetry:
 		exit 1; \
 	}
 
-install: check_poetry ## Install all dependencies (runtime + dev) from poetry.lock
+# `install` installs runtime + dev deps WITHOUT optional extras — the same package set the
+# production image ships (its Dockerfile uses `poetry install --only main`). lint/test/format
+# depend on this, so CI validates against the image's dependency set and catches code that
+# breaks when an optional extra (opik) is absent. mypy tolerates the missing opik via the
+# `opik.*` override in pyproject.toml.
+install: check_poetry ## Install runtime + dev dependencies (no optional extras) from poetry.lock
 	$(POETRY) install
+
+# `install-all` adds the optional extras (the heavy opik/tracing tree) on top of `install`.
+# Use it for local development with LLM tracing; it is NOT what CI or the image use.
+install-all: check_poetry ## Install everything incl. optional extras (opik/tracing)
+	$(POETRY) install --all-extras
 
 lint: install ## Run ruff, mypy, formatting checks (black, isort), then the schema drift check
 	$(POETRY) run ruff check $(SRC_DIRS)
