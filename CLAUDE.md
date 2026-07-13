@@ -29,7 +29,7 @@ comments, docs, commit messages). Committed content must be self-contained.
 Use `scripts/send_conversation.py` to drive a chat with the app from the CLI. The server is
 **expected to be already running**; the script does not start it. The base URL and API key
 come from the app settings (`.env`); the target deployment is the application instance
-registered in DIAL Core, passed via `--deployment` (or the `DEPLOYMENT_ID` env var).
+registered in DIAL Core, passed via `--deployment`.
 
 The conversation artifact file *is* the `messages` array, so multi-turn state threads verbatim.
 Two modes:

@@ -26,6 +26,7 @@ research loop grounded in the MCP tools, and streams progress to DIAL as timed s
 - [Running the app in Docker (opt-in)](#running-the-app-in-docker-opt-in)
 - [Driving the app from the CLI](#driving-the-app-from-the-cli)
 - [LLM tracing with Opik (optional)](#llm-tracing-with-opik-optional)
+- [License](#license)
 
 ## Configuration
 
@@ -76,7 +77,6 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 | `REMOTE_DIAL_URL` | | No | Remote DIAL that `make infra-config` pulls model configs from. Never read by the app. | |
 | `REMOTE_DIAL_API_KEY` | | No | Api-Key for that remote DIAL. Never read by the app. | |
 | `DIAL_API_KEY` | `dial_api_key` | No | Client-side Api-Key `scripts/send_conversation.py` and the compose `chat` service use to authenticate to DIAL Core. Never read by the app (it uses the per-request key). | |
-| `DEPLOYMENT_ID` | | No | Fallback for `scripts/send_conversation.py --deployment`: the application instance to call. Never read by the app. | |
 
 ### Notes on the environment variables
 
@@ -225,8 +225,8 @@ poetry run python scripts/send_conversation.py "what tools are available?" -f co
 poetry run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue -d deep-research-acme
 ```
 
-`-d`/`--deployment` targets an application instance registered in DIAL Core (falls back to
-the `DEPLOYMENT_ID` env var). Calling the bare `deep-research` type deployment returns the
+`-d`/`--deployment` targets an application instance registered in DIAL Core.
+Calling the bare `deep-research` type deployment returns the
 "not configured" reply — instances carry the configuration.
 
 ## LLM tracing with Opik (optional)

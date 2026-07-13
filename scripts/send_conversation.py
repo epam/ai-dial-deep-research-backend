@@ -29,7 +29,7 @@ The file is written only after a successful response, so a failed `continue`
 never corrupts existing history. (`overwrite` clears up front by design.)
 
 The target deployment is the application instance registered in DIAL Core, passed via
-`--deployment` (or the `DEPLOYMENT_ID` env var).
+`--deployment`.
 
 Usage (from the repo root):
   poetry run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite -d deep-research-acme
@@ -74,9 +74,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-d",
         "--deployment",
-        default=None,
+        required=True,
         help="DIAL deployment id of the application instance to call"
-        " (falls back to the DEPLOYMENT_ID env var)",
     )
     parser.add_argument(
         "--timeout",
@@ -188,9 +187,9 @@ def main() -> None:
     args = parse_args()
     dotenv.load_dotenv(os.path.join(os.getcwd(), ".env"))
 
-    deployment = args.deployment or os.getenv("DEPLOYMENT_ID")
+    deployment = args.deployment
     if not deployment:
-        raise SystemExit("no deployment id: pass --deployment or set DEPLOYMENT_ID in the env")
+        raise SystemExit("no deployment id: pass --deployment")
 
     if args.mode == "overwrite":
         if args.file.exists():
