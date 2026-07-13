@@ -1,4 +1,4 @@
-FROM python:3.13-slim AS builder
+FROM python:3.13-alpine AS builder
 
 RUN pip install poetry==2.3.2
 
@@ -24,14 +24,15 @@ RUN --mount=type=cache,target=/root/.cache/pypoetry \
     poetry build -f wheel && \
     .venv/bin/pip install --no-deps dist/*.whl
 
-FROM python:3.13-slim AS runner
+FROM python:3.13-alpine AS runner
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 WORKDIR /opt/app
 
-RUN adduser --uid 1001 --disabled-password --gecos "" appuser
+# BusyBox adduser: -D = no password, -g = gecos.
+RUN adduser -u 1001 -D -g "" appuser
 
 # Root-owned on purpose: the app must not be able to modify its own code.
 # World-readable is enough; bytecode is precompiled, so nothing writes here.
