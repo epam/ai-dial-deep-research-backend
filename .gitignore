@@ -8,6 +8,9 @@ dial_conf/core/generated/
 dial_conf/core/config.json
 dial_conf/core/logs/
 
+# Conversation artifact written by scripts/send_conversation.py — may contain real queries.
+conv.json
+
 .idea
 *.iml
 *.bkp

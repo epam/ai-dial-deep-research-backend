@@ -3,6 +3,9 @@ name = "dial-deep-research"
 version = "0.0.0"
 description = "DIAL-native agent for deep research. Uses DIAL Generic RAG MCP server as a data source."
 readme = "README.md"
+authors = [{ name = "EPAM RAIL", email = "SpecialEPM-DIALDevTeam@epam.com" }]
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "aidial-sdk[telemetry]>=0.32.0,<0.33.0",
@@ -18,6 +21,9 @@ dependencies = [
     "langgraph>=1.1,<2",
     "pyyaml>=6.0.0,<7.0.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/epam/ai-dial-deep-research-backend"
 
 # opik (LLM tracing) is an optional extra: it pulls a large dependency tree (litellm and
 # friends) and is only used for local tracing, so the production image omits it. Enable it

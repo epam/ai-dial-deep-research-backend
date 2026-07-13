@@ -75,6 +75,8 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 | **Scripts & config generator** | | | | |
 | `REMOTE_DIAL_URL` | | No | Remote DIAL that `make infra-config` pulls model configs from. Never read by the app. | |
 | `REMOTE_DIAL_API_KEY` | | No | Api-Key for that remote DIAL. Never read by the app. | |
+| `DIAL_API_KEY` | `dial_api_key` | No | Client-side Api-Key `scripts/send_conversation.py` and the compose `chat` service use to authenticate to DIAL Core. Never read by the app (it uses the per-request key). | |
+| `DEPLOYMENT_ID` | | No | Fallback for `scripts/send_conversation.py --deployment`: the application instance to call. Never read by the app. | |
 
 ### Notes on the environment variables
 
@@ -177,7 +179,7 @@ make infra-up
 make app
 ```
 
-Then open DIAL Chat UI in the browser, select the **Deep Research** application, and send your query.
+Then open DIAL Chat UI at [http://localhost:3010](http://localhost:3010), select the **Deep Research** application, and send your query.
 
 Tear down:
 
@@ -260,3 +262,7 @@ Tear down:
 ```sh
 make opik-down        # stops Opik containers; .opik-local/ stays for the next `opik-up`
 ```
+
+## License
+
+This project is licensed under the [Apache License 2.0](LICENSE).

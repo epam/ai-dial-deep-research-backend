@@ -1,7 +1,7 @@
 **/*.env*
 dial_conf/
 data/
-!data/configs/example.yaml
+!data/configs/example-application-properties.json
 
 # VCS and IDE
 .git/
