@@ -1,0 +1,5 @@
+**/*.env*
+!.env.example
+dial_conf/core/config.json
+dial_conf/core/applications.json
+dial_conf/core/generated/models.json

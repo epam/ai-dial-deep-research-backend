@@ -1,0 +1,43 @@
+**/*.env*
+!.env.example
+
+# Local-only DIAL core config: real client instances, the generated models config
+# (embeds the remote key), and the legacy hand-written config.json.
+dial_conf/core/applications.json
+dial_conf/core/generated/
+dial_conf/core/config.json
+dial_conf/core/logs/
+
+# Conversation artifact written by scripts/send_conversation.py
+conv.json
+
+.idea
+*.iml
+*.bkp
+*.po~
+*.dtmp
+.DS_Store
+.vscode
+venv
+.venv
+.poetry
+out
+__pycache__/
+*.py[cod]
+*$py.class
+output
+resources/**
+**.egg-info/
+dist
+**/secrets.env
+build
+reports
+.mypy_cache
+.dial
+.python-version
+*.pyc
+.pytest_cache
+.ruff_cache
+.opik-local
+tmp
+.coverage

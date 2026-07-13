@@ -1,0 +1,97 @@
+"""ResearchRunner streaming-dispatch unit tests.
+
+Exercise the routing logic without a live graph: only the report node's tokens
+become content, researcher tool calls become stages (finish_iteration excluded),
+reviewer-injected plans are persisted not shown, and messages arriving twice (from
+the subgraph and the parent aggregate) are processed once.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from typing import Any
+
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+
+from dial_deep_research.app.research.runner import ResearchRunner
+
+
+class _StageSpy:
+    def __init__(self) -> None:
+        self.body = ""
+
+    def append_content(self, text: str) -> None:
+        self.body += text
+
+
+class _ChoiceSpy:
+    def __init__(self) -> None:
+        self.content = ""
+        self.stage_titles: list[str] = []
+
+    def append_content(self, text: str) -> None:
+        self.content += text
+
+    @contextmanager
+    def create_stage(self, title: str) -> Any:
+        self.stage_titles.append(title)
+        yield _StageSpy()
+
+
+def _make_runner() -> tuple[ResearchRunner, _ChoiceSpy]:
+    choice = _ChoiceSpy()
+    runner = ResearchRunner(choice)  # type: ignore[arg-type]
+    return runner, choice
+
+
+def test_only_report_node_chunks_become_content() -> None:
+    runner, choice = _make_runner()
+    runner._handle_message_chunk(
+        AIMessageChunk(content="report text"), {"langgraph_node": "report"}
+    )
+    runner._handle_message_chunk(AIMessageChunk(content="reasoning"), {"langgraph_node": "model"})
+    runner._handle_message_chunk(AIMessageChunk(content="verdict"), {"langgraph_node": "reviewer"})
+    # First report chunk is prefixed with a separator (separates from preparation text).
+    assert choice.content == "\n\nreport text"
+
+
+def test_research_tool_call_emits_stage_finish_iteration_does_not() -> None:
+    runner, choice = _make_runner()
+    ai = AIMessage(
+        content="",
+        tool_calls=[
+            {"name": "rag_search", "args": {"q": "x"}, "id": "call_1"},
+            {"name": "finish_iteration", "args": {}, "id": "call_2"},
+        ],
+    )
+    runner._handle_updates({"model": {"messages": [ai]}})
+    runner._handle_updates(
+        {"tools": {"messages": [ToolMessage(content="hits", tool_call_id="call_1")]}}
+    )
+    runner._handle_updates(
+        {"tools": {"messages": [ToolMessage(content="done", tool_call_id="call_2")]}}
+    )
+    assert len(choice.stage_titles) == 1
+    assert 'rag_search' in choice.stage_titles[0]
+    assert all("finish_iteration" not in t for t in choice.stage_titles)
+
+
+def test_injected_plan_is_persisted_not_shown() -> None:
+    runner, choice = _make_runner()
+    runner._handle_updates({"reviewer": {"messages": [HumanMessage(content="next plan")]}})
+    assert choice.content == ""
+    assert any(isinstance(m, HumanMessage) for m in runner._messages)
+
+
+def test_duplicate_messages_processed_once() -> None:
+    runner, choice = _make_runner()
+    tool_msg = ToolMessage(content="hits", tool_call_id="call_1", id="tm1")
+    ai = AIMessage(
+        content="", tool_calls=[{"name": "rag_search", "args": {}, "id": "call_1"}], id="am1"
+    )
+    # Same messages arrive from the leaf subgraph update and the parent aggregate.
+    runner._handle_updates({"model": {"messages": [ai]}})
+    runner._handle_updates({"tools": {"messages": [tool_msg]}})
+    runner._handle_updates({"researcher": {"messages": [ai, tool_msg]}})
+    assert len(choice.stage_titles) == 1
+    assert sum(isinstance(m, ToolMessage) for m in runner._messages) == 1

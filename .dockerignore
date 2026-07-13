@@ -1,0 +1,32 @@
+**/*.env*
+dial_conf/
+data/
+!data/configs/example-application-properties.json
+
+# VCS and IDE
+.git/
+.idea/
+.vscode/
+.DS_Store
+
+# Python build/runtime artifacts
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Not part of the image
+tests/
+scripts/
+openspec/
+.claude/
+.opik-local/
+Dockerfile
+docker-compose*.yml

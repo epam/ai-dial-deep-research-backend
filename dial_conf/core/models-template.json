@@ -1,0 +1,16 @@
+{
+  "models": {},
+  "applications": {},
+  "routes": {},
+  "keys": {
+    "dial_api_key": {
+      "project": "deep-research",
+      "role": "default"
+    }
+  },
+  "roles": {
+    "default": {
+      "limits": {}
+    }
+  }
+}

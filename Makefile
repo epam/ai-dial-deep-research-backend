@@ -1,0 +1,143 @@
+POETRY ?= poetry
+SRC_DIRS = src tests scripts
+MYPY_DIRS = src scripts
+
+# Opik trace stack lives in its own Compose project (`name: opik` upstream),
+# so its lifecycle is independent of `infra-up`/`infra-down` here. We pin a specific
+# upstream tag rather than tracking `main` / `latest`.
+# The pin is passed inline on `opik-up` (the only command that resolves image tags).
+# `down`/`ps` act on containers by project label, so the variable doesn't need exporting.
+OPIK_VERSION ?= 2.0.17
+OPIK_DIR ?= .opik-local
+OPIK_COMPOSE = $(OPIK_DIR)/deployment/docker-compose/docker-compose.yaml
+
+# Bare `make` runs the first target listed here — that's `help`, which auto-prints
+# every target whose line ends with a `## description` suffix.
+#
+# The `## description` convention:
+#   In Makefiles, `#` starts a comment. By convention, `##` (double hash) at the
+#   end of a target line marks it as a USER-facing documented target. The awk
+#   regex below matches `##` specifically, so:
+#     - `install: deps ## Install everything`   → appears in `make help`
+#     - `check_poetry: ...` (no `##`)           → hidden; it's an internal helper
+#   To add a new target to the help output, just tack on ` ## one-line description`.
+#
+# The awk one-liner is a common snippet, explained inline:
+#
+#   @                      — silence make's "echo the command itself" behavior
+#   FS = ":.*##"           — split each line on 'colon, any chars, then ##'
+#                            so `install: deps ## Install` → $1="install", $2="Install"
+#   /^[a-zA-Z_-]+:.*?##/   — only act on lines that look like a documented target
+#   \033[36m ... \033[0m   — ANSI escape: cyan / reset (colors the target name)
+#   %-14s                  — left-align the target name in a 14-char column
+#   $$1, $$2               — awk's $1, $2 (doubled because $ is special in Makefiles)
+#   $(MAKEFILE_LIST)       — built-in: every Makefile make has read (just `Makefile`
+#                            here, but auto-extends if we later `include` more files)
+help: ## Show available make targets
+	@awk 'BEGIN {FS = ":.*##"; printf "Available targets:\n"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+
+check_poetry:
+	@command -v $(POETRY) >/dev/null 2>&1 || { \
+		echo "Error: '$(POETRY)' not found on PATH."; \
+		echo "Install Poetry: https://python-poetry.org/docs/#installation"; \
+		exit 1; \
+	}
+
+# `install` installs runtime + dev deps WITHOUT optional extras — the same package set the
+# production image ships (its Dockerfile uses `poetry install --only main`). lint/test/format
+# depend on this, so CI validates against the image's dependency set and catches code that
+# breaks when an optional extra (opik) is absent. mypy tolerates the missing opik via the
+# `opik.*` override in pyproject.toml.
+install: check_poetry ## Install runtime + dev dependencies (no optional extras) from poetry.lock
+	$(POETRY) install
+
+# `install-all` adds the optional extras (the heavy opik/tracing tree) on top of `install`.
+# Use it for local development with LLM tracing; it is NOT what CI or the image use.
+install-all: check_poetry ## Install everything incl. optional extras (opik/tracing)
+	$(POETRY) install --all-extras
+
+lint: install ## Run ruff, mypy, formatting checks (black, isort), then the schema drift check
+	$(POETRY) run ruff check $(SRC_DIRS)
+	$(POETRY) run mypy --show-error-codes $(MYPY_DIRS)
+	$(POETRY) run black $(SRC_DIRS) --check
+	$(POETRY) run isort $(SRC_DIRS) --check-only --diff
+	$(POETRY) run python scripts/dump_app_schema.py --check
+
+format: install ## Auto-fix everything auto-fixable: ruff, black, isort, regenerate the schema artifact
+	$(POETRY) run ruff check $(SRC_DIRS) --fix
+	$(POETRY) run black $(SRC_DIRS)
+	$(POETRY) run isort $(SRC_DIRS)
+	$(POETRY) run python scripts/dump_app_schema.py
+
+test: install ## Run pytest
+	$(POETRY) run pytest tests
+
+## -------- infra -------- ##
+
+infra-config: install ## Build the local DIAL core config: seed applications.json, pull models from the remote DIAL
+	@test -f dial_conf/core/applications.json || { \
+		cp dial_conf/core/applications-template.json dial_conf/core/applications.json; \
+		echo "seeded dial_conf/core/applications.json from the template"; \
+	}
+	$(POETRY) run python scripts/generate_dial_config.py
+
+infra-up: ## Start the infra services (DIAL core, chat UI, themes, redis) detached
+	docker compose up -d
+
+infra-down: ## Stop the infra services
+	docker compose down
+
+infra-logs: ## Tail logs from the infra services
+	docker compose logs -f
+
+infra-cleanup: ## Stop infra and remove volumes (destroys DIAL core data + logs)
+	docker compose down --volumes
+
+## -------- app -------- ##
+
+# Both compose files together: infra + the containerized app.
+APP_COMPOSE = -f docker-compose.yml -f docker-compose.app.yml
+
+app: install ## Run the app on the host via uvicorn (infra must already be up)
+	$(POETRY) run python -m dial_deep_research
+
+app-build: ## Build the app Docker image
+	docker compose $(APP_COMPOSE) build deep-research
+
+app-logs: ## Tail logs from the app container
+	docker compose $(APP_COMPOSE) logs -f deep-research
+
+## -------- all: infra + app in docker (opt-in) -------- ##
+
+all-up: ## Start infra + the app container (containerized alternative to `infra-up` + `app`)
+	docker compose $(APP_COMPOSE) up -d
+
+all-down: ## Stop infra + the app container
+	docker compose $(APP_COMPOSE) down
+
+all-logs: ## Tail logs from the infra + the app container
+	docker compose $(APP_COMPOSE) logs -f
+
+## -------- opik -------- ##
+
+$(OPIK_DIR):
+	git clone --depth 1 --branch $(OPIK_VERSION) https://github.com/comet-ml/opik.git $(OPIK_DIR)
+
+opik-up: $(OPIK_DIR) ## Start the local Opik trace stack (separate Compose project; UI at http://localhost:5173)
+	OPIK_VERSION=$(OPIK_VERSION) docker compose -f $(OPIK_COMPOSE) --profile opik up -d
+
+opik-down: ## Stop the local Opik trace stack (does NOT touch infra)
+	docker compose -f $(OPIK_COMPOSE) --profile opik down
+
+opik-logs: ## Tail logs from the local Opik trace stack
+	docker compose -f $(OPIK_COMPOSE) --profile opik logs -f
+
+## -------- mcp inspector -------- ##
+
+mcp-inspector:  ## start mcp inspector UI
+	docker run --rm \
+		-p 127.0.0.1:6274:6274 \
+		-p 127.0.0.1:6277:6277 \
+		-e HOST=0.0.0.0 \
+		-e MCP_AUTO_OPEN_ENABLED=false \
+		ghcr.io/modelcontextprotocol/inspector:latest

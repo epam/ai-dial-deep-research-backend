@@ -1,0 +1,63 @@
+services:
+
+  themes:
+    image: epam/ai-dial-chat-themes:0.17.0
+    ports:
+      - "3011:8080"
+    restart: unless-stopped
+
+  chat:
+    image: epam/ai-dial-chat:0.47.2
+    ports:
+      - "3010:3000"
+    depends_on:
+      - themes
+      - core
+    environment:
+      NEXTAUTH_SECRET: "secret"
+      THEMES_CONFIG_HOST: "http://themes:8080"
+      DIAL_API_HOST: "http://core:8080"
+      DIAL_API_KEY: ${DIAL_API_KEY:-dial_api_key}
+      AUTH_DISABLED: "true"
+      ENABLED_FEATURES: "conversations-section,prompts-section,top-settings,top-clear-conversation,top-chat-info,top-chat-model-settings,empty-chat-settings,header,footer,request-api-key,report-an-issue,likes,conversations-sharing,prompts-sharing,input-files,attachments-manager,conversations-publishing,prompts-publishing,input-links,custom-applications,message-templates,marketplace,quick-apps"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2.4-alpine3.19
+    mem_limit: 1200m
+    command: >
+      redis-server --maxmemory 1024mb --maxmemory-policy volatile-lfu
+      --save "" --appendonly no --loglevel warning
+    restart: unless-stopped
+
+  core:
+    image: epam/ai-dial-core:0.45.1
+    ports:
+      - "8081:8080"
+    depends_on:
+      - redis
+    environment:
+      AIDIAL_SETTINGS: "/opt/settings/settings.json"
+      JAVA_OPTS: "-Dgflog.config=/opt/settings/gflog.xml"
+      # Split config, merged by core in list order. All three are produced/kept local
+      # by `make infra-config`: generated models, the app-type registration rendered
+      # with APP_PORT, and the seeded applications. See README "DIAL core configuration".
+      aidial.config.files: '["/opt/config/generated/models.json", "/opt/config/generated/application-schemas.json", "/opt/config/applications.json"]'
+      aidial.redis.singleServerConfig.address: "redis://redis:6379"
+    volumes:
+      - ./dial_conf/settings:/opt/settings:ro
+      - ./dial_conf/core:/opt/config:ro
+      - core-logs:/app/log
+      - core-data:/app/data
+    restart: unless-stopped
+
+  ai-dial-adapter-dial:
+    image: epam/ai-dial-adapter-dial:0.16.0
+    environment:
+      DIAL_URL: "http://core:8080"
+      LOG_LEVEL: "INFO"
+    restart: unless-stopped
+
+volumes:
+  core-logs:
+  core-data:

@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make format:*)",
+      "Bash(make lint:*)"
+    ],
+    "deny": [
+      "Read(**/*.env)",
+      "Read(dial_conf/core/config.json)",
+      "Read(dial_conf/core/applications.json)",
+      "Read(dial_conf/core/generated/models.json)"
+    ],
+    "ask": []
+  },
+  "enabledPlugins": {
+    "langchain-skills@langchain-skills": true
+  }
+}
