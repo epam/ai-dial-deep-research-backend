@@ -75,7 +75,7 @@ def parse_args() -> argparse.Namespace:
         "-d",
         "--deployment",
         required=True,
-        help="DIAL deployment id of the application instance to call"
+        help="DIAL deployment id of the application instance to call",
     )
     parser.add_argument(
         "--timeout",
