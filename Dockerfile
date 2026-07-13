@@ -31,7 +31,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /opt/app
 
-# BusyBox adduser: -D = no password, -g = gecos.
 RUN adduser -u 1001 -D -g "" appuser
 
 # Root-owned on purpose: the app must not be able to modify its own code.
