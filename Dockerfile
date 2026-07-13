@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/root/.cache/pypoetry \
 # Copy source, build the project wheel, and install it into the venv (--no-deps: deps are
 # already present). Installing the built wheel — not an editable install — means the runtime
 # stage only needs the venv, not the source tree.
-COPY pyproject.toml poetry.lock README.md ./
+COPY pyproject.toml poetry.lock README.md LICENSE ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/pypoetry \
     poetry build -f wheel && \
