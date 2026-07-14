@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     def _validate_mcp_mode(self) -> "Settings":
         """Require exactly one MCP mode: local-dev (`mcp_url` + key) or deployment (name)."""
         if self.mcp_url is not None:
+            if self.mcp_deployment_name:
+                raise ValueError("MCP_DEPLOYMENT_NAME and MCP_URL cannot be set at the same time")
             if not (self.mcp_api_key and self.mcp_api_key.get_secret_value()):
                 raise ValueError("MCP_API_KEY is required when MCP_URL is set (local-dev mode)")
         elif not self.mcp_deployment_name:
