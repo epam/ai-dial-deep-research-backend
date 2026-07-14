@@ -40,49 +40,6 @@ def test_non_positive_heartbeat_interval_is_rejected(
     )
 
 
-def test_empty_mcp_server_name_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MCP_SERVER_NAME", "")
-    with pytest.raises(ValidationError) as excinfo:
-        Settings()
-    assert any(err["loc"] == ("mcp_server_name",) for err in excinfo.value.errors())
-
-
-def test_deployment_mode_loads(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MCP_URL", raising=False)
-    monkeypatch.delenv("MCP_API_KEY", raising=False)
-    monkeypatch.setenv("MCP_DEPLOYMENT_NAME", "generic-rag-mcp")
-    settings = Settings()
-    assert settings.mcp_url is None
-    assert settings.mcp_deployment_name == "generic-rag-mcp"
-
-
-def test_local_dev_mode_loads(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MCP_URL", "http://localhost:8000/mcp")
-    monkeypatch.setenv("MCP_API_KEY", "local-key")
-    monkeypatch.delenv("MCP_DEPLOYMENT_NAME", raising=False)
-    settings = Settings()
-    assert settings.mcp_url is not None
-    assert settings.mcp_api_key is not None
-    assert settings.mcp_api_key.get_secret_value() == "local-key"
-
-
-def test_local_dev_mode_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MCP_URL", "http://localhost:8000/mcp")
-    monkeypatch.delenv("MCP_API_KEY", raising=False)
-    monkeypatch.delenv("MCP_DEPLOYMENT_NAME", raising=False)
-    with pytest.raises(ValidationError) as excinfo:
-        Settings()
-    assert "MCP_API_KEY" in str(excinfo.value)
-
-
-def test_no_mcp_mode_configured_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MCP_URL", raising=False)
-    monkeypatch.delenv("MCP_DEPLOYMENT_NAME", raising=False)
-    with pytest.raises(ValidationError) as excinfo:
-        Settings()
-    assert "MCP_DEPLOYMENT_NAME" in str(excinfo.value)
-
-
 def test_opik_project_name_default_loads(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPIK_PROJECT_NAME", raising=False)
     assert Settings().opik_project_name == "deep-research"
@@ -100,13 +57,12 @@ def test_empty_opik_project_name_is_rejected(monkeypatch: pytest.MonkeyPatch) ->
     assert any(err["loc"] == ("opik_project_name",) for err in excinfo.value.errors())
 
 
-@pytest.mark.parametrize("var", ["DIAL_URL", "MCP_URL"])
-@pytest.mark.parametrize("raw", ["not-a-url", "localhost:8080", "ftp://host/x"])
-def test_non_http_url_is_rejected(var: str, raw: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(var, raw)
+@pytest.mark.parametrize("raw", ["not-a-url", "localhost:8080", "ftp://host/x", ""])
+def test_non_http_dial_url_is_rejected(raw: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DIAL_URL", raw)
     with pytest.raises(ValidationError) as excinfo:
         Settings()
-    assert any(err["loc"] == (var.lower(),) for err in excinfo.value.errors())
+    assert any(err["loc"] == ("dial_url",) for err in excinfo.value.errors())
 
 
 def test_missing_dial_url_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

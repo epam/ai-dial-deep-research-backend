@@ -1,28 +1,39 @@
-"""`build_mcp_client` picks deployment (through Core) vs local-dev (static key) mode."""
+"""`build_mcp_client` builds one connection per configured MCP server."""
 
 from typing import Any
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from pydantic import HttpUrl, SecretStr
+from pydantic import HttpUrl
 from pytest import MonkeyPatch
 
 import dial_deep_research.app.research.tools as tools_mod
 from dial_deep_research.app.research.tools import build_mcp_client
+from dial_deep_research.app_properties import MCPClientSettings
 
 
-def _only_connection(client: MultiServerMCPClient) -> Any:
-    connections = client.connections
-    assert len(connections) == 1
-    return next(iter(connections.values()))
+def _connection(client: MultiServerMCPClient, server_name: str) -> Any:
+    return client.connections[server_name]
+
+
+def _deployment_server(
+    server_name: str = "rag", deployment_id: str = "generic-rag"
+) -> MCPClientSettings:
+    return MCPClientSettings(server_name=server_name, deployment_id=deployment_id)
+
+
+def _direct_server(
+    server_name: str = "rag",
+    url: str = "http://localhost:8000/mcp",
+    api_key: str = "local-secret",
+) -> MCPClientSettings:
+    return MCPClientSettings(server_name=server_name, url=HttpUrl(url), api_key=api_key)
 
 
 def test_deployment_mode_builds_core_url_and_forwards_bearer(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(tools_mod.settings, "mcp_url", None)
-    monkeypatch.setattr(tools_mod.settings, "mcp_api_key", None)
-    monkeypatch.setattr(tools_mod.settings, "mcp_deployment_name", "generic-rag")
     monkeypatch.setattr(tools_mod.settings, "dial_url", HttpUrl("http://core:8080"))
 
-    conn = _only_connection(build_mcp_client(bearer_token="jwt-123"))
+    client = build_mcp_client([_deployment_server()], bearer_token="jwt-123")
+    conn = _connection(client, "rag")
 
     assert conn["transport"] == "streamable_http"
     assert conn["url"] == "http://core:8080/v1/deployments/generic-rag/mcp"
@@ -32,24 +43,36 @@ def test_deployment_mode_builds_core_url_and_forwards_bearer(monkeypatch: Monkey
 
 
 def test_deployment_mode_without_bearer_omits_authorization(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(tools_mod.settings, "mcp_url", None)
-    monkeypatch.setattr(tools_mod.settings, "mcp_api_key", None)
-    monkeypatch.setattr(tools_mod.settings, "mcp_deployment_name", "generic-rag")
     monkeypatch.setattr(tools_mod.settings, "dial_url", HttpUrl("http://core:8080"))
 
-    conn = _only_connection(build_mcp_client(bearer_token=None))
+    conn = _connection(build_mcp_client([_deployment_server()], bearer_token=None), "rag")
 
     assert conn["url"] == "http://core:8080/v1/deployments/generic-rag/mcp"
     assert conn["headers"] == {}
 
 
-def test_local_dev_mode_uses_static_key_and_url(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setattr(tools_mod.settings, "mcp_url", HttpUrl("http://localhost:8000/mcp"))
-    monkeypatch.setattr(tools_mod.settings, "mcp_api_key", SecretStr("local-secret"))
-
-    # A bearer must be ignored in local-dev mode.
-    conn = _only_connection(build_mcp_client(bearer_token="jwt-ignored"))
+def test_direct_mode_uses_static_key_and_url() -> None:
+    # A bearer must be ignored in direct mode.
+    conn = _connection(build_mcp_client([_direct_server()], bearer_token="jwt-ignored"), "rag")
 
     assert conn["url"] == "http://localhost:8000/mcp"
     assert conn["headers"] == {"api-key": "local-secret"}
     assert "Authorization" not in conn["headers"]
+
+
+def test_multiple_servers_build_independent_connections(monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(tools_mod.settings, "dial_url", HttpUrl("http://core:8080"))
+
+    client = build_mcp_client(
+        [
+            _deployment_server(server_name="rag", deployment_id="generic-rag"),
+            _direct_server(server_name="charts", url="http://localhost:9000/mcp", api_key="k"),
+        ],
+        bearer_token="jwt-123",
+    )
+
+    assert set(client.connections) == {"rag", "charts"}
+    assert client.connections["rag"]["url"] == "http://core:8080/v1/deployments/generic-rag/mcp"
+    assert client.connections["rag"]["headers"]["Authorization"] == "Bearer jwt-123"
+    assert client.connections["charts"]["url"] == "http://localhost:9000/mcp"
+    assert client.connections["charts"]["headers"] == {"api-key": "k"}

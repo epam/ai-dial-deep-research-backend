@@ -23,6 +23,7 @@ VALID_PROPERTIES: dict = {
         "agent_name": "Test Deep Research",
         "data_sources_descriptions": "## report\n\nA report.",
     },
+    "mcp_servers": [{"server_name": "rag", "deployment_id": "generic-rag-mcp"}],
 }
 
 _REQUEST = httpx.Request("POST", "https://core.example/openai")

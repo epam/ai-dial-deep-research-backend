@@ -7,49 +7,54 @@ move here from the retired `app/agent.py` so the researcher node can reuse them.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
 
 from langchain_core.tools import BaseTool, tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.sessions import Connection
 
+from dial_deep_research.app_properties import MCPClientSettings
 from dial_deep_research.settings import settings
 from dial_deep_research.utils.json_schema_fixes import hoist_defs_to_root
+
+logger = logging.getLogger(__name__)
 
 FINISH_ITERATION_RESULT = "Research iteration complete; handing off to the reviewer."
 
 
-def build_mcp_client(bearer_token: str | None = None) -> MultiServerMCPClient:
-    """Build a fresh per-request MCP client for the generic-RAG server.
+def build_mcp_client(
+    mcp_servers: list[MCPClientSettings], bearer_token: str | None = None
+) -> MultiServerMCPClient:
+    """Build a fresh per-request MCP client with one connection per configured server.
 
-    Two modes (see `Settings._validate_mcp_mode`):
-    - deployment: the MCP is a DIAL application reached through Core at
-      `{dial_url}/v1/deployments/{mcp_deployment_name}/mcp`. The per-request api-key is
-      supplied by SDK header propagation; the request's bearer token (when present) is
-      forwarded as `Authorization: Bearer` for per-user RAG access.
-    - local dev: a directly-reachable MCP at `mcp_url`, authenticated with the static
-      `mcp_api_key` in the `api-key` header.
+    Each server is either deployment- or direct-mode (see `MCPClientSettings`). Deployment
+    mode builds the Core URL from `dial_url` and forwards the request bearer token (when
+    present) as `Authorization: Bearer`; direct mode uses the server's `url` and static
+    `api_key`.
     """
-    if settings.mcp_url is None:
-        base = settings.dial_url.encoded_string().rstrip("/")
-        url = f"{base}/v1/deployments/{settings.mcp_deployment_name}/mcp"
-        headers: dict[str, str] = {}
-        if bearer_token:
-            headers["Authorization"] = f"Bearer {bearer_token}"
-    else:
-        url = settings.mcp_url.encoded_string()
-        api_key = settings.mcp_api_key.get_secret_value() if settings.mcp_api_key else ""
-        headers = {"api-key": api_key}
-    return MultiServerMCPClient(
-        connections={
-            settings.mcp_server_name: {
-                "transport": "streamable_http",
-                "url": url,
-                "headers": headers,
-            }
+    connections: dict[str, Connection] = {}
+    for server in mcp_servers:
+        if server.deployment_id is not None:
+            base = settings.dial_url.encoded_string().rstrip("/")
+            url = f"{base}/v1/deployments/{server.deployment_id}/mcp"
+            headers = {}
+            if bearer_token:
+                headers["Authorization"] = f"Bearer {bearer_token}"
+        elif server.url is not None:
+            url = server.url.encoded_string()
+            api_key = server.api_key.get_secret_value() if server.api_key else ""
+            headers = {"api-key": api_key}
+        else:
+            raise ValueError(f"Invalid MCP server settings: {server}")
+        connections[server.server_name] = {
+            "transport": "streamable_http",
+            "url": url,
+            "headers": headers,
         }
-    )
+    return MultiServerMCPClient(connections=connections)
 
 
 def enable_tool_error_handling(tools: list[BaseTool]) -> list[BaseTool]:
@@ -95,10 +100,42 @@ def _dump_tool_schemas_to_json(tools: list[BaseTool], dp: Path) -> None:
             json.dump(t.args_schema, f, indent=2, default=str, ensure_ascii=False)
 
 
-async def load_research_tools(bearer_token: str | None = None) -> list[BaseTool]:
-    """Fetch the MCP tools, hoist their schemas, add the finish sentinel, wire error handling."""
-    mcp_client = build_mcp_client(bearer_token=bearer_token)
-    tools = await mcp_client.get_tools()
+async def load_research_tools(
+    mcp_servers: list[MCPClientSettings], bearer_token: str | None = None
+) -> list[BaseTool]:
+    """Fetch the MCP tools, hoist their schemas, add the finish sentinel, wire error handling.
+
+    Tools are fetched per server so each server's `tools_to_include` filter applies (an empty
+    filter includes all of that server's tools).
+    """
+    mcp_client = build_mcp_client(mcp_servers, bearer_token=bearer_token)
+    tools: list[BaseTool] = []
+    for server in mcp_servers:
+        server_tools = await mcp_client.get_tools(server_name=server.server_name)
+        available = [t.name for t in server_tools]
+        if server.tools_to_include:
+            allowed = set(server.tools_to_include)
+            server_tools = [t for t in server_tools if t.name in allowed]
+            missing = sorted(allowed - set(available))
+            logger.info(
+                "MCP server '%s': fetched %d tool(s) %s; filtered to %d %s (requested but "
+                "not found: %s)",
+                server.server_name,
+                len(available),
+                available,
+                len(server_tools),
+                [t.name for t in server_tools],
+                missing or "none",
+            )
+        else:
+            logger.info(
+                "MCP server '%s': fetched %d tool(s) %s; including all",
+                server.server_name,
+                len(available),
+                available,
+            )
+        tools.extend(server_tools)
+    logger.info("Loaded %d research tool(s) across %d MCP server(s)", len(tools), len(mcp_servers))
 
     # TODO: either remove or use envvar
     dump_tool_schemas = False

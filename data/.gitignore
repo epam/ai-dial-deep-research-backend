@@ -1,6 +1,2 @@
 *
 !.gitignore
-
-# only the example application properties are tracked
-!configs/
-!configs/example-application-properties.json

@@ -16,6 +16,84 @@
         "dial:propertyOrder": 1
       }
     },
+    "mcp_servers": {
+      "description": "MCP servers the research agent connects to. At least one is required; server_name must be unique across the list.",
+      "items": {
+        "description": "Connection config for one MCP server the research agent connects to.\n\nTwo mutually exclusive modes:\n- deployment: the MCP is a DIAL application reached through DIAL Core by deployment id.\n  The per-request api-key is supplied by SDK header propagation and the request bearer\n  token is forwarded for per-user access.\n- direct: a directly-reachable MCP at `url`, authenticated with the static `api_key`\n  sent in the `api-key` header.\n\n`url` and `api_key` accept `$env:{VAR}` placeholders, expanded from the app's environment\nat load time so secrets stay out of committed config.",
+        "properties": {
+          "server_name": {
+            "description": "Internal name for this server connection; must be unique across the list. Arbitrary — need not match any remote server name.",
+            "minLength": 1,
+            "title": "Server Name",
+            "type": "string"
+          },
+          "deployment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Deployment mode: DIAL deployment id of the MCP application, reached through Core. Mutually exclusive with url/api_key.",
+            "title": "Deployment Id"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "format": "uri",
+                "maxLength": 2083,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Direct mode: URL of a directly-reachable MCP server. Supports $env:{VAR} placeholders. Requires api_key.",
+            "title": "Url"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "format": "password",
+                "type": "string",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Direct mode: static key sent as the api-key header to url. Supports $env:{VAR} placeholders.",
+            "title": "Api Key"
+          },
+          "tools_to_include": {
+            "description": "Names of tools to include from this server. If empty, all tools are included.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Tools To Include",
+            "type": "array"
+          }
+        },
+        "required": [
+          "server_name"
+        ],
+        "title": "MCPClientSettings",
+        "type": "object"
+      },
+      "minItems": 1,
+      "title": "Mcp Servers",
+      "type": "array",
+      "dial:meta": {
+        "dial:propertyKind": "server",
+        "dial:propertyOrder": 2
+      }
+    },
     "prompts": {
       "description": "Per-instance content injected into the prompt templates.",
       "properties": {
@@ -47,11 +125,12 @@
       "type": "object",
       "dial:meta": {
         "dial:propertyKind": "server",
-        "dial:propertyOrder": 2
+        "dial:propertyOrder": 3
       }
     }
   },
   "required": [
+    "mcp_servers",
     "prompts"
   ],
   "title": "ApplicationProperties",

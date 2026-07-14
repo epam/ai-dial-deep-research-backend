@@ -64,7 +64,9 @@ class ResearchRunner:
         opik_tracer: OpikTracer | None = None,
         bearer_token: str | None = None,
     ) -> list[BaseMessage]:
-        tools = await load_research_tools(bearer_token=bearer_token)
+        tools = await load_research_tools(
+            mcp_servers=properties.mcp_servers, bearer_token=bearer_token
+        )
         graph = build_research_graph(
             tools=tools,
             today_date=datetime.now().date().isoformat(),
