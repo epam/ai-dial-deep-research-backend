@@ -13,9 +13,17 @@ from __future__ import annotations
 import json
 from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, Field, HttpUrl, SecretStr, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    SecretStr,
+    model_validator,
+)
 
-from dial_deep_research.utils.config_env import replace_env_str
+from dial_deep_research.utils.config_env import is_env_placeholder, replace_env_str
 
 # Fixed deployment id the chat completion is registered under. Every application
 # instance of the Deep Research type routes here; per-instance behavior comes from
@@ -30,15 +38,33 @@ APPLICATION_TYPE_SCHEMA_ID = "https://mydial.epam.com/custom_application_schemas
 APPLICATION_TYPE_DISPLAY_NAME = "Deep Research"
 
 
-def _expand_env(value: Any) -> Any:
-    """Expand `$env:{VAR}` / `$env:{VAR|default}` placeholders in a string from the environment.
+def _expand_required_placeholder(value: Any) -> Any:
+    """Require a bare `$env:{VAR}` placeholder and expand it from the environment.
 
-    A placeholder whose env var is unset and has no default raises, so a misconfigured secret
-    fails app-properties validation instead of silently passing the literal placeholder through.
+    Rejects anything that is not exactly one `$env:{VAR}` placeholder — a plaintext value or
+    the `$env:{VAR|default}` form alike: the value is referenced by env-var name only, never
+    inline. A placeholder whose env var is unset raises, so a misconfigured value fails
+    validation instead of silently passing the placeholder through.
     """
-    if isinstance(value, str):
-        return replace_env_str(value, raise_if_missing=True)
-    return value
+    if value is None:
+        return None
+    if not isinstance(value, str) or not is_env_placeholder(value):
+        raise ValueError("must be a $env:{VAR} placeholder (no inline value, no default)")
+    return replace_env_str(value, raise_if_missing=True)
+
+
+class _ConnectionBundle(BaseModel):
+    """Parsed direct-mode connection: the URL and its api-key, carried together as one unit.
+
+    Not an application-property field itself — `MCPClientSettings.connection` stores the raw
+    JSON string (a `SecretStr`) and this parses it on access, so the URL and api-key are never
+    independently selectable in config.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    url: HttpUrl
+    api_key: SecretStr = Field(min_length=1)
 
 
 class MCPClientSettings(BaseModel):
@@ -48,11 +74,12 @@ class MCPClientSettings(BaseModel):
     - deployment: the MCP is a DIAL application reached through DIAL Core by deployment id.
       The per-request api-key is supplied by SDK header propagation and the request bearer
       token is forwarded for per-user access.
-    - direct: a directly-reachable MCP at `url`, authenticated with the static `api_key`
-      sent in the `api-key` header.
+    - direct: a directly-reachable MCP whose URL and api-key come together in `connection`,
+      the api-key sent in the `api-key` header.
 
-    `url` and `api_key` accept `$env:{VAR}` placeholders, expanded from the app's environment
-    at load time so secrets stay out of committed config.
+    `connection` must be a `$env:{VAR}` placeholder, expanded from the app's environment at
+    load time; the URL and api-key are bundled in one env var (not two config fields) so they
+    cannot be independently selected. Access the parsed pair through `direct_connection`.
     """
 
     server_name: str = Field(
@@ -63,33 +90,40 @@ class MCPClientSettings(BaseModel):
     deployment_id: str | None = Field(
         default=None,
         description="Deployment mode: DIAL deployment id of the MCP application, reached through"
-        " Core. Mutually exclusive with url/api_key.",
+        " Core. Mutually exclusive with connection.",
     )
-    url: Annotated[HttpUrl | None, BeforeValidator(_expand_env)] = Field(
+    connection: Annotated[SecretStr | None, BeforeValidator(_expand_required_placeholder)] = Field(
         default=None,
-        description="Direct mode: URL of a directly-reachable MCP server. Supports $env:{VAR}"
-        " placeholders. Requires api_key.",
-    )
-    api_key: Annotated[SecretStr | None, BeforeValidator(_expand_env)] = Field(
-        default=None,
-        description="Direct mode: static key sent as the api-key header to url. Supports"
-        " $env:{VAR} placeholders.",
+        description="Direct mode: a $env:{VAR} placeholder (no inline value, no default)"
+        ' resolving to a JSON object {"url": "...", "api_key": "..."} with the MCP server URL'
+        " and its api-key. Mutually exclusive with deployment_id.",
     )
     tools_to_include: list[str] = Field(
         default_factory=list,
         description="Names of tools to include from this server. If empty, all tools are included.",
     )
 
+    @property
+    def direct_connection(self) -> _ConnectionBundle:
+        """Parse the direct-mode `connection` JSON into its URL and api-key.
+
+        Only valid in direct mode (`connection` set). Raises on a missing, malformed, or
+        incomplete bundle — the same parse runs at load time so misconfig fails validation.
+        """
+        if self.connection is None:
+            raise ValueError("connection is not set (not a direct-mode server)")
+        return _ConnectionBundle.model_validate_json(self.connection.get_secret_value())
+
     @model_validator(mode="after")
     def _validate_mode(self) -> MCPClientSettings:
-        """Require exactly one mode: direct (url + api_key) or deployment (deployment_id)."""
-        if self.url is not None:
+        """Require exactly one mode: direct (connection) or deployment (deployment_id)."""
+        if self.connection is not None:
             if self.deployment_id:
-                raise ValueError("deployment_id and url cannot be set at the same time")
-            if not (self.api_key and self.api_key.get_secret_value()):
-                raise ValueError("api_key is required when url is set (direct mode)")
+                raise ValueError("deployment_id and connection cannot be set at the same time")
+            # Parse eagerly so a malformed bundle fails validation now, not mid-request.
+            _ = self.direct_connection
         elif not self.deployment_id:
-            raise ValueError("either deployment_id or url + api_key must be set")
+            raise ValueError("either deployment_id or connection must be set")
         return self
 
 

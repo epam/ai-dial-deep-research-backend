@@ -9,6 +9,15 @@ from dial_deep_research.app_properties import (
     MCPClientSettings,
 )
 
+
+@pytest.fixture
+def direct_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provide a valid direct-mode connection-bundle env var."""
+    monkeypatch.setenv(
+        "MY_MCP_CONN", '{"url": "http://localhost:8000/mcp", "api_key": "resolved-secret"}'
+    )
+
+
 VALID_PROPERTIES: dict = {
     "prompts": {
         "client_name": "Test Corp",
@@ -94,49 +103,37 @@ def test_deployment_mode_server_loads() -> None:
     server = MCPClientSettings.model_validate(
         {"server_name": "rag", "deployment_id": "generic-rag-mcp"}
     )
-    assert server.url is None
+    assert server.connection is None
     assert server.deployment_id == "generic-rag-mcp"
     assert server.tools_to_include == []
 
 
-def test_direct_mode_server_loads() -> None:
+def test_direct_mode_server_loads(direct_mode: None) -> None:
     server = MCPClientSettings.model_validate(
         {
             "server_name": "rag",
-            "url": "http://localhost:8000/mcp",
-            "api_key": "secret",
+            "connection": "$env:{MY_MCP_CONN}",
             "tools_to_include": ["search_docs"],
         }
     )
-    assert server.url is not None
-    assert server.api_key is not None
-    assert server.api_key.get_secret_value() == "secret"
+    bundle = server.direct_connection
+    assert bundle.url.encoded_string() == "http://localhost:8000/mcp"
+    assert bundle.api_key.get_secret_value() == "resolved-secret"
     assert server.tools_to_include == ["search_docs"]
 
 
-def test_url_and_deployment_id_together_are_rejected() -> None:
+def test_connection_and_deployment_id_together_are_rejected(direct_mode: None) -> None:
     with pytest.raises(ValidationError) as excinfo:
         MCPClientSettings.model_validate(
-            {
-                "server_name": "rag",
-                "deployment_id": "x",
-                "url": "http://localhost:8000/mcp",
-                "api_key": "secret",
-            }
+            {"server_name": "rag", "deployment_id": "x", "connection": "$env:{MY_MCP_CONN}"}
         )
     assert "cannot be set at the same time" in str(excinfo.value)
-
-
-def test_direct_mode_requires_api_key() -> None:
-    with pytest.raises(ValidationError) as excinfo:
-        MCPClientSettings.model_validate({"server_name": "rag", "url": "http://localhost:8000/mcp"})
-    assert "api_key is required" in str(excinfo.value)
 
 
 def test_no_mode_configured_is_rejected() -> None:
     with pytest.raises(ValidationError) as excinfo:
         MCPClientSettings.model_validate({"server_name": "rag"})
-    assert "either deployment_id or url + api_key" in str(excinfo.value)
+    assert "either deployment_id or connection must be set" in str(excinfo.value)
 
 
 def test_empty_server_name_is_rejected() -> None:
@@ -145,47 +142,57 @@ def test_empty_server_name_is_rejected() -> None:
     assert any(err["loc"] == ("server_name",) for err in excinfo.value.errors())
 
 
-def test_env_placeholders_in_url_and_api_key_are_expanded(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("MY_MCP_URL", "http://localhost:9000/mcp")
-    monkeypatch.setenv("MY_MCP_KEY", "resolved-secret")
-    server = MCPClientSettings.model_validate(
-        {
-            "server_name": "rag",
-            "url": "$env:{MY_MCP_URL}",
-            "api_key": "$env:{MY_MCP_KEY}",
-        }
-    )
-    assert server.url is not None
-    assert server.url.encoded_string() == "http://localhost:9000/mcp"
-    assert server.api_key is not None
-    assert server.api_key.get_secret_value() == "resolved-secret"
+def test_plaintext_connection_is_rejected(direct_mode: None) -> None:
+    # Inline values are refused: connection must be a $env:{VAR} placeholder.
+    inline = '{"url": "http://localhost:8000/mcp", "api_key": "resolved-secret"}'
+    with pytest.raises(ValidationError, match=r"\$env:\{VAR\} placeholder"):
+        MCPClientSettings.model_validate({"server_name": "rag", "connection": inline})
 
 
-def test_env_placeholder_default_is_used_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MISSING_KEY", raising=False)
-    server = MCPClientSettings.model_validate(
-        {
-            "server_name": "rag",
-            "url": "http://localhost:8000/mcp",
-            "api_key": "$env:{MISSING_KEY|fallback}",
-        }
-    )
-    assert server.api_key is not None
-    assert server.api_key.get_secret_value() == "fallback"
-
-
-def test_unresolved_env_placeholder_fails_validation(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("MISSING_KEY", raising=False)
-    with pytest.raises(ValidationError, match="MISSING_KEY"):
+def test_default_placeholder_form_is_rejected(direct_mode: None) -> None:
+    # The $env:{VAR|default} form is not a valid placeholder -> refused.
+    with pytest.raises(ValidationError, match=r"\$env:\{VAR\} placeholder"):
         MCPClientSettings.model_validate(
-            {
-                "server_name": "rag",
-                "url": "http://localhost:8000/mcp",
-                "api_key": "$env:{MISSING_KEY}",
-            }
+            {"server_name": "rag", "connection": "$env:{SOME_VAR|whatever}"}
         )
+
+
+@pytest.mark.parametrize(
+    "bundle, match",
+    [
+        ("not json at all", "Invalid JSON"),
+        ('{"api_key": "k"}', "url"),  # missing url
+        ('{"url": "http://localhost/mcp"}', "api_key"),  # missing api_key
+        ('{"url": "ftp://localhost/mcp", "api_key": "k"}', "url"),  # non-http url
+        ('{"url": "http://localhost/mcp", "api_key": ""}', "api_key"),  # empty api_key
+        ('{"url": "http://localhost/mcp", "api_key": "k", "extra": 1}', "extra"),  # extra field
+    ],
+)
+def test_malformed_connection_bundle_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, bundle: str, match: str
+) -> None:
+    monkeypatch.setenv("MY_MCP_CONN", bundle)
+    with pytest.raises(ValidationError, match=match):
+        MCPClientSettings.model_validate({"server_name": "rag", "connection": "$env:{MY_MCP_CONN}"})
+
+
+def test_unresolved_env_placeholder_fails_validation(
+    direct_mode: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MISSING_CONN", raising=False)
+    with pytest.raises(ValidationError, match="MISSING_CONN"):
+        MCPClientSettings.model_validate(
+            {"server_name": "rag", "connection": "$env:{MISSING_CONN}"}
+        )
+
+
+def test_connection_schema_is_plain_string() -> None:
+    # The DIAL editor must accept the $env:{...} placeholder, so connection is a plain string
+    # in the schema -- the JSON bundle shape is enforced in-app after expansion.
+    schema = ApplicationProperties.model_json_schema()
+    conn_schema = schema["properties"]["mcp_servers"]["items"]["properties"]["connection"]
+    string_variant = next(v for v in conn_schema["anyOf"] if v.get("type") == "string")
+    assert "format" not in string_variant or string_variant["format"] == "password"
 
 
 def test_schema_dial_root_keywords_present_by_default() -> None:

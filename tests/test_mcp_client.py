@@ -1,9 +1,10 @@
 """`build_mcp_client` builds one connection per configured MCP server."""
 
+import json
 from typing import Any
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from pydantic import HttpUrl
+from pydantic import HttpUrl, SecretStr
 from pytest import MonkeyPatch
 
 import dial_deep_research.app.research.tools as tools_mod
@@ -26,7 +27,16 @@ def _direct_server(
     url: str = "http://localhost:8000/mcp",
     api_key: str = "local-secret",
 ) -> MCPClientSettings:
-    return MCPClientSettings(server_name=server_name, url=HttpUrl(url), api_key=api_key)
+    # Bypass validation: this suite exercises build_mcp_client, not property parsing. Direct
+    # mode is debug-gated and requires a $env:{...} placeholder (covered in test_app_properties);
+    # here we construct an instance whose connection already holds the resolved JSON bundle.
+    bundle = json.dumps({"url": url, "api_key": api_key})
+    return MCPClientSettings.model_construct(
+        server_name=server_name,
+        connection=SecretStr(bundle),
+        deployment_id=None,
+        tools_to_include=[],
+    )
 
 
 def test_deployment_mode_builds_core_url_and_forwards_bearer(monkeypatch: MonkeyPatch) -> None:

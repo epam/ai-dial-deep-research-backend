@@ -19,7 +19,7 @@
     "mcp_servers": {
       "description": "MCP servers the research agent connects to. At least one is required; server_name must be unique across the list.",
       "items": {
-        "description": "Connection config for one MCP server the research agent connects to.\n\nTwo mutually exclusive modes:\n- deployment: the MCP is a DIAL application reached through DIAL Core by deployment id.\n  The per-request api-key is supplied by SDK header propagation and the request bearer\n  token is forwarded for per-user access.\n- direct: a directly-reachable MCP at `url`, authenticated with the static `api_key`\n  sent in the `api-key` header.\n\n`url` and `api_key` accept `$env:{VAR}` placeholders, expanded from the app's environment\nat load time so secrets stay out of committed config.",
+        "description": "Connection config for one MCP server the research agent connects to.\n\nTwo mutually exclusive modes:\n- deployment: the MCP is a DIAL application reached through DIAL Core by deployment id.\n  The per-request api-key is supplied by SDK header propagation and the request bearer\n  token is forwarded for per-user access.\n- direct: a directly-reachable MCP whose URL and api-key come together in `connection`,\n  the api-key sent in the `api-key` header.\n\n`connection` must be a `$env:{VAR}` placeholder, expanded from the app's environment at\nload time; the URL and api-key are bundled in one env var (not two config fields) so they\ncannot be independently selected. Access the parsed pair through `direct_connection`.",
         "properties": {
           "server_name": {
             "description": "Internal name for this server connection; must be unique across the list. Arbitrary — need not match any remote server name.",
@@ -37,26 +37,10 @@
               }
             ],
             "default": null,
-            "description": "Deployment mode: DIAL deployment id of the MCP application, reached through Core. Mutually exclusive with url/api_key.",
+            "description": "Deployment mode: DIAL deployment id of the MCP application, reached through Core. Mutually exclusive with connection.",
             "title": "Deployment Id"
           },
-          "url": {
-            "anyOf": [
-              {
-                "format": "uri",
-                "maxLength": 2083,
-                "minLength": 1,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "description": "Direct mode: URL of a directly-reachable MCP server. Supports $env:{VAR} placeholders. Requires api_key.",
-            "title": "Url"
-          },
-          "api_key": {
+          "connection": {
             "anyOf": [
               {
                 "format": "password",
@@ -68,8 +52,8 @@
               }
             ],
             "default": null,
-            "description": "Direct mode: static key sent as the api-key header to url. Supports $env:{VAR} placeholders.",
-            "title": "Api Key"
+            "description": "Direct mode: a $env:{VAR} placeholder (no inline value, no default) resolving to a JSON object {\"url\": \"...\", \"api_key\": \"...\"} with the MCP server URL and its api-key. Mutually exclusive with deployment_id.",
+            "title": "Connection"
           },
           "tools_to_include": {
             "description": "Names of tools to include from this server. If empty, all tools are included.",

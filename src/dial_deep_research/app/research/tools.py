@@ -32,8 +32,8 @@ def build_mcp_client(
 
     Each server is either deployment- or direct-mode (see `MCPClientSettings`). Deployment
     mode builds the Core URL from `dial_url` and forwards the request bearer token (when
-    present) as `Authorization: Bearer`; direct mode uses the server's `url` and static
-    `api_key`.
+    present) as `Authorization: Bearer`; direct mode uses the server's bundled `connection`
+    URL and api-key.
     """
     connections: dict[str, Connection] = {}
     for server in mcp_servers:
@@ -43,10 +43,10 @@ def build_mcp_client(
             headers = {}
             if bearer_token:
                 headers["Authorization"] = f"Bearer {bearer_token}"
-        elif server.url is not None:
-            url = server.url.encoded_string()
-            api_key = server.api_key.get_secret_value() if server.api_key else ""
-            headers = {"api-key": api_key}
+        elif server.connection is not None:
+            bundle = server.direct_connection
+            url = bundle.url.encoded_string()
+            headers = {"api-key": bundle.api_key.get_secret_value()}
         else:
             raise ValueError(f"Invalid MCP server settings: {server}")
         connections[server.server_name] = {

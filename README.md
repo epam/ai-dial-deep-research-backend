@@ -78,7 +78,7 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 
 ### Notes on the environment variables
 
-- A direct-mode MCP server's `api_key`/`url` (in the application properties) may reference an env var via a `$env:{VAR}` placeholder — define that `VAR` in `.env`.
+- A direct-mode MCP server's `connection` (in the application properties) must be a `$env:{VAR}` placeholder referencing an env var defined in `.env`.
 - `DOCKER_DEFAULT_PLATFORM` in `.env.example` is consumed by Docker Compose (not the app): uncomment it on Apple Silicon because the DIAL images ship linux/amd64 only.
 
 ## DIAL core configuration
@@ -149,12 +149,13 @@ required; `server_name` must be unique across the list). Each server is one of t
 - **deployment** — set `deployment_id`: the MCP is a DIAL application reached through Core
   by that deployment id, authenticated with the per-request api-key (the request bearer
   token is forwarded for per-user access).
-- **direct** — set `url` + `api_key`: a directly-reachable MCP server, authenticated with
-  the static `api_key` in the `api-key` header.
+- **direct** — set `connection`: a directly-reachable MCP server, authenticated with a
+  static api-key in the `api-key` header.
 
-`url` and `api_key` accept `$env:{VAR}` / `$env:{VAR|default}` placeholders, expanded from
-the app's environment at load time so secrets stay out of committed config. Set
-`tools_to_include` to restrict a server to named tools (empty = include all).
+In direct mode, `connection` must be a `$env:{VAR}` placeholder resolving to a JSON object
+`{"url": "...", "api_key": "..."}`, expanded from the app's environment at load time.
+Set `tools_to_include` to restrict a server to named
+tools (empty = include all).
 
 Real client instances stay in the gitignored local file — never commit them.
 
