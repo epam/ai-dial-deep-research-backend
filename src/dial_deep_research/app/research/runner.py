@@ -25,13 +25,14 @@ from langchain_core.messages import (
 )
 
 from dial_deep_research.app.history import PrepState
+from dial_deep_research.app.mcp_tools import load_mcp_tools
 from dial_deep_research.app_properties import ApplicationProperties
 from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.dial_stages import DialStageToolCallFormatter, PendingToolCall
 
 from .graph import build_research_graph
 from .state import build_initial_state
-from .tools import load_research_tools
+from .tools import build_finish_iteration_tool
 
 if TYPE_CHECKING:
     # opik is an optional extra; only needed for the type annotation here.
@@ -64,9 +65,9 @@ class ResearchRunner:
         opik_tracer: OpikTracer | None = None,
         bearer_token: str | None = None,
     ) -> list[BaseMessage]:
-        tools = await load_research_tools(
-            mcp_servers=properties.mcp_servers, bearer_token=bearer_token
-        )
+        tools = await load_mcp_tools(mcp_servers=properties.mcp_servers, bearer_token=bearer_token)
+        # The finish sentinel is research-specific: the researcher calls it to end an iteration.
+        tools.append(build_finish_iteration_tool())
         graph = build_research_graph(
             tools=tools,
             today_date=datetime.now().date().isoformat(),

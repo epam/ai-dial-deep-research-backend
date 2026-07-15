@@ -7,8 +7,8 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from pydantic import HttpUrl, SecretStr
 from pytest import MonkeyPatch
 
-import dial_deep_research.app.research.tools as tools_mod
-from dial_deep_research.app.research.tools import build_mcp_client
+import dial_deep_research.app.mcp_tools as tools_mod
+from dial_deep_research.app.mcp_tools import build_mcp_client
 from dial_deep_research.app_properties import MCPClientSettings
 
 
