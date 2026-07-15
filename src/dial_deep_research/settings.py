@@ -11,7 +11,7 @@ same client → env field here; varies per client on the same infrastructure →
 
 from typing import Annotated, Literal
 
-from pydantic import BeforeValidator, Field, HttpUrl, SecretStr, model_validator
+from pydantic import BeforeValidator, Field, HttpUrl
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Annotated[
@@ -35,32 +35,9 @@ class Settings(BaseSettings):
     dial_app_name: str = "deep-research"
     heartbeat_interval: int = Field(default=5, ge=1)
 
-    # generic-RAG MCP server. Two mutually exclusive modes (see `_validate_mcp_mode`):
-    #  - deployment: the MCP is a DIAL application reached through Core — set `mcp_deployment_name`.
-    #  - local dev:  a directly-reachable MCP — set `mcp_url` (+ `mcp_api_key`).
-    mcp_server_name: str = Field(min_length=1)
-    mcp_deployment_name: str | None = None
-    mcp_url: HttpUrl | None = None
-    mcp_api_key: SecretStr | None = None
-
     # opik tracing
     opik_tracing_enabled: bool = False
     opik_project_name: str = Field(default="deep-research", min_length=1)
-
-    @model_validator(mode="after")
-    def _validate_mcp_mode(self) -> "Settings":
-        """Require exactly one MCP mode: local-dev (`mcp_url` + key) or deployment (name)."""
-        if self.mcp_url is not None:
-            if self.mcp_deployment_name:
-                raise ValueError("MCP_DEPLOYMENT_NAME and MCP_URL cannot be set at the same time")
-            if not (self.mcp_api_key and self.mcp_api_key.get_secret_value()):
-                raise ValueError("MCP_API_KEY is required when MCP_URL is set (local-dev mode)")
-        elif not self.mcp_deployment_name:
-            raise ValueError(
-                "No MCP connection configured: set MCP_DEPLOYMENT_NAME (deployment mode) "
-                "or MCP_URL and MCP_API_KEY (local-dev mode)"
-            )
-        return self
 
 
 # Placeholder key for DIAL clients that need a credential at construction. The SDK's header

@@ -1,8 +1,0 @@
-{
-  "max_research_iterations": 10,
-  "prompts": {
-    "client_name": "ACME",
-    "agent_name": "ACME Deep Research",
-    "data_sources_descriptions": "## financial report\n\nFinancial report — ACME's quarterly report to investors: results for the period,\nkey figures, and management's commentary on performance and outlook.\n\nIssue dates: 2015-03-01 to 2025-06-01\nIssues per year: 4\nUsual size: 30-60 pages\n\nTopics:\n- Revenue, earnings, and other key figures for the quarter\n- Business highlights, risks, and outlook\n\n## newsletter\n\nNewsletter — ACME's short monthly update on recent developments. The place for\ntimely, point-in-time observations.\n\nIssue dates: 2020-01-15 to 2025-06-15\nIssues per year: ~12\nUsual size: 2-5 pages\n\nTopics:\n- Recent developments and announcements\n- Short commentary on current events"
-  }
-}

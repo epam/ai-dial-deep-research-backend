@@ -38,12 +38,13 @@ Configuration comes from two sources:
   the full spec. Startup fails fast if required vars are missing.
 - **Application properties** carry everything specific to one application instance
   ("channel") of the app: the client wording injected into prompts, the knowledge-base
-  topics map, the research iteration cap. They live in DIAL Core on each application
-  instance and are fetched and validated per request against the JSON schema generated
+  topics map, the research iteration cap, and the MCP servers it connects to. They live in
+  DIAL Core on each application instance and are fetched and validated per request against
+  the JSON schema generated
   from `src/dial_deep_research/app_properties.py` (committed at
-  [`docs/generated-app-schema.json`](./docs/generated-app-schema.json)). An example ships
-  at
-  [`data/configs/example-application-properties.json`](./data/configs/example-application-properties.json).
+  [`docs/generated-app-schema.json`](./docs/generated-app-schema.json)). A worked example
+  ships in
+  [`dial_conf/core/applications-template.json`](./dial_conf/core/applications-template.json).
   A request whose properties fail validation is delivered as a DIAL protocol error (a "not
   configured — contact your administrator" message), not a normal reply.
 
@@ -63,11 +64,8 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 | `DIAL_URL` | | ⚠️ Yes | Where the app finds DIAL Core. No built-in default. | |
 | `DIAL_APP_NAME` | `deep-research` | No | OTel service name for traces. | |
 | `HEARTBEAT_INTERVAL` | `5` | No | Seconds between DIAL keep-alive heartbeats during long-running responses. | |
-| **MCP server** | | | | |
-| `MCP_SERVER_NAME` | | ⚠️ Yes | Logical name for the generic-RAG MCP server connection. | |
-| `MCP_DEPLOYMENT_NAME` | | ⚠️ Yes, if `MCP_URL` unset | Deployment mode: DIAL application/deployment id of the generic-RAG MCP server, reached through DIAL Core at `{DIAL_URL}/v1/deployments/{name}/mcp`. Authenticated with the per-request api-key. | |
-| `MCP_URL` | | ⚠️ Yes, if `MCP_DEPLOYMENT_NAME` unset | Local-dev mode: URL of a directly-reachable MCP server. Setting it selects local-dev mode. | |
-| `MCP_API_KEY` | | ⚠️ Yes, if `MCP_DEPLOYMENT_NAME` unset | Local-dev mode: static key sent as the `api-key` header to `MCP_URL`. | |
+| **MCP servers** | | | | |
+| _(none)_ | | | MCP servers are per-client config, delivered as application properties, not env vars. | |
 | **LLM models** | | | | |
 | `LLM_MODELS_<ENUM_NAME>` | | No | Override the DIAL Core deployment id for a given `LLMModelsEnum` member. E.g. `LLM_MODELS_GPT_5_2_2025_12_11=gpt-5.2-custom-name`. | |
 | **Opik tracing** | | | | |
@@ -80,7 +78,7 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 
 ### Notes on the environment variables
 
-- Exactly one **MCP connection mode** must be configured (the app fails fast at startup otherwise): (1) deployment mode via `MCP_DEPLOYMENT_NAME`, or (2) local-dev mode via `MCP_URL` + `MCP_API_KEY`.
+- A direct-mode MCP server's `connection` (in the application properties) must be a `$env:{VAR}` placeholder referencing an env var defined in `.env`.
 - `DOCKER_DEFAULT_PLATFORM` in `.env.example` is consumed by Docker Compose (not the app): uncomment it on Apple Silicon because the DIAL images ship linux/amd64 only.
 
 ## DIAL core configuration
@@ -118,11 +116,10 @@ enabled in this repo's `dial_conf/settings/settings.json` via
 `"applications": {"includeCustomApps": true}`.)
 
 Add one instance per channel to your local `dial_conf/core/applications.json`: reference the
-type via `applicationTypeSchemaId`, carry that channel's `applicationProperties` (shape:
-[`data/configs/example-application-properties.json`](./data/configs/example-application-properties.json)),
-and grant the chat key's role access to the instance under `roles.default.limits`. The
-committed [`applications-template.json`](./dial_conf/core/applications-template.json) shows
-both parts for a fictional example instance:
+type via `applicationTypeSchemaId`, carry that channel's `applicationProperties`, and grant
+the chat key's role access to the instance under `roles.default.limits`. The committed
+[`applications-template.json`](./dial_conf/core/applications-template.json) shows both parts
+for a fictional example instance:
 
 ```json
 {
@@ -130,14 +127,7 @@ both parts for a fictional example instance:
     "deep-research-acme": {
       "displayName": "ACME Deep Research",
       "applicationTypeSchemaId": "https://mydial.epam.com/custom_application_schemas/deep-research",
-      "applicationProperties": {
-        "max_research_iterations": 10,
-        "prompts": {
-          "client_name": "ACME",
-          "agent_name": "ACME Deep Research",
-          "data_sources_descriptions": "## financial report\n\n..."
-        }
-      }
+      "applicationProperties": { }
     }
   },
   "roles": {
@@ -150,6 +140,23 @@ both parts for a fictional example instance:
 }
 ```
 
+> ℹ️ `applicationProperties` is elided above — see `applications-template.json` for its
+> filled-in contents and `docs/generated-app-schema.json` for the authoritative field list.
+
+`mcp_servers` lists the MCP servers the research agent connects to (at least one is
+required; `server_name` must be unique across the list). Each server is one of two modes:
+
+- **deployment** — set `deployment_id`: the MCP is a DIAL application reached through Core
+  by that deployment id, authenticated with the per-request api-key (the request bearer
+  token is forwarded for per-user access).
+- **direct** — set `connection`: a directly-reachable MCP server, authenticated with a
+  static api-key in the `api-key` header.
+
+In direct mode, `connection` must be a `$env:{VAR}` placeholder resolving to a JSON object
+`{"url": "...", "api_key": "..."}`, expanded from the app's environment at load time.
+Set `tools_to_include` to restrict a server to named
+tools (empty = include all).
+
 Real client instances stay in the gitignored local file — never commit them.
 
 ## Local run
@@ -159,7 +166,7 @@ Real client instances stay in the gitignored local file — never commit them.
 - Docker Desktop 4.x (Compose V2)
 - Python 3.13
 - [Poetry](https://python-poetry.org/docs/#installation) (Python package manager)
-- A generic-RAG MCP server — either registered as a DIAL application (deployment mode) or directly reachable via URL + api-key (local-dev mode).
+- At least one MCP server (e.g. generic-RAG) for the research agent — either registered as a DIAL application (deployment mode) or directly reachable via URL + api-key (direct mode). Configured per channel in the instance's application properties, not in `.env`.
 - A remote DIAL instance to pull model configs from (`REMOTE_DIAL_URL` + `REMOTE_DIAL_API_KEY`
   in `.env`, consumed by `make infra-config` — see
   [DIAL core configuration](#dial-core-configuration)).
@@ -210,8 +217,9 @@ Notes:
   `dial_conf/core/generated/application-schemas.json` must point at
   `http://deep-research:5000/...` (not `host.docker.internal`, which is for the host-run
   app). Re-apply that edit after re-running `make infra-config`.
-- Inside the container `localhost` means the container itself. Any `.env` URL that points at
-  a service on your host (e.g. `MCP_URL`, Opik) must use `host.docker.internal` instead.
+- Inside the container `localhost` means the container itself. Any URL that points at a
+  service on your host — a `.env` URL (e.g. Opik) or a direct-mode MCP server `url` in the
+  application properties — must use `host.docker.internal` instead.
 
 ## Driving the app from the CLI
 
