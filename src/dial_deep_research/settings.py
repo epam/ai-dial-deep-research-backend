@@ -36,6 +36,12 @@ class Settings(BaseSettings):
         "%(levelprefix)s | %(asctime)s | %(process)d | %(name)s | %(otel_context)s%(message)s"
     )
     log_date_format: str = "%Y-%m-%d %H:%M:%S"
+    # Payload-debugging switch (see the logging-policy spec). Off: no payload content in logs at
+    # any level, and the payload-capable third-party loggers (openai/httpx/httpcore) are capped
+    # at INFO. On: payload records are emitted at DEBUG, each string truncated to the cap below.
+    # Local development only — never enable in a shared environment.
+    log_payloads: bool = False
+    log_payloads_max_length: int = Field(default=2000, ge=1)
 
     # DIAL. Downstream DIAL Core calls authenticate with the per-request api-key, injected by
     # the SDK's header propagation (see `app/factory.py`), so there is no static key here.

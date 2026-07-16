@@ -8,17 +8,14 @@ reach the agent as visible text only (see `reconstruct_plain_history`).
 
 from __future__ import annotations
 
-import logging
-
 from aidial_sdk.chat_completion import ChatCompletion, Choice, Request, Response
 
-from dial_deep_research.app.error_resolution import raise_dial_error
 from dial_deep_research.app.playground.runner import PlaygroundRunner
 from dial_deep_research.app.properties import load_application_properties
+from dial_deep_research.app.turn_lifecycle import run_logged_turn
+from dial_deep_research.app_properties import PLAYGROUND_DEPLOYMENT_NAME
 from dial_deep_research.settings import settings
 from dial_deep_research.utils.tracing import build_opik_tracer, extract_thread_id
-
-_log = logging.getLogger(__name__)
 
 
 class PlaygroundCompletion(ChatCompletion):
@@ -29,11 +26,12 @@ class PlaygroundCompletion(ChatCompletion):
     """
 
     async def chat_completion(self, request: Request, response: Response) -> None:
-        with response.create_single_choice() as choice:
-            try:
-                await self._run_turn(request, choice)
-            except Exception as e:
-                raise_dial_error(e)
+        await run_logged_turn(
+            deployment=PLAYGROUND_DEPLOYMENT_NAME,
+            request=request,
+            response=response,
+            run_turn=self._run_turn,
+        )
 
     async def _run_turn(self, request: Request, choice: Choice) -> None:
         properties = await load_application_properties(request)

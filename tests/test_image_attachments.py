@@ -9,6 +9,7 @@ than `unittest.mock`.
 from __future__ import annotations
 
 import base64
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -223,6 +224,31 @@ async def test_rehydration_failure_replaces_block_with_text_placeholder() -> Non
     assert "image/png" in block["text"]
     assert "download" in block["text"]
     assert "base64" not in block
+
+
+async def test_rehydration_failure_logs_url_without_query(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Content rule: query strings may carry signatures, so the failure record strips them.
+    caplog.set_level(logging.WARNING, logger="dial_deep_research.utils.image_attachments")
+    tool_msg = ToolMessage(
+        content=[
+            {
+                "type": "image",
+                "url": "https://dial/v1/files/ub/x.png?sig=SECRET&expires=1",
+                "mime_type": "image/png",
+            }
+        ],
+        tool_call_id="call_1",
+    )
+    dial = _make_dial(download_exc=RuntimeError("file gone"))
+
+    await rehydrate_image_blocks([tool_msg], dial)  # type: ignore[arg-type]
+
+    joined = " ".join(record.getMessage() for record in caplog.records)
+    assert "url=https://dial/v1/files/ub/x.png" in joined
+    assert "SECRET" not in joined
+    assert "sig=" not in joined
 
 
 # --------------------------------------------------------------------- 4.5: bucket fallback

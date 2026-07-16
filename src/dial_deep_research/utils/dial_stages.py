@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -15,6 +16,31 @@ class PendingToolCall(BaseModel):
     start: datetime
     tool_name: str
     args_json: str
+
+
+def log_tool_call_completed(
+    log: logging.Logger,
+    *,
+    tool_call: PendingToolCall,
+    tool_call_id: str,
+    end: datetime,
+    is_error: bool,
+    level: int = logging.INFO,
+) -> None:
+    """Emit the tool-call event of the logging-policy INFO skeleton.
+
+    One renderer for every runner, so the event's shape — a scraping hook — cannot
+    drift between flows. Takes the caller's logger so the record carries the
+    emitting flow's logger name.
+    """
+    log.log(
+        level,
+        "Tool call completed: tool=%s tool_call_id=%s duration=%.1fs outcome=%s",
+        tool_call.tool_name,
+        tool_call_id,
+        (end - tool_call.start).total_seconds(),
+        "error" if is_error else "success",
+    )
 
 
 def timed_stage_title(base_name: str, start: datetime, end: datetime) -> str:

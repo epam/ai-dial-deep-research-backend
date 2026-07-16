@@ -21,6 +21,7 @@ import mimetypes
 import uuid
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from aidial_client import AsyncDial
 from langchain_core.messages import BaseMessage, ToolMessage
@@ -45,6 +46,12 @@ def _approx_kb(num_bytes: int) -> int:
 def _approx_decoded_size_bytes(b64: str) -> int:
     # Each 4 base64 chars encode 3 bytes; close enough for the placeholder hint.
     return len(b64) * 3 // 4
+
+
+def _strip_url_query(url: str) -> str:
+    # Scheme + host + path only: query strings may carry signatures (content rule).
+    scheme, netloc, path, _, _ = urlsplit(url)
+    return urlunsplit((scheme, netloc, path, "", ""))
 
 
 def _iter_image_blocks(
@@ -176,7 +183,7 @@ async def rehydrate_image_blocks(messages: list[BaseMessage], dial: AsyncDial) -
         mime_type = block.get("mime_type")
         logger.warning(
             "Image download from DIAL files failed; substituting placeholder (url=%s, mime=%s).",
-            block.get("url"),
+            _strip_url_query(block.get("url", "")),
             mime_type,
             exc_info=exc,
         )

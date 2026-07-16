@@ -28,7 +28,11 @@ from dial_deep_research.app.history import PrepState
 from dial_deep_research.app.mcp_tools import load_mcp_tools
 from dial_deep_research.app_properties import ApplicationProperties
 from dial_deep_research.utils.content import extract_text_from_content
-from dial_deep_research.utils.dial_stages import DialStageToolCallFormatter, PendingToolCall
+from dial_deep_research.utils.dial_stages import (
+    DialStageToolCallFormatter,
+    PendingToolCall,
+    log_tool_call_completed,
+)
 
 from .graph import build_research_graph
 from .state import build_initial_state
@@ -146,11 +150,22 @@ class ResearchRunner:
         if tool_call is None:
             # No matching pending call (e.g. a duplicated emission already staged); skip.
             return
-        if tool_call.tool_name == _FINISH_TOOL:
-            # Internal completion signal — not a research action worth a stage.
-            return
         end = datetime.now()
         is_error = msg.status == "error"
+        # The finish sentinel is an internal completion signal — not a research action
+        # worth a stage or an INFO skeleton event; iteration boundaries are the
+        # reviewer event's job.
+        is_finish = tool_call.tool_name == _FINISH_TOOL
+        log_tool_call_completed(
+            logger,
+            tool_call=tool_call,
+            tool_call_id=msg.tool_call_id,
+            end=end,
+            is_error=is_error,
+            level=logging.DEBUG if is_finish else logging.INFO,
+        )
+        if is_finish:
+            return
         title = DialStageToolCallFormatter.format_title(
             tool_call.tool_name, tool_call.start, end, is_error=is_error
         )

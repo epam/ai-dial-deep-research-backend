@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -19,6 +20,7 @@ from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
+from dial_deep_research.utils.agent_logging import agent_logging_middleware
 from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.llm import (
     STREAM_DROP_MAX_ATTEMPTS,
@@ -57,7 +59,11 @@ def build_researcher_agent(tools: list[BaseTool], today_date: str, client_name: 
             today_date=today_date,
             client_name=client_name,
         ),
-        middleware=[stream_drop_retry_middleware(), ForceToolChoiceMiddleware()],
+        middleware=[
+            *agent_logging_middleware("researcher"),
+            stream_drop_retry_middleware(),
+            ForceToolChoiceMiddleware(),
+        ],
     )
 
 
@@ -86,10 +92,16 @@ def _render_findings(messages: list[BaseMessage]) -> str:
     return "\n\n".join(lines)
 
 
-def make_reviewer_node(today_date: str) -> ReviewerNode:
-    """Build the reviewer node over the given date."""
+def _should_continue(*, plans_count: int, iteration: int, max_iterations: int) -> bool:
+    """One more researcher iteration iff a not-yet-run plan exists and the cap allows it."""
+    return plans_count > iteration and iteration < max_iterations
+
+
+def make_reviewer_node(today_date: str, max_iterations: int) -> ReviewerNode:
+    """Build the reviewer node over the given date and iteration cap."""
 
     async def reviewer(state: ResearchState) -> dict[str, Any]:
+        start = time.monotonic()
         llm = with_stream_drop_retry(
             get_chat_model(LLMModelConfig()).with_structured_output(ResearchReview)
         )
@@ -109,9 +121,23 @@ def make_reviewer_node(today_date: str) -> ReviewerNode:
             ]
         )
         update: dict[str, Any] = {"iteration": state["iteration"] + 1}
+        plans = state["plans"]
         if review.next_steps:
-            update["plans"] = [*state["plans"], review.next_steps]
+            plans = [*plans, review.next_steps]
+            update["plans"] = plans
             update["messages"] = [HumanMessage(content=render_next_instruction(review.next_steps))]
+        # Verdict mirrors `route_after_review` over the post-update state, so the
+        # skeleton event never disagrees with the actual routing.
+        will_continue = _should_continue(
+            plans_count=len(plans), iteration=update["iteration"], max_iterations=max_iterations
+        )
+        logger.info(
+            "Iteration reviewed: iteration=%d duration=%.1fs verdict=%s next_plan_steps=%d",
+            update["iteration"],
+            time.monotonic() - start,
+            "continue" if will_continue else "report",
+            len(review.next_steps or []),
+        )
         return update
 
     return reviewer
@@ -121,6 +147,7 @@ def make_report_node(today_date: str) -> ReportNode:
     """Build the report node over the given date."""
 
     async def report(state: ResearchState) -> dict[str, Any]:
+        start = time.monotonic()
         llm = get_chat_model(LLMModelConfig())
         plans_text = "\n\n".join(
             f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
@@ -154,6 +181,9 @@ def make_report_node(today_date: str) -> ReportNode:
                 )
                 await asyncio.sleep(stream_drop_retry_delay(attempt))
         text = "".join(chunks)
+        logger.info(
+            "Report generated: duration=%.1fs length=%d", time.monotonic() - start, len(text)
+        )
         return {"report": text, "messages": [AIMessage(content=text)]}
 
     return report
@@ -167,8 +197,11 @@ def route_after_review(max_iterations: int) -> Callable[[ResearchState], str]:
     """
 
     def route(state: ResearchState) -> str:
-        has_next_plan = len(state["plans"]) > state["iteration"]
-        if has_next_plan and state["iteration"] < max_iterations:
+        if _should_continue(
+            plans_count=len(state["plans"]),
+            iteration=state["iteration"],
+            max_iterations=max_iterations,
+        ):
             return "researcher"
         return "report"
 

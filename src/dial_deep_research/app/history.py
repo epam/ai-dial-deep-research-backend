@@ -31,6 +31,7 @@ from dial_deep_research.utils.image_attachments import (
     rehydrate_image_blocks,
     upload_image_blocks,
 )
+from dial_deep_research.utils.pydantic_errors import validation_error_summary
 
 logger = logging.getLogger(__name__)
 
@@ -136,16 +137,20 @@ async def create_dial_state(
 
 
 def _parse_dial_state(message: Message) -> DialState | None:
+    # The first two are routine fallbacks (legacy or plain-text assistant turns), so they
+    # log at DEBUG; a state that fails validation is unexpected but handled (the turn
+    # continues on visible text), so it logs at WARNING — structure only, because the
+    # rendered pydantic error embeds persisted conversation content.
     if not (cc := message.custom_content):
-        logger.warning("No custom content found in message")
+        logger.debug("No custom content found in message")
         return None
     if not isinstance(state := cc.state, dict):
-        logger.warning(f"Custom content is not a dictionary. Got: {type(state)}")
+        logger.debug("Custom content state is not a dictionary. Got: %s", type(state))
         return None
     try:
         return DialState.from_dict(state)
-    except ValidationError:
-        logger.exception('Failed to validate DIAL state')
+    except ValidationError as exc:
+        logger.warning("Failed to validate DIAL state: %s", validation_error_summary(exc))
         return None
 
 

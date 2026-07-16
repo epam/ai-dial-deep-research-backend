@@ -1,13 +1,11 @@
 import logging
+import time
 
 from aidial_client import AsyncDial
 from aidial_sdk.chat_completion import ChatCompletion, Choice, Request, Response
 from langchain_core.messages import BaseMessage
 
-from dial_deep_research.app.error_resolution import (
-    ResearchAlreadyHandedOffError,
-    raise_dial_error,
-)
+from dial_deep_research.app.error_resolution import ResearchAlreadyHandedOffError
 from dial_deep_research.app.history import (
     PrepState,
     create_dial_state,
@@ -16,6 +14,8 @@ from dial_deep_research.app.history import (
 from dial_deep_research.app.preparation.runner import PrepAgentRunner
 from dial_deep_research.app.properties import load_application_properties
 from dial_deep_research.app.research.runner import ResearchRunner
+from dial_deep_research.app.turn_lifecycle import run_logged_turn
+from dial_deep_research.app_properties import DEPLOYMENT_NAME
 from dial_deep_research.settings import PLACEHOLDER_API_KEY, settings
 from dial_deep_research.utils.llm import LLMModelConfig
 from dial_deep_research.utils.tracing import build_opik_tracer, extract_thread_id
@@ -39,11 +39,12 @@ class DeepResearchCompletion(ChatCompletion):
         self._model_config = model_config or LLMModelConfig()
 
     async def chat_completion(self, request: Request, response: Response) -> None:
-        with response.create_single_choice() as choice:
-            try:
-                await self._run_turn(request, choice)
-            except Exception as e:
-                raise_dial_error(e)
+        await run_logged_turn(
+            deployment=DEPLOYMENT_NAME,
+            request=request,
+            response=response,
+            run_turn=self._run_turn,
+        )
 
     async def _run_turn(self, request: Request, choice: Choice) -> None:
         properties = await load_application_properties(request)
@@ -63,6 +64,7 @@ class DeepResearchCompletion(ChatCompletion):
             # Research already ran on an earlier turn; nothing to do this turn.
             raise ResearchAlreadyHandedOffError()
 
+        prep_started_at = time.monotonic()
         prep_messages = await PrepAgentRunner(choice).run(
             request=request,
             dial=dial,
@@ -71,6 +73,14 @@ class DeepResearchCompletion(ChatCompletion):
             opik_tracer=opik_tracer,
         )
         messages: list[BaseMessage] = list(prep_messages)
+        _log.info(
+            "Preparation completed: duration=%.1fs research_started=%s plan_steps=%d "
+            "outstanding_questions=%d",
+            time.monotonic() - prep_started_at,
+            prep_state.research_started,
+            len(prep_state.plan.steps) if prep_state.plan else 0,
+            len(prep_state.clarification.questions) if prep_state.clarification else 0,
+        )
 
         if prep_state.research_started:
             # start_research fired this turn — run the research graph on the same choice.

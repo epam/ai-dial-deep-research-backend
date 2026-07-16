@@ -97,15 +97,21 @@ class LLMModelConfig(BaseModel):
 
 
 def get_chat_model(model_config: LLMModelConfig) -> AzureChatOpenAI:
+    # `params` deliberately carries no api-key, so the record below never touches
+    # credential material (not even the placeholder).
     params: dict[str, Any] = {
         "azure_endpoint": settings.dial_url.encoded_string(),
         "api_version": _API_VERSION,
         "azure_deployment": model_config.deployment.deployment_id,
-        # The per-request api-key is injected by the SDK's header propagation; this
-        # placeholder only satisfies the client's construction-time requirement.
-        "api_key": SecretStr(PLACEHOLDER_API_KEY),
         "max_retries": 3,
     }
     params.update(model_config.model_dump(mode="json", exclude_none=True, exclude={"deployment"}))
-    _log.info(f"Creating chat model with params: {params}")
-    return AzureChatOpenAI.model_validate(params)
+    _log.debug("Creating chat model with params: %s", params)
+    return AzureChatOpenAI.model_validate(
+        {
+            **params,
+            # The per-request api-key is injected by the SDK's header propagation; this
+            # placeholder only satisfies the client's construction-time requirement.
+            "api_key": SecretStr(PLACEHOLDER_API_KEY),
+        }
+    )

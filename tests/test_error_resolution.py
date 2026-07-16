@@ -4,6 +4,10 @@ Covers extraction from each supported exception shape, the resolution precedence
 classification, and the no-leak guarantee.
 """
 
+import logging
+import re
+import time
+
 import httpx
 import openai
 import pytest
@@ -14,6 +18,7 @@ from dial_deep_research.app.error_resolution import (
     ApplicationNotConfiguredError,
     ResearchAlreadyHandedOffError,
     _extract_error_details,
+    raise_dial_error,
     resolve_exception,
 )
 
@@ -204,3 +209,27 @@ def test_retriable_statuses_stay_retryable_but_are_downgraded_by_the_handler(sta
     resolved = resolve_exception(_openai_status_error(status, {"error": {"code": str(status)}}))
     assert resolved.retryable is True
     assert resolved.details.code == str(status)
+
+
+# --- The failure records (logging-policy: single ERROR + skeleton completion event) --------------
+
+
+def test_raise_dial_error_closes_skeleton_with_matching_reference(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="dial_deep_research.app.error_resolution")
+    try:
+        raise RuntimeError("boom")
+    except RuntimeError as e:
+        with pytest.raises(AiDialHTTPException):
+            raise_dial_error(e, started_at=time.monotonic())
+
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    infos = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert len(errors) == 1
+    assert len(infos) == 1
+    match = re.search(r"error_reference=(\w{8})", errors[0].getMessage())
+    assert match is not None
+    completion = infos[0].getMessage()
+    assert "Request completed: outcome=failed" in completion
+    assert f"error_reference={match.group(1)}" in completion

@@ -64,6 +64,8 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 | `DEEP_RESEARCH_LOG_LEVEL` | `INFO` | No | Level of the app's own `dial_deep_research` logger, independent of `LOG_LEVEL`. | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 | `LOG_FORMAT` | pipe-separated layout with an OTEL trace block | No | Log line format (`logging` %-style; `%(levelprefix)s` and `%(otel_context)s` available). | |
 | `LOG_DATE_FORMAT` | `%Y-%m-%d %H:%M:%S` | No | Timestamp format for log lines. | |
+| `LOG_PAYLOADS` | `false` | No | Opt-in payload debugging — **local development only, never enable in a shared environment**. When `false`, logs carry no prompt/message content at any level, and the payload-capable `openai`/`httpx`/`httpcore` loggers are capped at `INFO` regardless of `LOG_LEVEL`. When `true`, the app logs assembled LLM requests at `DEBUG` (truncated) and the cap is lifted. | `true`, `false` |
+| `LOG_PAYLOADS_MAX_LENGTH` | `2000` | No | Per-string character cap for payload records when `LOG_PAYLOADS=true`; longer values are truncated with a marker. Inert otherwise. | positive integer |
 | `ENABLE_PLAYGROUND_CHANNEL` | `false` | No | Also register the `deep-research-playground` deployment: a tool-calling agent over the configured MCP servers, with no clarification or research flow, for testing MCP tools. | `true`, `false` |
 | **DIAL Core** | | | | |
 | `DIAL_URL` | | ⚠️ Yes | Where the app finds DIAL Core. No built-in default. | |
