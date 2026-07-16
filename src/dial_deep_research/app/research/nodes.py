@@ -136,7 +136,7 @@ def make_report_node(today_date: str) -> ReportNode:
         # accumulated chunks reset each attempt, so the persisted report is one attempt's full
         # text (partial tokens an aborted attempt already streamed to the user stay visible).
         chunks: list[str] = []
-        for retry_number in range(STREAM_DROP_MAX_ATTEMPTS):
+        for attempt in range(STREAM_DROP_MAX_ATTEMPTS):
             chunks = []
             try:
                 async for chunk in llm.astream(report_messages):
@@ -145,14 +145,14 @@ def make_report_node(today_date: str) -> ReportNode:
                         chunks.append(text)
                 break
             except TRANSIENT_STREAM_DROP_ERRORS:
-                if retry_number + 1 >= STREAM_DROP_MAX_ATTEMPTS:
+                if attempt + 1 >= STREAM_DROP_MAX_ATTEMPTS:
                     raise
                 logger.warning(
                     "Report stream dropped mid-response, retrying (attempt %d of %d)",
-                    retry_number + 2,
+                    attempt + 2,
                     STREAM_DROP_MAX_ATTEMPTS,
                 )
-                await asyncio.sleep(stream_drop_retry_delay(retry_number))
+                await asyncio.sleep(stream_drop_retry_delay(attempt))
         text = "".join(chunks)
         return {"report": text, "messages": [AIMessage(content=text)]}
 
