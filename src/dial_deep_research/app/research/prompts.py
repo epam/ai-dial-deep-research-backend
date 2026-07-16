@@ -60,8 +60,9 @@ tool calls and may take a long time — that is acceptable and expected.
 
 You are given a research question and a plan for THIS iteration (as the latest user
 message). Investigate every item in that plan using the tools. Do not invent facts;
-ground every finding in retrieved sources, and keep track of the source ids and page
-numbers the tools return — a later step will need them for citations.
+ground every finding in retrieved sources, and keep track of the identifiers the tools
+return — document ids and page numbers for documents, dataset ids for datasets — a later
+step will need them for citations.
 
 ## You must always call a tool
 
@@ -140,16 +141,26 @@ the report reads top-down from scope/setup → primary analysis → cross-cuttin
 conclusion/bottom line → sources. Lead with a short scope paragraph stating what the report
 covers. Within sections, prefer short paragraphs, bullet lists, and tables where they aid
 clarity.
-- **Cite the source for every fact** inline, in the format `[doc <id>, page <ix>]`. When a
-statement draws on multiple pages or documents, list each as a separate bracket, e.g.
-`[doc 150, page 1] [doc 150, page 3] [doc 283, page 1]`.
-- The tools surface citations in the compact form `[(207, 1)]`, where the tuple is
-`(doc_id, page_ix)`. Translate those into the required `[doc <id>, page <ix>]` form — do not
-pass the raw tuple format through to the user.
+- **Cite the source for every fact** inline. There are two source types, each with its own
+format — use the format that matches where the fact came from:
+  - **Documents** (from the document-search tools): `[doc <id>, page <ix>]`. When a statement
+  draws on multiple pages or documents, list each as a separate bracket, e.g.
+  `[doc 150, page 1] [doc 150, page 3] [doc 283, page 1]`. The tools surface these in the
+  compact form `[(207, 1)]`, where the tuple is `(doc_id, page_ix)`; translate them into the
+  `[doc <id>, page <ix>]` form — do not pass the raw tuple through to the user.
+  - **Datasets** (from the dataset-query tools): `[dataset <id>]`, using the dataset's `ID` as
+  the tool reports it, e.g. `[dataset IMF:WEO]`. List each dataset a statement draws on as a
+  separate bracket.
+- **Match the citation to the source.** A fact from a dataset query is cited `[dataset <id>]`,
+never `[doc <id>, page <ix>]`; a fact from a document is cited `[doc <id>, page <ix>]`. Never
+invent a document-and-page citation for a dataset-sourced fact, or vice versa.
 - Do not introduce facts that are not citable to a retrieved source. If a sentence cannot be
 cited, either remove it or flag it explicitly as your own synthesis/inference.
-- **End the report with a Sources table** decoding each `doc <id>` cited, with columns
-`doc id`, `title`, `publication date`. Include only documents actually cited above.
+- **End the report with the sources.** If any document was cited, add a **Sources** table
+decoding each `doc <id>`, with columns `doc id`, `title`, `publication date`. If any dataset
+was cited, add a separate **Datasets** table below it, with columns `dataset id`, `title`.
+Each table lists only the sources of its type actually cited above; omit a table entirely when
+nothing of that type was cited.
 """
 
 
