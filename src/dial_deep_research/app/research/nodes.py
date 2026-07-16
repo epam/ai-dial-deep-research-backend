@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -18,7 +20,15 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.tools import BaseTool
 
 from dial_deep_research.utils.content import extract_text_from_content
-from dial_deep_research.utils.llm import LLMModelConfig, get_chat_model
+from dial_deep_research.utils.llm import (
+    STREAM_DROP_MAX_ATTEMPTS,
+    TRANSIENT_STREAM_DROP_ERRORS,
+    LLMModelConfig,
+    get_chat_model,
+    stream_drop_retry_delay,
+    stream_drop_retry_middleware,
+    with_stream_drop_retry,
+)
 
 from .middleware import ForceToolChoiceMiddleware
 from .prompts import (
@@ -31,6 +41,8 @@ from .prompts import (
     render_plan,
 )
 from .state import ResearchState
+
+logger = logging.getLogger(__name__)
 
 ReviewerNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
 ReportNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
@@ -45,7 +57,7 @@ def build_researcher_agent(tools: list[BaseTool], today_date: str, client_name: 
             today_date=today_date,
             client_name=client_name,
         ),
-        middleware=[ForceToolChoiceMiddleware()],
+        middleware=[stream_drop_retry_middleware(), ForceToolChoiceMiddleware()],
     )
 
 
@@ -78,7 +90,9 @@ def make_reviewer_node(today_date: str) -> ReviewerNode:
     """Build the reviewer node over the given date."""
 
     async def reviewer(state: ResearchState) -> dict[str, Any]:
-        llm = get_chat_model(LLMModelConfig()).with_structured_output(ResearchReview)
+        llm = with_stream_drop_retry(
+            get_chat_model(LLMModelConfig()).with_structured_output(ResearchReview)
+        )
         plans_text = "\n\n".join(
             f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
         )
@@ -118,11 +132,27 @@ def make_report_node(today_date: str) -> ReportNode:
                 content=REPORT_REQUEST.format(query=state["original_query"], plans=plans_text)
             ),
         ]
+        # `with_retry` does not cover streaming, so the stream-drop retry is a loop here. The
+        # accumulated chunks reset each attempt, so the persisted report is one attempt's full
+        # text (partial tokens an aborted attempt already streamed to the user stay visible).
         chunks: list[str] = []
-        async for chunk in llm.astream(report_messages):
-            text = extract_text_from_content(chunk.content)
-            if text:
-                chunks.append(text)
+        for attempt in range(STREAM_DROP_MAX_ATTEMPTS):
+            chunks = []
+            try:
+                async for chunk in llm.astream(report_messages):
+                    text = extract_text_from_content(chunk.content)
+                    if text:
+                        chunks.append(text)
+                break
+            except TRANSIENT_STREAM_DROP_ERRORS:
+                if attempt + 1 >= STREAM_DROP_MAX_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "Report stream dropped mid-response, retrying (attempt %d of %d)",
+                    attempt + 2,
+                    STREAM_DROP_MAX_ATTEMPTS,
+                )
+                await asyncio.sleep(stream_drop_retry_delay(attempt))
         text = "".join(chunks)
         return {"report": text, "messages": [AIMessage(content=text)]}
 

@@ -1,9 +1,11 @@
 """Resolve any turn-aborting failure into user-facing text plus a classification.
 
 A DIAL Deep Research turn fails from a few directions — the LLM call (openai errors via
-`langchain-openai`), DIAL Core service operations (aidial `HTTPException`), the RAG MCP or other
-HTTP calls (`httpx` errors), the research graph (`GraphRecursionError`), and two known in-process
-conditions (`ApplicationNotConfiguredError`, `ResearchAlreadyHandedOffError`). This module
+`langchain-openai`; a connection dropped mid-stream surfaces as a raw `httpx` transport error
+once the call-site retries are exhausted), DIAL Core service operations (aidial `HTTPException`),
+the RAG MCP or other HTTP calls (`httpx` errors), the research graph (`GraphRecursionError`), and
+two known in-process conditions (`ApplicationNotConfiguredError`,
+`ResearchAlreadyHandedOffError`). This module
 normalizes them all into an `ErrorDetails` view and resolves a `ResolvedError` by a fixed
 precedence: display_message -> code map -> status/type map -> mid-stream stream-failure rule ->
 internal map -> generic fallback.
@@ -331,6 +333,11 @@ def _resolve_httpx_status_or_type(e: httpx.HTTPError, details: ErrorDetails) -> 
     if isinstance(e, httpx.TimeoutException):
         return (_MSG_SERVICE_TIMEOUT, True)
     if isinstance(e, httpx.NetworkError):
+        return (_MSG_SERVICE_NETWORK_ERROR, True)
+    if isinstance(e, httpx.RemoteProtocolError):
+        # A connection dropped mid-stream — transient like a network error, and reaching here
+        # only after the call-site retries are exhausted. Its sibling LocalProtocolError stays
+        # non-retryable (a client-side bug).
         return (_MSG_SERVICE_NETWORK_ERROR, True)
     if isinstance(e, httpx.HTTPStatusError):
         resolution = _resolve_service_status(details.status_code)
