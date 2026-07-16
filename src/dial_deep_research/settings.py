@@ -26,7 +26,16 @@ class Settings(BaseSettings):
     # app server
     app_host: str = "0.0.0.0"
     app_port: int = 5000
+
+    # logging (see `utils/logging_config.py` for how these feed the dictConfig).
+    # `log_level` drives the root logger and every managed logger except the app's own;
+    # `deep_research_log_level` pins the `dial_deep_research` logger independently.
     log_level: LogLevel = "INFO"
+    deep_research_log_level: LogLevel = "INFO"
+    log_format: str = (
+        "%(levelprefix)s | %(asctime)s | %(process)d | %(name)s | %(otel_context)s%(message)s"
+    )
+    log_date_format: str = "%Y-%m-%d %H:%M:%S"
 
     # DIAL. Downstream DIAL Core calls authenticate with the per-request api-key, injected by
     # the SDK's header propagation (see `app/factory.py`), so there is no static key here.

@@ -60,7 +60,10 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 | **App server** | | | | |
 | `APP_HOST` | `0.0.0.0` | No | Host interface the app binds to. | |
 | `APP_PORT` | `5000` | No | Port the app binds to. | |
-| `LOG_LEVEL` | `INFO` | No | Python logging level. | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `LOG_LEVEL` | `INFO` | No | Level of the root logger and every managed logger except the app's own. | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `DEEP_RESEARCH_LOG_LEVEL` | `INFO` | No | Level of the app's own `dial_deep_research` logger, independent of `LOG_LEVEL`. | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `LOG_FORMAT` | pipe-separated layout with an OTEL trace block | No | Log line format (`logging` %-style; `%(levelprefix)s` and `%(otel_context)s` available). | |
+| `LOG_DATE_FORMAT` | `%Y-%m-%d %H:%M:%S` | No | Timestamp format for log lines. | |
 | `ENABLE_PLAYGROUND_CHANNEL` | `false` | No | Also register the `deep-research-playground` deployment: a tool-calling agent over the configured MCP servers, with no clarification or research flow, for testing MCP tools. | `true`, `false` |
 | **DIAL Core** | | | | |
 | `DIAL_URL` | | ⚠️ Yes | Where the app finds DIAL Core. No built-in default. | |

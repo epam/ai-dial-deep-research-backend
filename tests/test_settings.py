@@ -22,6 +22,32 @@ def test_unknown_log_level_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     assert any(err["loc"] in {("log_level",), ("LOG_LEVEL",)} for err in excinfo.value.errors())
 
 
+def test_logging_settings_defaults_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("LOG_FORMAT", "LOG_DATE_FORMAT", "DEEP_RESEARCH_LOG_LEVEL"):
+        monkeypatch.delenv(var, raising=False)
+    settings = Settings()
+    assert "%(otel_context)s" in settings.log_format
+    assert settings.log_date_format == "%Y-%m-%d %H:%M:%S"
+    assert settings.deep_research_log_level == "INFO"
+
+
+def test_deep_research_log_level_is_independent_of_log_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEEP_RESEARCH_LOG_LEVEL", "debug")
+    monkeypatch.delenv("LOG_LEVEL", raising=False)
+    settings = Settings()
+    assert settings.deep_research_log_level == "DEBUG"
+    assert settings.log_level == "INFO"
+
+
+def test_unknown_deep_research_log_level_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEEP_RESEARCH_LOG_LEVEL", "ifno")
+    with pytest.raises(ValidationError) as excinfo:
+        Settings()
+    assert any(err["loc"] == ("deep_research_log_level",) for err in excinfo.value.errors())
+
+
 def test_positive_heartbeat_interval_override_loads(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HEARTBEAT_INTERVAL", "30")
     assert Settings().heartbeat_interval == 30
