@@ -15,7 +15,7 @@ from langchain_core.tools import BaseTool, ToolException, tool
 
 from dial_deep_research.app.history import Clarification, Plan, PrepState
 from dial_deep_research.utils.content import extract_text_from_content
-from dial_deep_research.utils.llm import LLMModelConfig, get_chat_model
+from dial_deep_research.utils.llm import LLMModelConfig, get_chat_model, with_stream_drop_retry
 
 from . import prompts
 from .prompts import PlanReviewResponse, QueryReviewResponse
@@ -89,7 +89,9 @@ class PrepTools:
             Replacing the query discards any existing plan and approval.
             """
             conversation = _format_conversation(runtime.state["messages"])
-            llm = get_chat_model(LLMModelConfig()).with_structured_output(QueryReviewResponse)
+            llm = with_stream_drop_retry(
+                get_chat_model(LLMModelConfig()).with_structured_output(QueryReviewResponse)
+            )
             check: QueryReviewResponse = await llm.ainvoke(
                 [
                     ("system", prompts.QUERY_REVIEW_SYSTEM.format(today_date=self._today)),
@@ -147,7 +149,9 @@ class PrepTools:
             if self.state.plan is None:
                 raise ToolException(prompts.APPROVE_NO_PLAN)
             conversation = _format_conversation(runtime.state["messages"])
-            llm = get_chat_model(LLMModelConfig()).with_structured_output(PlanReviewResponse)
+            llm = with_stream_drop_retry(
+                get_chat_model(LLMModelConfig()).with_structured_output(PlanReviewResponse)
+            )
             check: PlanReviewResponse = await llm.ainvoke(
                 [
                     ("system", prompts.PLAN_REVIEW_SYSTEM.format(today_date=self._today)),

@@ -459,7 +459,11 @@ precedence, most-specific first:
    with nothing appended;
 2. a curated error-`code` map (at least `content_filter` and `context_length_exceeded`);
 3. a status/type map with wording specific to the failing surface (AI model vs a required
-   service), including timeout and connectivity causes;
+   service), including timeout, connectivity, and mid-stream connection-drop causes — a
+   transport-level stream drop (`httpx.RemoteProtocolError`, reaching the resolver only after
+   the in-app retries per **Transient LLM stream drops retried in-app** are exhausted) SHALL
+   resolve to the retryable service network-error message, never the generic non-retryable HTTP
+   fallback;
 4. a dedicated mid-stream rule for a plain `openai.APIError` (an LLM that failed after the report
    node began streaming) that carries no usable status or code;
 5. curated messages for known internal conditions (research step-budget exhaustion; the two
@@ -520,6 +524,13 @@ turn complete normally.
   mid-stream message (retryable, so "try again later"-suffixed) plus the error reference — never the
   generic fallback
 
+#### Scenario: Exhausted stream-drop retries resolve retryable
+- **WHEN** an LLM call fails with `httpx.RemoteProtocolError` after the in-app retry budget of
+  **Transient LLM stream drops retried in-app** is exhausted
+- **THEN** the resolved user-facing text SHALL be the service network-error message with the "try
+  again later" sentence appended plus the error reference, classified retryable — never the
+  generic non-retryable HTTP message
+
 #### Scenario: Context-length and content-filter causes get actionable text
 - **WHEN** the model rejects the request with `code: "context_length_exceeded"` or
   `code: "content_filter"`
@@ -569,3 +580,47 @@ turn complete normally.
 - **THEN** the failure SHALL propagate to the top-level handler and resolve through the status/type
   map to a service message with the appropriate retryability, rather than being reported as "not
   configured"
+
+### Requirement: Transient LLM stream drops retried in-app
+
+Every LLM chat-completion call the app makes SHALL be retried in-app when it fails with a
+transient mid-stream connection drop — the connection dying after response headers arrived,
+surfaced as `httpx.RemoteProtocolError` (peer closed the connection mid-body) or
+`httpx.ReadError` (connection reset while reading). The OpenAI client's own `max_retries` covers
+only failures before a response starts, so without this a single dropped stream aborts the whole
+turn.
+
+This applies to every LLM call surface: the preparation, playground, and researcher agent model
+calls; the structured review calls (query review, plan review, research review); and the
+report-writing stream. The retry budget is 2 retries per call (3 attempts total) with exponential
+backoff and jitter. A retry re-issues the failed call from scratch with the same inputs; partial
+tokens the failed attempt already streamed to the user are not retracted, so a retried call MAY
+render duplicated partial text in the chat (accepted: observed drops occur at stream start, and a
+rare visual duplicate is preferred over losing a long research turn).
+
+When the budget is exhausted, the last exception SHALL propagate unchanged to the top-level
+handler and deliver through the DIAL error protocol per **Failures delivered as DIAL protocol
+errors**. Exceptions other than the two transient-drop shapes SHALL NOT trigger this retry; they
+keep their existing handling.
+
+#### Scenario: Stream drops once at the start of an agent model call
+- **WHEN** an agent model call's stream dies with `httpx.RemoteProtocolError` and the retried
+  call succeeds
+- **THEN** the turn SHALL complete normally with no error delivered to the user
+
+#### Scenario: Stream drops persistently
+- **WHEN** an LLM call fails with `httpx.RemoteProtocolError` on every attempt in the budget
+- **THEN** the app SHALL stop after 3 attempts and deliver the failure through the DIAL error
+  protocol, resolved as the retryable network-drop message with an error reference
+
+#### Scenario: Report stream drops after partial content
+- **WHEN** the report-writing stream drops mid-content and a retry succeeds
+- **THEN** the turn SHALL complete with the retried report; content already streamed by the
+  failed attempt MAY remain visible above it, and the persisted report SHALL be the retried
+  attempt's full text only
+
+#### Scenario: Non-transient failures are not retried in-app
+- **WHEN** an LLM call fails with an HTTP status error (e.g. 400) or a timeout
+- **THEN** the in-app stream-drop retry SHALL NOT engage; the failure keeps its existing handling
+  (the OpenAI client's own retries and the DIAL error protocol)
+

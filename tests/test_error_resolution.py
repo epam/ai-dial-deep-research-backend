@@ -139,6 +139,28 @@ def test_httpx_network_error_is_service_retryable() -> None:
     assert resolved.retryable is True
 
 
+def test_httpx_remote_protocol_error_is_service_retryable() -> None:
+    # A connection dropped mid-stream (incomplete chunked read) is transient.
+    resolved = resolve_exception(
+        httpx.RemoteProtocolError("peer closed connection", request=_REQUEST)
+    )
+    assert "network error" in resolved.message.lower()
+    assert resolved.retryable is True
+
+
+def test_httpx_read_error_is_service_retryable() -> None:
+    # The reset flavor of a mid-stream drop; a NetworkError subclass.
+    resolved = resolve_exception(httpx.ReadError("connection reset", request=_REQUEST))
+    assert "network error" in resolved.message.lower()
+    assert resolved.retryable is True
+
+
+def test_httpx_local_protocol_error_stays_non_retryable() -> None:
+    # A client-side protocol bug — retrying will not change the outcome.
+    resolved = resolve_exception(httpx.LocalProtocolError("bad framing", request=_REQUEST))
+    assert resolved.retryable is False
+
+
 # --- Internal conditions ------------------------------------------------------------------------
 
 
