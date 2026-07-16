@@ -20,6 +20,7 @@ research loop grounded in the MCP tools, and streams progress to DIAL as timed s
 - [Environment variables](#environment-variables)
   - [Notes on the environment variables](#notes-on-the-environment-variables)
 - [DIAL core configuration](#dial-core-configuration)
+  - [Playground (optional)](#playground-optional)
 - [Local run](#local-run)
   - [Prerequisites](#prerequisites)
   - [Setup](#setup)
@@ -60,6 +61,7 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 | `APP_HOST` | `0.0.0.0` | No | Host interface the app binds to. | |
 | `APP_PORT` | `5000` | No | Port the app binds to. | |
 | `LOG_LEVEL` | `INFO` | No | Python logging level. | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
+| `ENABLE_PLAYGROUND_CHANNEL` | `false` | No | Also register the `deep-research-playground` deployment: a tool-calling agent over the configured MCP servers, with no clarification or research flow, for testing MCP tools. | `true`, `false` |
 | **DIAL Core** | | | | |
 | `DIAL_URL` | | ⚠️ Yes | Where the app finds DIAL Core. No built-in default. | |
 | `DIAL_APP_NAME` | `deep-research` | No | OTel service name for traces. | |
@@ -158,6 +160,15 @@ Set `tools_to_include` to restrict a server to named
 tools (empty = include all).
 
 Real client instances stay in the gitignored local file — never commit them.
+
+### Playground (optional)
+
+The templates also register a second application type, `deep-research-playground`, with an
+example instance (`deep-research-playground-acme`). It reuses the **same** application-properties
+schema (so its instances still carry `prompts`) but routes to a
+separate app-server deployment: a single tool-calling agent over the configured MCP servers, with
+no clarification or research flow, for testing MCP tools. The app serves that deployment only when
+run with `ENABLE_PLAYGROUND_CHANNEL=true`; otherwise Core's forward to it returns an error.
 
 ## Local run
 

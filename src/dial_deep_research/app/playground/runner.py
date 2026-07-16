@@ -1,10 +1,9 @@
-"""Streams the preparation agent into a DIAL `Choice`.
+"""Streams the playground agent into a DIAL `Choice`.
 
-Stateless per turn: the caller reconstructs `PrepState` and the transcript from the
-DIAL request and passes them in; this runner builds the agent over that state, runs
-it, and streams its output. It does not load, refuse, or persist — the turn
-coordinator (`app/completion.py`) owns those so a single combined `DialState` is
-persisted once, even when research runs in the same turn.
+A single tool-calling agent over the configured MCP servers — no clarification, no
+research/reviewer loop, no report node. Tool calls become timed DIAL stages; the
+agent's own text becomes the assistant content. Stateless: nothing is persisted, so
+prior turns reach the agent as visible text only (see `reconstruct_plain_history`).
 """
 
 from __future__ import annotations
@@ -14,21 +13,21 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from aidial_client import AsyncDial
-from aidial_sdk.chat_completion import Choice, Request
+from aidial_sdk.chat_completion import Choice, Request, Role
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     BaseMessage,
+    HumanMessage,
     ToolMessage,
 )
 
-from dial_deep_research.app.history import PrepState, reconstruct_history
-from dial_deep_research.app_properties import Prompts
+from dial_deep_research.app.mcp_tools import load_mcp_tools
+from dial_deep_research.app_properties import ApplicationProperties
 from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.dial_stages import DialStageToolCallFormatter, PendingToolCall
 
-from .agent import build_prep_agent
+from .agent import build_playground_agent
 
 if TYPE_CHECKING:
     # opik is an optional extra; only needed for the type annotation here.
@@ -36,39 +35,54 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# The create_agent graph runs the main model in a node named "model"; tools run in
-# "tools". The nested structured-output calls inside the tools (the clarity/approval
-# checks) therefore stream under "tools" — we exclude those from user-facing text.
+# create_agent runs the main model in a node named "model"; the playground tools are plain
+# MCP tools (no nested LLM calls), so only this node's tokens are the assistant's answer.
 _MODEL_NODE = "model"
 
 
-class PrepAgentRunner:
-    """Drives one preparation agent run and emits it to DIAL (no persistence)."""
+def reconstruct_plain_history(request: Request) -> list[BaseMessage]:
+    """Rebuild history for the stateless playground from the visible messages alone.
+
+    Reads no persisted `custom_content.state`: each USER message becomes a `HumanMessage`
+    and each ASSISTANT message a single `AIMessage(content=…)` from its visible text. Prior
+    tool calls/outputs are not replayed (they were never persisted), and no `dial` client is
+    needed.
+    """
+    history: list[BaseMessage] = []
+    for message in request.messages:
+        if message.role == Role.USER:
+            history.append(HumanMessage(content=extract_text_from_content(message.content)))
+        elif message.role == Role.ASSISTANT:
+            history.append(AIMessage(content=extract_text_from_content(message.content)))
+    return history
+
+
+class PlaygroundRunner:
+    """Drives one playground agent run and emits it to DIAL (no persistence)."""
 
     def __init__(self, choice: Choice) -> None:
         self._choice = choice
         self._pending_tool_calls: dict[str, PendingToolCall] = {}
-        self._messages: list[BaseMessage] = []
         self._separator_pending = False
 
     async def run(
         self,
         request: Request,
-        dial: AsyncDial,
-        prep_state: PrepState,
-        prompts: Prompts,
+        properties: ApplicationProperties,
+        bearer_token: str | None = None,
         opik_tracer: OpikTracer | None = None,
-    ) -> list[BaseMessage]:
-        """Run the preparation agent over `prep_state`, streaming output; return its messages.
+    ) -> None:
+        """Run the playground agent over the reconstructed history, streaming to the choice.
 
-        `prep_state` is the live holder the tools mutate, so after this returns it
-        reflects the turn (including `research_started` if `start_research` fired).
+        The per-request bearer token (when present) is forwarded to the MCP servers for
+        per-user access; the api-key is handled by header propagation.
         """
-        history = await reconstruct_history(request, dial)
-        agent = build_prep_agent(
-            state=prep_state,
+        history = reconstruct_plain_history(request)
+        tools = await load_mcp_tools(mcp_servers=properties.mcp_servers, bearer_token=bearer_token)
+        agent = build_playground_agent(
+            tools=tools,
+            prompts=properties.prompts,
             today_date=datetime.now().date().isoformat(),
-            prompts=prompts,
         )
         config: dict[str, Any] = {"callbacks": [opik_tracer]} if opik_tracer is not None else {}
 
@@ -88,23 +102,20 @@ class PrepAgentRunner:
                 chunk, metadata = payload
                 self._handle_message_chunk(chunk, metadata)
 
-        return self._messages
-
     def _handle_ai_message(self, msg: AIMessage) -> None:
-        self._messages.append(msg)
-        if msg.tool_calls:
-            start = datetime.now()
-            for tc in msg.tool_calls:
-                tc_id = tc["id"]
-                if not tc_id:
-                    continue
-                args_json = json.dumps(tc["args"], default=str, indent=2)
-                self._pending_tool_calls[tc_id] = PendingToolCall(
-                    start=start, tool_name=tc["name"], args_json=args_json
-                )
+        if not msg.tool_calls:
+            return
+        start = datetime.now()
+        for tc in msg.tool_calls:
+            tc_id = tc["id"]
+            if not tc_id:
+                continue
+            args_json = json.dumps(tc["args"], default=str, indent=2)
+            self._pending_tool_calls[tc_id] = PendingToolCall(
+                start=start, tool_name=tc["name"], args_json=args_json
+            )
 
     def _handle_tool_message(self, msg: ToolMessage) -> None:
-        self._messages.append(msg)
         self._separator_pending = True
         tool_call = self._pending_tool_calls.pop(msg.tool_call_id, None)
         if tool_call is None:
@@ -124,10 +135,6 @@ class PrepAgentRunner:
             result_stage.append_content(body)
 
     def _handle_message_chunk(self, chunk: BaseMessage, metadata: dict) -> None:
-        # Only stream the main model node's tokens. The nested structured-output
-        # calls inside the tools (clarity/approval checks) also reach this stream,
-        # under the "tools" node — skip them so their raw JSON never leaks into the
-        # assistant content.
         if metadata.get("langgraph_node") != _MODEL_NODE:
             return
         if not isinstance(chunk, AIMessageChunk):

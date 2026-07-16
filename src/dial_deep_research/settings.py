@@ -35,6 +35,10 @@ class Settings(BaseSettings):
     dial_app_name: str = "deep-research"
     heartbeat_interval: int = Field(default=5, ge=1)
 
+    # When true, also register the playground chat completion (a single tool-calling agent over
+    # the configured MCP servers, no clarification/research flow) for testing MCP tools.
+    enable_playground_channel: bool = False
+
     # opik tracing
     opik_tracing_enabled: bool = False
     opik_project_name: str = Field(default="deep-research", min_length=1)

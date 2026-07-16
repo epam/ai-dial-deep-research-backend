@@ -5,7 +5,12 @@ from aidial_sdk import DIALApp
 from aidial_sdk.telemetry.types import MetricsConfig, TelemetryConfig, TracingConfig
 
 from dial_deep_research.app.completion import DeepResearchCompletion
-from dial_deep_research.app_properties import DEPLOYMENT_NAME, ApplicationProperties
+from dial_deep_research.app.playground.completion import PlaygroundCompletion
+from dial_deep_research.app_properties import (
+    DEPLOYMENT_NAME,
+    PLAYGROUND_DEPLOYMENT_NAME,
+    ApplicationProperties,
+)
 from dial_deep_research.settings import settings
 from dial_deep_research.utils.tracing import configure_opik
 
@@ -45,6 +50,16 @@ def create_app() -> DIALApp:
         DeepResearchCompletion(),
         heartbeat_interval=settings.heartbeat_interval,
     )
+
+    if settings.enable_playground_channel:
+        _log.info(
+            "Registering playground chat completion deployment=%s", PLAYGROUND_DEPLOYMENT_NAME
+        )
+        app.add_chat_completion(
+            PLAYGROUND_DEPLOYMENT_NAME,
+            PlaygroundCompletion(),
+            heartbeat_interval=settings.heartbeat_interval,
+        )
 
     @app.get("/v1/configuration-support/application-schema")
     async def application_schema() -> dict[str, Any]:
