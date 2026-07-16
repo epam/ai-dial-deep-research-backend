@@ -14,7 +14,14 @@ def main() -> None:
     from dial_deep_research.settings import settings
     from dial_deep_research.utils.logging_config import configure_logging
 
-    configure_logging(settings.log_level)
+    # Must run before create_app(): the SDK attaches its OTLP handler to root during
+    # DIALApp construction, and configure_logging's dictConfig would strip it.
+    configure_logging(
+        log_level=settings.log_level,
+        app_log_level=settings.deep_research_log_level,
+        log_format=settings.log_format,
+        log_date_format=settings.log_date_format,
+    )
     logging.getLogger(__name__).info(
         "Starting %s on %s:%d",
         settings.dial_app_name,
