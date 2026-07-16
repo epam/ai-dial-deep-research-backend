@@ -20,7 +20,8 @@ is reserved for the LLM call, which surfaces as openai errors.
 from __future__ import annotations
 
 import logging
-from typing import Any
+import uuid
+from typing import Any, NoReturn
 
 import httpx
 import openai
@@ -29,6 +30,12 @@ from langgraph.errors import GraphRecursionError
 from pydantic import BaseModel, ConfigDict
 
 logger = logging.getLogger(__name__)
+
+# Statuses that pass through the outgoing-status policy unchanged. Everything else becomes 500 so
+# the app never emits a status DIAL Core's balancer treats as retriable (429/502/503/504) — for an
+# application Core cannot retry, so it would discard the error body. 409 is included for the
+# research-already-handed-off condition; it is non-retriable by the balancer, so it is safe.
+_CLIENT_ERROR_STATUS_CODES = frozenset({400, 401, 403, 404, 409, 413, 422})
 
 # Appended by the resolver to any retryable-classified message — and only those. No message
 # constant carries it, so it is never stacked on top of conflicting advice.
@@ -421,3 +428,41 @@ def resolve_exception(e: Exception) -> ResolvedError:
 
     # 6. Generic fallback (non-retryable).
     return _compose(_FALLBACK_MESSAGE, False, details)
+
+
+def _outgoing_status_code(resolved: ResolvedError) -> int:
+    status = resolved.details.status_code
+    if status in _CLIENT_ERROR_STATUS_CODES:
+        return status
+    return 500
+
+
+def raise_dial_error(e: Exception) -> NoReturn:
+    """Log the failure with a correlation reference and raise it as a DIAL protocol error.
+
+    Must be called from within an active ``except`` block so ``logger.exception`` captures the
+    stack trace. The SDK delivers the raised exception as a non-200 response (non-streaming
+    requests, failures before the choice opens) or an in-stream error chunk (streaming requests).
+    """
+    error_reference = uuid.uuid4().hex[:8]
+    resolved = resolve_exception(e)
+    logger.exception(
+        "deep-research turn failed (error_reference=%s, retryable=%s, details=%s)",
+        error_reference,
+        resolved.retryable,
+        resolved.details,
+    )
+    display = f"{resolved.message} (error reference: {error_reference})"
+    status_code = _outgoing_status_code(resolved)
+    # OpenAI-protocol convention when the upstream supplied no type: client-attributable
+    # 4xx -> invalid_request_error, everything else -> runtime_error.
+    default_type = "invalid_request_error" if status_code < 500 else "runtime_error"
+    # `message` mirrors `display_message`: internal detail stays in the server log, reachable via
+    # the reference. DIAL Chat surfaces only `display_message` on the in-stream path.
+    raise AiDialHTTPException(
+        status_code=status_code,
+        message=display,
+        display_message=display,
+        code=resolved.details.code,
+        type=resolved.details.error_type or default_type,
+    )

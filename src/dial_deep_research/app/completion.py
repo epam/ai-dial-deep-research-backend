@@ -1,18 +1,12 @@
 import logging
-import uuid
-from typing import NoReturn
 
 from aidial_client import AsyncDial
 from aidial_sdk.chat_completion import ChatCompletion, Choice, Request, Response
-from aidial_sdk.exceptions import HTTPException as DialHTTPException
 from langchain_core.messages import BaseMessage
-from pydantic import ValidationError
 
 from dial_deep_research.app.error_resolution import (
-    ApplicationNotConfiguredError,
     ResearchAlreadyHandedOffError,
-    ResolvedError,
-    resolve_exception,
+    raise_dial_error,
 )
 from dial_deep_research.app.history import (
     PrepState,
@@ -20,57 +14,13 @@ from dial_deep_research.app.history import (
     load_last_prep_state,
 )
 from dial_deep_research.app.preparation.runner import PrepAgentRunner
+from dial_deep_research.app.properties import load_application_properties
 from dial_deep_research.app.research.runner import ResearchRunner
-from dial_deep_research.app_properties import ApplicationProperties
 from dial_deep_research.settings import PLACEHOLDER_API_KEY, settings
 from dial_deep_research.utils.llm import LLMModelConfig
 from dial_deep_research.utils.tracing import build_opik_tracer, extract_thread_id
 
 _log = logging.getLogger(__name__)
-
-# Statuses that pass through the outgoing-status policy unchanged. Everything else becomes 500 so
-# the app never emits a status DIAL Core's balancer treats as retriable (429/502/503/504) — for an
-# application Core cannot retry, so it would discard the error body. 409 is included for the
-# research-already-handed-off condition; it is non-retriable by the balancer, so it is safe.
-_CLIENT_ERROR_STATUS_CODES = frozenset({400, 401, 403, 404, 409, 413, 422})
-
-
-def _outgoing_status_code(resolved: ResolvedError) -> int:
-    status = resolved.details.status_code
-    if status in _CLIENT_ERROR_STATUS_CODES:
-        return status
-    return 500
-
-
-def _raise_dial_error(e: Exception) -> NoReturn:
-    """Log the failure with a correlation reference and raise it as a DIAL protocol error.
-
-    Must be called from within an active ``except`` block so ``logger.exception`` captures the
-    stack trace. The SDK delivers the raised exception as a non-200 response (non-streaming
-    requests, failures before the choice opens) or an in-stream error chunk (streaming requests).
-    """
-    error_reference = uuid.uuid4().hex[:8]
-    resolved = resolve_exception(e)
-    _log.exception(
-        "deep-research turn failed (error_reference=%s, retryable=%s, details=%s)",
-        error_reference,
-        resolved.retryable,
-        resolved.details,
-    )
-    display = f"{resolved.message} (error reference: {error_reference})"
-    status_code = _outgoing_status_code(resolved)
-    # OpenAI-protocol convention when the upstream supplied no type: client-attributable
-    # 4xx -> invalid_request_error, everything else -> runtime_error.
-    default_type = "invalid_request_error" if status_code < 500 else "runtime_error"
-    # `message` mirrors `display_message`: internal detail stays in the server log, reachable via
-    # the reference. DIAL Chat surfaces only `display_message` on the in-stream path.
-    raise DialHTTPException(
-        status_code=status_code,
-        message=display,
-        display_message=display,
-        code=resolved.details.code,
-        type=resolved.details.error_type or default_type,
-    )
 
 
 class DeepResearchCompletion(ChatCompletion):
@@ -93,10 +43,10 @@ class DeepResearchCompletion(ChatCompletion):
             try:
                 await self._run_turn(request, choice)
             except Exception as e:
-                _raise_dial_error(e)
+                raise_dial_error(e)
 
     async def _run_turn(self, request: Request, choice: Choice) -> None:
-        properties = await self._load_properties(request)
+        properties = await load_application_properties(request)
 
         opik_tracer = build_opik_tracer(
             tracing_enabled=settings.opik_tracing_enabled, thread_id=extract_thread_id(request)
@@ -135,23 +85,6 @@ class DeepResearchCompletion(ChatCompletion):
             messages.extend(research_messages)
 
         await self._persist(choice, messages, prep_state, dial)
-
-    @staticmethod
-    async def _load_properties(request: Request) -> ApplicationProperties:
-        """Resolve and validate the instance's DIAL application properties.
-
-        The SDK reads them from the `X-DIAL-APPLICATION-PROPERTIES` header when present, otherwise
-        fetches them from DIAL Core by the request's application id. A **fetch** failure (Core
-        unreachable, missing app-id header, etc.) propagates to the top-level handler and resolves
-        as a service error. A **validation** failure means the app is misconfigured and raises
-        `ApplicationNotConfiguredError`, which the handler delivers as a protocol error.
-        """
-        raw = await request.request_dial_application_properties()
-        try:
-            return ApplicationProperties.model_validate(raw)
-        except ValidationError as exc:
-            _log.warning("application properties failed validation: %s", exc)
-            raise ApplicationNotConfiguredError() from exc
 
     async def _persist(
         self, choice: Choice, messages: list[BaseMessage], prep_state: PrepState, dial: AsyncDial

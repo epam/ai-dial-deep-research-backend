@@ -30,6 +30,11 @@ from dial_deep_research.utils.config_env import is_env_placeholder, replace_env_
 # the fetched application properties, not from the deployment id.
 DEPLOYMENT_NAME = "deep-research"
 
+# Deployment id of the optional playground chat completion (registered only when
+# `settings.enable_playground_channel` is set). It reuses the same application
+# properties as the research deployment.
+PLAYGROUND_DEPLOYMENT_NAME = "deep-research-playground"
+
 # The DIAL application-type meta-schema and this type's identity within it. The
 # `$id` is a generic placeholder: instances reference the type by this value, and
 # the DIAL Core `applicationTypeSchemas` entry must carry the same one.
