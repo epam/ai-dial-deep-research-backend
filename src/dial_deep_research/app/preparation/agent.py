@@ -8,7 +8,11 @@ from langchain.agents import create_agent
 
 from dial_deep_research.app.history import PrepState
 from dial_deep_research.app_properties import Prompts
-from dial_deep_research.utils.llm import LLMModelConfig, get_chat_model
+from dial_deep_research.utils.llm import (
+    LLMModelConfig,
+    get_chat_model,
+    stream_drop_retry_middleware,
+)
 
 from .prompts import PREP_AGENT_SYSTEM
 from .tools import PrepTools
@@ -18,9 +22,10 @@ def build_prep_agent(state: PrepState, today_date: str, prompts: Prompts) -> Any
     """Build a preparation agent over the given per-turn `PrepState` holder.
 
     The agent drives clarify → plan → approve → launch via the `PrepTools`; it has
-    no MCP tools, no checkpointer, and no middleware. `PrepState` is mutated only
-    by the tools (which close over `state`), never by the model. `prompts` is the
-    instance's per-request prompt content.
+    no MCP tools and no checkpointer; the only middleware is the transient
+    stream-drop retry. `PrepState` is mutated only by the tools (which close over
+    `state`), never by the model. `prompts` is the instance's per-request prompt
+    content.
     """
     tools = PrepTools(state=state, today_date=today_date).build()
     return create_agent(
@@ -31,4 +36,5 @@ def build_prep_agent(state: PrepState, today_date: str, prompts: Prompts) -> Any
             today_date=today_date,
             data_sources_descriptions=prompts.data_sources_descriptions,
         ),
+        middleware=[stream_drop_retry_middleware()],
     )
