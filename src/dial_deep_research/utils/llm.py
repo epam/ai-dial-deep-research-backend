@@ -107,6 +107,10 @@ def get_chat_model(model_config: LLMModelConfig) -> AzureChatOpenAI:
         "max_retries": 3,
     }
     params.update(model_config.model_dump(mode="json", exclude_none=True, exclude={"deployment"}))
-    # Routine per-request construction; the api_key is a SecretStr, so it renders masked.
-    _log.debug("Creating chat model with params: %s", params)
+    # Routine per-request construction. The api-key is excluded from the record — it's only
+    # the propagation placeholder, but log records carry no credential material at all.
+    _log.debug(
+        "Creating chat model with params: %s",
+        {k: v for k, v in params.items() if k != "api_key"},
+    )
     return AzureChatOpenAI.model_validate(params)
