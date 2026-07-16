@@ -21,6 +21,7 @@ def main() -> None:
         app_log_level=settings.deep_research_log_level,
         log_format=settings.log_format,
         log_date_format=settings.log_date_format,
+        log_payloads=settings.log_payloads,
     )
     logging.getLogger(__name__).info(
         "Starting %s on %s:%d",

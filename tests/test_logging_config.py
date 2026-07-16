@@ -8,6 +8,7 @@ import uvicorn.logging
 
 from dial_deep_research.utils.logging_config import (
     MANAGED_LOGGER_NAMES,
+    PAYLOAD_CAPABLE_LOGGER_NAMES,
     OtelAwareFormatter,
     configure_logging,
 )
@@ -216,3 +217,47 @@ class TestRecordRouting:
         logging.getLogger("httpx").debug("httpx-debug")
 
         assert [record.getMessage() for record in recorder.records] == ["app-debug"]
+
+
+class TestPayloadCap:
+    """openai/httpx/httpcore emit payloads at DEBUG; they stay capped at INFO
+    unless LOG_PAYLOADS opts in (see the logging-policy spec)."""
+
+    def test_payload_loggers_capped_at_info_when_switch_off(self, reset_logging_state) -> None:
+        configure_logging(**{**_DEFAULT_KWARGS, "log_level": "DEBUG"})
+
+        recorder = _RecordingHandler()
+        logging.getLogger().addHandler(recorder)
+
+        for name in PAYLOAD_CAPABLE_LOGGER_NAMES:
+            logging.getLogger(name).debug("payload-debug")
+            logging.getLogger(name).info("payload-info")
+        logging.getLogger("aidial_sdk").debug("sdk-debug")
+
+        messages = [record.getMessage() for record in recorder.records]
+        assert "payload-debug" not in messages
+        assert messages.count("payload-info") == len(PAYLOAD_CAPABLE_LOGGER_NAMES)
+        assert "sdk-debug" in messages
+
+    def test_payload_switch_lifts_the_cap(self, reset_logging_state) -> None:
+        configure_logging(**{**_DEFAULT_KWARGS, "log_level": "DEBUG", "log_payloads": True})
+
+        recorder = _RecordingHandler()
+        logging.getLogger().addHandler(recorder)
+
+        for name in PAYLOAD_CAPABLE_LOGGER_NAMES:
+            logging.getLogger(name).debug("payload-debug")
+
+        messages = [record.getMessage() for record in recorder.records]
+        assert messages.count("payload-debug") == len(PAYLOAD_CAPABLE_LOGGER_NAMES)
+
+    def test_cap_never_lowers_a_stricter_global_level(self, reset_logging_state) -> None:
+        configure_logging(**{**_DEFAULT_KWARGS, "log_level": "WARNING"})
+
+        recorder = _RecordingHandler()
+        logging.getLogger().addHandler(recorder)
+
+        for name in PAYLOAD_CAPABLE_LOGGER_NAMES:
+            logging.getLogger(name).info("payload-info")
+
+        assert recorder.records == []

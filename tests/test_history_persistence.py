@@ -9,6 +9,9 @@ original_request, etc.) — only `messages` are exercised by the code under test
 
 from __future__ import annotations
 
+import logging
+
+import pytest
 from aidial_sdk.chat_completion import CustomContent, Message, Request, Role
 from langchain_core.messages import (
     AIMessage,
@@ -178,3 +181,49 @@ async def test_system_role_messages_are_skipped() -> None:
     assert len(history) == 1
     assert isinstance(history[0], HumanMessage)
     assert history[0].content == "hi"
+
+
+# --- Log records for state parsing (logging-policy: rebalance + content rule) --------------------
+
+
+async def test_legacy_fallbacks_log_below_warning(caplog: pytest.LogCaptureFixture) -> None:
+    # Routine fallbacks (no custom content / no dict state) must not alarm at WARNING.
+    caplog.set_level(logging.DEBUG, logger="dial_deep_research.app.history")
+    request = _build_request(
+        messages=[
+            Message(role=Role.ASSISTANT, content="legacy answer"),
+            Message(role=Role.ASSISTANT, content="another", custom_content=CustomContent()),
+        ]
+    )
+
+    await reconstruct_history(request, _NoOpDial())  # type: ignore[arg-type]
+
+    assert caplog.records  # the fallbacks are still recorded, at DEBUG
+    assert all(record.levelno < logging.WARNING for record in caplog.records)
+
+
+async def test_invalid_state_logs_structure_only(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="dial_deep_research.app.history")
+    secret = "top-secret user words"
+    request = _build_request(
+        messages=[
+            Message(
+                role=Role.ASSISTANT,
+                content="visible answer",
+                custom_content=CustomContent(
+                    # `current_query` must be a string — the dict fails PrepState validation
+                    # with the secret as the offending input value.
+                    state={"messages": [], "preparation": {"current_query": {"q": secret}}},
+                ),
+            ),
+        ]
+    )
+
+    history = await reconstruct_history(request, _NoOpDial())  # type: ignore[arg-type]
+
+    # The turn degrades to the visible text, and the WARNING carries structure, not content.
+    assert history[-1].content == "visible answer"
+    [record] = caplog.records
+    assert record.levelno == logging.WARNING
+    assert "error(s)" in record.getMessage()
+    assert secret not in record.getMessage()

@@ -31,7 +31,10 @@ def build_research_graph(
     builder.add_node("researcher", researcher)
     # mypy can't infer the node's TypedDict state param from an async callable; the
     # plain-function node form is the documented one and works at runtime.
-    builder.add_node("reviewer", make_reviewer_node(today_date))  # type: ignore[call-overload]
+    builder.add_node(
+        "reviewer",
+        make_reviewer_node(today_date, max_iterations),  # type: ignore[call-overload]
+    )
     builder.add_node("report", make_report_node(today_date))  # type: ignore[call-overload]
 
     builder.add_edge(START, "researcher")

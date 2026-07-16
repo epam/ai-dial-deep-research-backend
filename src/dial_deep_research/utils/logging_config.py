@@ -26,6 +26,11 @@ MANAGED_LOGGER_NAMES: tuple[str, ...] = (
     "aidial_sdk",
 )
 
+# Managed loggers that emit request/wire payloads at DEBUG (the openai client logs complete
+# chat-completion request bodies). Capped at INFO unless LOG_PAYLOADS opts in, so raising
+# LOG_LEVEL alone never brings payloads into the log pipeline (see the logging-policy spec).
+PAYLOAD_CAPABLE_LOGGER_NAMES: tuple[str, ...] = ("httpx", "httpcore", "openai")
+
 
 class OtelAwareFormatter(uvicorn.logging.DefaultFormatter):
     """Render the OTEL trace block only when a real trace is active.
@@ -58,6 +63,7 @@ def configure_logging(
     app_log_level: str,
     log_format: str,
     log_date_format: str,
+    log_payloads: bool = False,
 ) -> None:
     """Own the process logging config: one console handler on root, managed loggers propagate.
 
@@ -65,10 +71,21 @@ def configure_logging(
     LoggingHandler to root during DIALApp construction — so this must run before
     the app is built.
     """
+
+    def _level_for(name: str) -> int:
+        level = logging.getLevelNamesMapping()[
+            app_log_level if name == "dial_deep_research" else log_level
+        ]
+        if name in PAYLOAD_CAPABLE_LOGGER_NAMES and not log_payloads:
+            # Cap at INFO: the more severe of LOG_LEVEL and INFO, so a stricter
+            # global level (e.g. WARNING) is never lowered.
+            return max(level, logging.INFO)
+        return level
+
     per_logger_config = {
         name: {
             "handlers": [],
-            "level": app_log_level if name == "dial_deep_research" else log_level,
+            "level": _level_for(name),
             # Must stay explicit: dictConfig leaves `propagate` untouched when
             # the key is absent, and both aidial-sdk's import-time config and
             # the uvicorn CLI's default config set it to False — which would

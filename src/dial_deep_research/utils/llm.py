@@ -107,5 +107,6 @@ def get_chat_model(model_config: LLMModelConfig) -> AzureChatOpenAI:
         "max_retries": 3,
     }
     params.update(model_config.model_dump(mode="json", exclude_none=True, exclude={"deployment"}))
-    _log.info(f"Creating chat model with params: {params}")
+    # Routine per-request construction; the api_key is a SecretStr, so it renders masked.
+    _log.debug("Creating chat model with params: %s", params)
     return AzureChatOpenAI.model_validate(params)

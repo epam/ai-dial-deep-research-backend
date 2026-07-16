@@ -1,34 +1,6 @@
 # logging-config
 
-## Purpose
-
-Process-wide logging that plays well with the DIAL SDK: one dictConfig owned by the app, a
-single console handler on the root logger with OTEL-aware formatting, managed loggers that
-propagate to root (so the SDK's OTLP export handler sees every record), and env-driven
-format/level settings. Ordering relative to the SDK's own import-time config and its
-DIALApp-time OTLP handler attachment is part of the contract.
-
-## Requirements
-
-### Requirement: dictConfig-based root logging
-
-The application SHALL configure process logging via `logging.config.dictConfig` with exactly one
-console `StreamHandler` on the root logger, whose formatter is the OTEL-aware formatter and whose
-level comes from the `LOG_LEVEL` setting. The configuration SHALL use
-`disable_existing_loggers: False`, and applying it SHALL be idempotent apart from replacing root
-handlers.
-
-#### Scenario: Root owns the single console handler
-
-- **WHEN** `configure_logging` has run
-- **THEN** the root logger has exactly one handler, a `StreamHandler` whose formatter is the
-  OTEL-aware formatter, and the root level equals the configured `LOG_LEVEL`
-
-#### Scenario: A record is emitted exactly once
-
-- **WHEN** an application logger (e.g. `dial_deep_research.x`) logs an INFO message after
-  `configure_logging` has run
-- **THEN** the message appears exactly once on the console output
+## MODIFIED Requirements
 
 ### Requirement: Managed loggers propagate to root
 
@@ -81,31 +53,6 @@ cap is lifted and `LOG_LEVEL` applies to them as to any managed logger.
 - **WHEN** `LOG_LEVEL=WARNING` and `LOG_PAYLOADS` is false and `configure_logging` runs
 - **THEN** `openai`, `httpx`, and `httpcore` INFO records reach no handler
 
-### Requirement: OTEL-aware log formatting
-
-The console formatter SHALL subclass `uvicorn.logging.DefaultFormatter` and expose an
-`otel_context` field to the format string. When the log record carries an `otelTraceID`
-attribute that is truthy and not the literal string `"0"`, `otel_context` SHALL render as
-`[trace_id=<id> span_id=<id> resource.service.name=<name> trace_sampled=<bool>] | `; otherwise it
-SHALL render as the empty string, so log lines are unchanged when no trace is active.
-
-#### Scenario: No OTEL attributes on the record
-
-- **WHEN** a record without `otelTraceID` is formatted
-- **THEN** the output contains no `trace_id=` and ends with the message unmodified
-
-#### Scenario: Instrumentor ran but no span is active
-
-- **WHEN** a record with `otelTraceID == "0"` is formatted
-- **THEN** the output contains no `trace_id=` block
-
-#### Scenario: Active trace renders the context block
-
-- **WHEN** a record with a real `otelTraceID`, `otelSpanID`, `otelServiceName`, and
-  `otelTraceSampled` is formatted
-- **THEN** the output contains the
-  `[trace_id=… span_id=… resource.service.name=… trace_sampled=…] | ` block before the message
-
 ### Requirement: Env-driven logging settings
 
 The `Settings` model SHALL expose logging fields with default field-name → env-var mapping and
@@ -148,21 +95,3 @@ field is unchanged.
 - **WHEN** `LOG_PAYLOADS_MAX_LENGTH=0` is passed to `Settings`
 - **THEN** instantiation raises a Pydantic `ValidationError` referencing the
   `log_payloads_max_length` field
-
-### Requirement: Ordering relative to the DIAL SDK
-
-The logging configuration module SHALL import `aidial_sdk` before applying its dictConfig, so the
-SDK's import-time logging config always lands first and the application config has the last word.
-`configure_logging` SHALL run before `DIALApp` construction at the process entry point, so the
-OTLP logging handler the SDK attaches to the root logger (when `OTEL_LOGS_EXPORTER` is set) is
-not stripped by the application's `dictConfig`.
-
-#### Scenario: Entry point configures logging before building the app
-
-- **WHEN** the process starts via `python -m dial_deep_research`
-- **THEN** `configure_logging` executes before `create_app()` is called
-
-#### Scenario: Handlers attached to root after configuration keep receiving records
-
-- **WHEN** a handler is added to the root logger after `configure_logging` has run
-- **THEN** subsequent records from managed loggers reach that handler

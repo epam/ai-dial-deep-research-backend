@@ -7,6 +7,7 @@ delivered as a service error, not masked as "not configured".
 """
 
 import json
+import logging
 
 import httpx
 import pytest
@@ -55,6 +56,28 @@ def test_invalid_properties_delivered_as_protocol_error(client: TestClient) -> N
     assert response.status_code == 500
     assert "choices" not in response.json()
     assert "not configured" in _error(response)["display_message"]
+
+
+def test_invalid_properties_record_carries_no_property_values(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Content rule: property values may include client prompt content, so the validation
+    # WARNING logs error locations and types only.
+    caplog.set_level(logging.WARNING, logger="dial_deep_research.app.properties")
+    secret_prompt = "confidential client prompt text"
+    invalid = {
+        "prompts": {
+            **VALID_PROPERTIES["prompts"],
+            "client_name": "",
+            "data_sources_descriptions": secret_prompt,
+        }
+    }
+    _post_completion(client, headers={"X-DIAL-APPLICATION-PROPERTIES": json.dumps(invalid)})
+
+    [record] = [r for r in caplog.records if r.name == "dial_deep_research.app.properties"]
+    assert "error(s)" in record.getMessage()
+    assert "prompts.client_name" in record.getMessage()
+    assert secret_prompt not in record.getMessage()
 
 
 def test_property_fetch_failure_delivered_as_service_error(

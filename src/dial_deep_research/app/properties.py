@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from dial_deep_research.app.error_resolution import ApplicationNotConfiguredError
 from dial_deep_research.app_properties import ApplicationProperties
+from dial_deep_research.utils.pydantic_errors import validation_error_summary
 
 _log = logging.getLogger(__name__)
 
@@ -30,5 +31,7 @@ async def load_application_properties(request: Request) -> ApplicationProperties
     try:
         return ApplicationProperties.model_validate(raw)
     except ValidationError as exc:
-        _log.warning("application properties failed validation: %s", exc)
+        # Structure only — the rendered pydantic error embeds property values, which may
+        # include client prompt content (see the logging-policy spec).
+        _log.warning("application properties failed validation: %s", validation_error_summary(exc))
         raise ApplicationNotConfiguredError() from exc

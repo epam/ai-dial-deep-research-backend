@@ -48,6 +48,32 @@ def test_unknown_deep_research_log_level_is_rejected(monkeypatch: pytest.MonkeyP
     assert any(err["loc"] == ("deep_research_log_level",) for err in excinfo.value.errors())
 
 
+def test_payload_settings_defaults_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("LOG_PAYLOADS", "LOG_PAYLOADS_MAX_LENGTH"):
+        monkeypatch.delenv(var, raising=False)
+    settings = Settings()
+    assert settings.log_payloads is False
+    assert settings.log_payloads_max_length == 2000
+
+
+def test_payload_settings_overrides_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LOG_PAYLOADS", "true")
+    monkeypatch.setenv("LOG_PAYLOADS_MAX_LENGTH", "500")
+    settings = Settings()
+    assert settings.log_payloads is True
+    assert settings.log_payloads_max_length == 500
+
+
+@pytest.mark.parametrize("raw", ["0", "-5"])
+def test_non_positive_payload_max_length_is_rejected(
+    raw: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LOG_PAYLOADS_MAX_LENGTH", raw)
+    with pytest.raises(ValidationError) as excinfo:
+        Settings()
+    assert any(err["loc"] == ("log_payloads_max_length",) for err in excinfo.value.errors())
+
+
 def test_positive_heartbeat_interval_override_loads(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HEARTBEAT_INTERVAL", "30")
     assert Settings().heartbeat_interval == 30

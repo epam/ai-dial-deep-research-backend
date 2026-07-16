@@ -22,6 +22,7 @@ is reserved for the LLM call, which surfaces as openai errors.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 from typing import Any, NoReturn
 
@@ -444,12 +445,16 @@ def _outgoing_status_code(resolved: ResolvedError) -> int:
     return 500
 
 
-def raise_dial_error(e: Exception) -> NoReturn:
+def raise_dial_error(e: Exception, *, started_at: float) -> NoReturn:
     """Log the failure with a correlation reference and raise it as a DIAL protocol error.
 
     Must be called from within an active ``except`` block so ``logger.exception`` captures the
     stack trace. The SDK delivers the raised exception as a non-200 response (non-streaming
     requests, failures before the choice opens) or an in-stream error chunk (streaming requests).
+
+    ``started_at`` (a ``time.monotonic()`` stamp from request arrival) closes the request
+    skeleton: the request-completed INFO event fires with ``outcome=failed`` and the same
+    ``error_reference`` as this single ERROR record.
     """
     error_reference = uuid.uuid4().hex[:8]
     resolved = resolve_exception(e)
@@ -458,6 +463,11 @@ def raise_dial_error(e: Exception) -> NoReturn:
         error_reference,
         resolved.retryable,
         resolved.details,
+    )
+    logger.info(
+        "Request completed: outcome=failed duration=%.1fs error_reference=%s",
+        time.monotonic() - started_at,
+        error_reference,
     )
     display = f"{resolved.message} (error reference: {error_reference})"
     status_code = _outgoing_status_code(resolved)
