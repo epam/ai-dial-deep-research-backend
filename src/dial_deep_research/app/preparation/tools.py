@@ -61,9 +61,10 @@ class PrepTools:
     agent run to persist it.
     """
 
-    def __init__(self, state: PrepState, today_date: str) -> None:
+    def __init__(self, state: PrepState, today_date: str, data_sources_descriptions: str) -> None:
         self.state = state
         self._today = today_date
+        self._data_sources_descriptions = data_sources_descriptions
 
     def build(self) -> list[BaseTool]:
         tools = [
@@ -94,7 +95,13 @@ class PrepTools:
             )
             check: QueryReviewResponse = await llm.ainvoke(
                 [
-                    ("system", prompts.QUERY_REVIEW_SYSTEM.format(today_date=self._today)),
+                    (
+                        "system",
+                        prompts.QUERY_REVIEW_SYSTEM.format(
+                            today_date=self._today,
+                            data_sources_descriptions=self._data_sources_descriptions,
+                        ),
+                    ),
                     (
                         "human",
                         f"Conversation so far:\n{conversation or '(none yet)'}\n\n"

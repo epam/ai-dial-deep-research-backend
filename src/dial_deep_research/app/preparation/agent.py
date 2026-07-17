@@ -28,7 +28,11 @@ def build_prep_agent(state: PrepState, today_date: str, prompts: Prompts) -> Any
     close over `state`), never by the model. `prompts` is the instance's per-request
     prompt content.
     """
-    tools = PrepTools(state=state, today_date=today_date).build()
+    tools = PrepTools(
+        state=state,
+        today_date=today_date,
+        data_sources_descriptions=prompts.data_sources_descriptions,
+    ).build()
     return create_agent(
         model=get_chat_model(LLMModelConfig()),
         tools=tools,
