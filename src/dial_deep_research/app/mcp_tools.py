@@ -114,7 +114,11 @@ async def load_mcp_tools(
                 len(available),
                 available,
             )
-        tools.extend(server_tools)
+        # Sort by name within each server so the serialized `tools` array is byte-stable
+        # across requests (server listing order is not guaranteed). A stable array is what
+        # lets DIAL Core's content hashes and the provider's prompt cache match on repeated
+        # calls; configured server order is preserved.
+        tools.extend(sorted(server_tools, key=lambda t: t.name))
     logger.info("Loaded %d MCP tool(s) across %d MCP server(s)", len(tools), len(mcp_servers))
 
     # TODO: either remove or use envvar

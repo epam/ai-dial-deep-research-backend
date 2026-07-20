@@ -1,6 +1,8 @@
-"""`build_mcp_client` builds one connection per configured MCP server."""
+"""`build_mcp_client` builds one connection per configured MCP server, and
+`load_mcp_tools` returns the tools in a deterministic (per-server, name-sorted) order."""
 
 import json
+from types import SimpleNamespace
 from typing import Any
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -8,7 +10,7 @@ from pydantic import HttpUrl, SecretStr
 from pytest import MonkeyPatch
 
 import dial_deep_research.app.mcp_tools as tools_mod
-from dial_deep_research.app.mcp_tools import build_mcp_client
+from dial_deep_research.app.mcp_tools import build_mcp_client, load_mcp_tools
 from dial_deep_research.app_properties import MCPClientSettings
 
 
@@ -86,3 +88,50 @@ def test_multiple_servers_build_independent_connections(monkeypatch: MonkeyPatch
     assert client.connections["rag"]["headers"]["Authorization"] == "Bearer jwt-123"
     assert client.connections["charts"]["url"] == "http://localhost:9000/mcp"
     assert client.connections["charts"]["headers"] == {"api-key": "k"}
+
+
+def _fake_tool(name: str) -> Any:
+    # load_mcp_tools only reads `.name` (sort key), `.args_schema` (hoist step, skipped for
+    # non-dict), and sets `.handle_tool_error`; a namespace satisfies all three.
+    return SimpleNamespace(name=name, args_schema=None, handle_tool_error=False)
+
+
+def _patch_get_tools(monkeypatch: MonkeyPatch, tools_by_server: dict[str, list[Any]]) -> None:
+    async def fake_get_tools(*, server_name: str) -> list[Any]:
+        return list(tools_by_server[server_name])
+
+    monkeypatch.setattr(
+        tools_mod, "build_mcp_client", lambda *a, **k: SimpleNamespace(get_tools=fake_get_tools)
+    )
+
+
+async def test_tools_are_name_sorted_regardless_of_listing_order(monkeypatch: MonkeyPatch) -> None:
+    server = _deployment_server()
+
+    _patch_get_tools(monkeypatch, {"rag": [_fake_tool("zebra"), _fake_tool("alpha")]})
+    first = await load_mcp_tools([server])
+
+    _patch_get_tools(monkeypatch, {"rag": [_fake_tool("alpha"), _fake_tool("zebra")]})
+    second = await load_mcp_tools([server])
+
+    assert [t.name for t in first] == ["alpha", "zebra"]
+    assert [t.name for t in first] == [t.name for t in second]
+
+
+async def test_configured_server_order_is_preserved(monkeypatch: MonkeyPatch) -> None:
+    servers = [
+        _deployment_server(),
+        _deployment_server(server_name="charts", deployment_id="charts-app"),
+    ]
+    _patch_get_tools(
+        monkeypatch,
+        {
+            "rag": [_fake_tool("search"), _fake_tool("get_page")],
+            "charts": [_fake_tool("plot"), _fake_tool("fetch")],
+        },
+    )
+
+    tools = await load_mcp_tools(servers)
+
+    # rag's tools (name-sorted) precede charts' tools (name-sorted).
+    assert [t.name for t in tools] == ["get_page", "search", "fetch", "plot"]

@@ -1,14 +1,18 @@
 import pytest
 from pydantic import ValidationError
 
+import dial_deep_research.utils.llm as llm_mod
 from dial_deep_research.settings import PLACEHOLDER_API_KEY
 from dial_deep_research.utils.llm import (
     LLMModelConfig,
     LLMModelsEnum,
     ReasoningEffortEnum,
     VerbosityEnum,
+    format_token_usage,
     get_chat_model,
 )
+
+_CACHE_POLICY_HEADER = "X-DIAL-CACHE-POLICY"
 
 
 def test_model_config_rejects_invalid_reasoning_effort() -> None:
@@ -58,3 +62,39 @@ def test_get_chat_model_uses_placeholder_api_key() -> None:
     model = get_chat_model(LLMModelConfig())
     assert model.openai_api_key is not None
     assert model.openai_api_key.get_secret_value() == PLACEHOLDER_API_KEY
+
+
+def test_format_token_usage_includes_cached_count() -> None:
+    usage = {
+        "input_tokens": 100,
+        "output_tokens": 5,
+        "total_tokens": 105,
+        "input_token_details": {"cache_read": 80},
+    }
+    assert format_token_usage(usage) == "100/5/80"
+
+
+def test_format_token_usage_defaults_cached_to_zero_without_details() -> None:
+    usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
+    assert format_token_usage(usage) == "10/5/0"
+
+
+def test_format_token_usage_none_is_graceful() -> None:
+    assert format_token_usage(None) == "n/a"
+
+
+def test_get_chat_model_sends_cache_policy_header_when_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(llm_mod.settings, "llm_cache_policy", "cache-priority")
+    model = get_chat_model(LLMModelConfig())
+    assert model.default_headers is not None
+    assert model.default_headers[_CACHE_POLICY_HEADER] == "cache-priority"
+
+
+def test_get_chat_model_omits_cache_policy_header_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(llm_mod.settings, "llm_cache_policy", None)
+    model = get_chat_model(LLMModelConfig())
+    assert not (model.default_headers or {}).get(_CACHE_POLICY_HEADER)

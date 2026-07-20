@@ -24,6 +24,7 @@ from langchain_core.messages import AIMessage, messages_to_dict
 
 from dial_deep_research.settings import settings
 from dial_deep_research.utils.content import extract_text_from_content
+from dial_deep_research.utils.llm import format_token_usage
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ class ModelCallLoggingMiddleware(AgentMiddleware):
             "tool_calls" if tool_names else "final_answer",
             tool_names,
             len(extract_text_from_content(message.content)) if message else 0,
-            f"{usage['input_tokens']}/{usage['output_tokens']}" if usage else "n/a",
+            format_token_usage(usage),
         )
         return response
 

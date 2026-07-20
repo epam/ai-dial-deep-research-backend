@@ -19,6 +19,12 @@ LogLevel = Annotated[
     BeforeValidator(lambda v: v.upper() if isinstance(v, str) else v),
 ]
 
+# DIAL Core cache routing retry policy, sent as the X-DIAL-CACHE-POLICY header. See the DIAL
+# prompt-caching tutorial. `cache-priority` keeps retries on the cache-warm upstream;
+# `availability-priority` fails over to another upstream (Core's own default when no header
+# is sent).
+CachePolicy = Literal["availability-priority", "cache-priority"]
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
@@ -49,6 +55,11 @@ class Settings(BaseSettings):
     dial_url: HttpUrl
     dial_app_name: str = "deep-research"
     heartbeat_interval: int = Field(default=5, ge=1)
+
+    # When set, every LLM call sends `X-DIAL-CACHE-POLICY` with this value so DIAL Core's
+    # prompt-cache routing follows the chosen retry policy; unset sends no header and Core
+    # applies its own default (`availability-priority`).
+    llm_cache_policy: CachePolicy | None = None
 
     # When true, also register the playground chat completion (a single tool-calling agent over
     # the configured MCP servers, no clarification/research flow) for testing MCP tools.

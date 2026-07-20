@@ -75,6 +75,7 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 | _(none)_ | | | MCP servers are per-client config, delivered as application properties, not env vars. | |
 | **LLM models** | | | | |
 | `LLM_MODELS_<ENUM_NAME>` | | No | Override the DIAL Core deployment id for a given `LLMModelsEnum` member. E.g. `LLM_MODELS_GPT_5_2_2025_12_11=gpt-5.2-custom-name`. | |
+| `LLM_CACHE_POLICY` | | No | When set, every LLM call sends the `X-DIAL-CACHE-POLICY` header so DIAL Core's [prompt-cache](https://docs.dialx.ai/tutorials/developers/prompt-caching) routing follows the chosen retry policy. `cache-priority` keeps retries on the cache-warm upstream; `availability-priority` fails over to another upstream. Unset sends no header (Core defaults to `availability-priority`). | `availability-priority`, `cache-priority` |
 | **Opik tracing** | | | | |
 | `OPIK_TRACING_ENABLED` | `false` | No | Enable or disable Opik LLM tracing. | `true`, `false` |
 | `OPIK_PROJECT_NAME` | `deep-research` | No | Opik project traces are grouped under. | |
@@ -109,6 +110,12 @@ make infra-config
 - `generated/models.json` is (re)written on every run: each chat/embedding model of the
   remote DIAL becomes a local deployment routed through the `ai-dial-adapter-dial` container
   with the remote as upstream. Re-run the target to refresh models.
+- **Prompt caching** relies on the model deployment having caching enabled in Core: set
+  `auto_caching_supported: true` (or `cache_supported: true`) on the deployment's `features`
+  in `models.json`. This is a Core-side deployment flag, not app config — the app only
+  shapes cache-friendly requests (stable tool ordering, `LLM_CACHE_POLICY`) and relies on
+  Core to route matching requests to the same upstream so the provider's prompt cache stays
+  warm. See the [prompt-caching tutorial](https://docs.dialx.ai/tutorials/developers/prompt-caching).
 - `generated/application-schemas.json` is (re)rendered on every run from `APP_PORT`
   (default `5000`) — the same variable the app binds to, so one `.env` entry moves both
   ends. **macOS:** AirPlay Receiver occupies port 5000; set e.g. `APP_PORT=5001` in `.env`

@@ -109,6 +109,24 @@ def test_empty_opik_project_name_is_rejected(monkeypatch: pytest.MonkeyPatch) ->
     assert any(err["loc"] == ("opik_project_name",) for err in excinfo.value.errors())
 
 
+def test_llm_cache_policy_defaults_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LLM_CACHE_POLICY", raising=False)
+    assert Settings().llm_cache_policy is None
+
+
+@pytest.mark.parametrize("raw", ["availability-priority", "cache-priority"])
+def test_llm_cache_policy_valid_values_load(raw: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_CACHE_POLICY", raw)
+    assert Settings().llm_cache_policy == raw
+
+
+def test_invalid_llm_cache_policy_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_CACHE_POLICY", "always")
+    with pytest.raises(ValidationError) as excinfo:
+        Settings()
+    assert any(err["loc"] == ("llm_cache_policy",) for err in excinfo.value.errors())
+
+
 @pytest.mark.parametrize("raw", ["not-a-url", "localhost:8080", "ftp://host/x", ""])
 def test_non_http_dial_url_is_rejected(raw: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DIAL_URL", raw)
