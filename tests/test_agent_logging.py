@@ -60,8 +60,28 @@ async def test_model_call_event_for_final_answer(caplog: pytest.LogCaptureFixtur
     assert "agent=researcher" in text
     assert "finish=final_answer" in text
     assert f"content_length={len(message.content)}" in text
-    assert "tokens=10/5" in text
+    assert "tokens=in:10, out:5, cache_read:0" in text  # cache_read 0 when provider reports none
     assert "confidential" not in text  # metadata only — never the content itself
+
+
+async def test_model_call_event_reports_cached_tokens(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
+    message = AIMessage(
+        content="result",
+        usage_metadata={
+            "input_tokens": 100,
+            "output_tokens": 5,
+            "total_tokens": 105,
+            "input_token_details": {"cache_read": 80},
+        },
+    )
+
+    await ModelCallLoggingMiddleware(agent_name="researcher").awrap_model_call(
+        _request(), _handler_returning(message)
+    )
+
+    [record] = caplog.records
+    assert "tokens=in:100, out:5, cache_read:80" in record.getMessage()
 
 
 async def test_model_call_event_for_tool_calls(caplog: pytest.LogCaptureFixture) -> None:

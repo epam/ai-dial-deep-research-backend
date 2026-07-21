@@ -1,6 +1,7 @@
 import logging
 import os
 import random
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
 
@@ -60,6 +61,26 @@ def stream_drop_retry_delay(retry_number: int) -> float:
     return _STREAM_DROP_INITIAL_DELAY * (2**retry_number) + random.uniform(0.0, 0.5)
 
 
+def format_token_usage(usage: Mapping[str, Any] | None) -> str:
+    """Render LangChain `usage_metadata` as labeled counts, or `n/a` when absent.
+
+    Fields: `in`/`out` (input/output tokens); `reasoning` (output reasoning tokens, only
+    when the provider reports them, i.e. `output_token_details.reasoning` is present); and
+    `cache_read` (input tokens the provider served from its prompt cache,
+    `input_token_details.cache_read`, 0 when absent — the signal that prompt caching is
+    working). Counts only, per the logging-policy content allowlist.
+    """
+    if not usage:
+        return "n/a"
+    parts = [f"in:{usage['input_tokens']}", f"out:{usage['output_tokens']}"]
+    reasoning = (usage.get("output_token_details") or {}).get("reasoning")
+    if reasoning is not None:
+        parts.append(f"reasoning:{reasoning}")
+    cache_read = (usage.get("input_token_details") or {}).get("cache_read", 0)
+    parts.append(f"cache_read:{cache_read}")
+    return ", ".join(parts)
+
+
 class ReasoningEffortEnum(StrEnum):
     NONE = "none"
     MINIMAL = "minimal"
@@ -105,6 +126,10 @@ def get_chat_model(model_config: LLMModelConfig) -> AzureChatOpenAI:
         "azure_deployment": model_config.deployment.deployment_id,
         "max_retries": 3,
     }
+    # Drive DIAL Core's prompt-cache routing when a policy is configured; omit the header
+    # entirely otherwise so Core applies its own default.
+    if settings.llm_cache_policy is not None:
+        params["default_headers"] = {"X-DIAL-CACHE-POLICY": settings.llm_cache_policy}
     params.update(model_config.model_dump(mode="json", exclude_none=True, exclude={"deployment"}))
     _log.debug("Creating chat model with params: %s", params)
     return AzureChatOpenAI.model_validate(
