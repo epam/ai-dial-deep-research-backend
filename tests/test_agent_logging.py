@@ -60,7 +60,7 @@ async def test_model_call_event_for_final_answer(caplog: pytest.LogCaptureFixtur
     assert "agent=researcher" in text
     assert "finish=final_answer" in text
     assert f"content_length={len(message.content)}" in text
-    assert "tokens=10/5/0" in text  # in/out/cached — cached 0 when the provider reports none
+    assert "tokens=in:10, out:5, cache_read:0" in text  # cache_read 0 when provider reports none
     assert "confidential" not in text  # metadata only — never the content itself
 
 
@@ -81,7 +81,7 @@ async def test_model_call_event_reports_cached_tokens(caplog: pytest.LogCaptureF
     )
 
     [record] = caplog.records
-    assert "tokens=100/5/80" in record.getMessage()
+    assert "tokens=in:100, out:5, cache_read:80" in record.getMessage()
 
 
 async def test_model_call_event_for_tool_calls(caplog: pytest.LogCaptureFixture) -> None:

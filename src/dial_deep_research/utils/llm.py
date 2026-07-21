@@ -62,16 +62,23 @@ def stream_drop_retry_delay(retry_number: int) -> float:
 
 
 def format_token_usage(usage: Mapping[str, Any] | None) -> str:
-    """Render LangChain `usage_metadata` as `in/out/cached`, or `n/a` when absent.
+    """Render LangChain `usage_metadata` as labeled counts, or `n/a` when absent.
 
-    `cached` is the input tokens the provider served from its prompt cache
-    (`input_token_details.cache_read`), 0 when the field is missing — the signal that prompt
-    caching is working. Counts only, per the logging-policy content allowlist.
+    Fields: `in`/`out` (input/output tokens); `reasoning` (output reasoning tokens, only
+    when the provider reports them, i.e. `output_token_details.reasoning` is present); and
+    `cache_read` (input tokens the provider served from its prompt cache,
+    `input_token_details.cache_read`, 0 when absent — the signal that prompt caching is
+    working). Counts only, per the logging-policy content allowlist.
     """
     if not usage:
         return "n/a"
-    cached = (usage.get("input_token_details") or {}).get("cache_read", 0)
-    return f"{usage['input_tokens']}/{usage['output_tokens']}/{cached}"
+    parts = [f"in:{usage['input_tokens']}", f"out:{usage['output_tokens']}"]
+    reasoning = (usage.get("output_token_details") or {}).get("reasoning")
+    if reasoning is not None:
+        parts.append(f"reasoning:{reasoning}")
+    cache_read = (usage.get("input_token_details") or {}).get("cache_read", 0)
+    parts.append(f"cache_read:{cache_read}")
+    return ", ".join(parts)
 
 
 class ReasoningEffortEnum(StrEnum):

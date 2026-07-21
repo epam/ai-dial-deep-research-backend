@@ -137,16 +137,19 @@ def make_reviewer_node(today_date: str, max_iterations: int) -> ReviewerNode:
                 ),
             ]
         )
+
         if result["parsing_error"] is not None:
             raise result["parsing_error"]
         review: ResearchReview = result["parsed"]
         usage = result["raw"].usage_metadata
+
         update: dict[str, Any] = {"iteration": state["iteration"] + 1}
         plans = state["plans"]
         if review.next_steps:
             plans = [*plans, review.next_steps]
             update["plans"] = plans
             update["messages"] = [HumanMessage(content=render_next_instruction(review.next_steps))]
+
         # Verdict mirrors `route_after_review` over the post-update state, so the
         # skeleton event never disagrees with the actual routing.
         will_continue = _should_continue(

@@ -71,12 +71,23 @@ def test_format_token_usage_includes_cached_count() -> None:
         "total_tokens": 105,
         "input_token_details": {"cache_read": 80},
     }
-    assert format_token_usage(usage) == "100/5/80"
+    assert format_token_usage(usage) == "in:100, out:5, cache_read:80"
 
 
 def test_format_token_usage_defaults_cached_to_zero_without_details() -> None:
     usage = {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
-    assert format_token_usage(usage) == "10/5/0"
+    assert format_token_usage(usage) == "in:10, out:5, cache_read:0"
+
+
+def test_format_token_usage_includes_reasoning_when_present() -> None:
+    usage = {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "total_tokens": 120,
+        "output_token_details": {"reasoning": 15},
+        "input_token_details": {"cache_read": 80},
+    }
+    assert format_token_usage(usage) == "in:100, out:20, reasoning:15, cache_read:80"
 
 
 def test_format_token_usage_none_is_graceful() -> None:
