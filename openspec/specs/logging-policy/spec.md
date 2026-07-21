@@ -54,11 +54,15 @@ completed — agent name, duration, finish kind, requested tool names, content l
 when available including the cached-input-token count, owned by a model-call logging middleware
 attached to every `create_agent` graph (preparation, researcher, playground); (4) tool call
 completed — tool name, tool_call_id, duration, outcome (`success`/`error`), owned by the runner
-choke point that creates the DIAL stage; (5) iteration reviewed — iteration number, duration,
-verdict (`continue`/`report`), next-plan step count, token usage when available including the
-cached-input-token count, owned by the reviewer node; (6) report generated — duration, report
+choke point that creates the DIAL stage; (5) query clarity checked — duration, outstanding
+question count, token usage when available including the cached-input-token count, owned by the
+`update_query` preparation tool; (6) plan approval checked — duration, approval outcome, token
+usage when available including the cached-input-token count, owned by the `approve_plan`
+preparation tool; (7) iteration reviewed — iteration number, duration, verdict
+(`continue`/`report`), next-plan step count, token usage when available including the
+cached-input-token count, owned by the reviewer node; (8) report generated — duration, report
 length, token usage when available including the cached-input-token count, owned by the report
-node; (7) request completed — outcome (`completed`/`failed`), total duration, and on failure the
+node; (9) request completed — outcome (`completed`/`failed`), total duration, and on failure the
 same `error_reference` as the ERROR record. The `finish_iteration` sentinel tool SHALL NOT
 produce a tool-call event above DEBUG.
 
@@ -90,8 +94,9 @@ produce a tool-call event above DEBUG.
 
 - **WHEN** a model response reports cached input tokens (LangChain
   `usage_metadata.input_token_details["cache_read"]`)
-- **THEN** the corresponding model-call, iteration-reviewed, or report-generated event's
-  token-usage field includes the cached count (counts only — no payload content)
+- **THEN** the corresponding model-call, query-clarity-checked, plan-approval-checked,
+  iteration-reviewed, or report-generated event's token-usage field includes the cached count
+  (counts only — no payload content)
 
 #### Scenario: Usage absent stays graceful
 
