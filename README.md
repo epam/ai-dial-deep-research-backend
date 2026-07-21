@@ -110,12 +110,22 @@ make infra-config
 - `generated/models.json` is (re)written on every run: each chat/embedding model of the
   remote DIAL becomes a local deployment routed through the `ai-dial-adapter-dial` container
   with the remote as upstream. Re-run the target to refresh models.
-- **Prompt caching** relies on the model deployment having caching enabled in Core: set
-  `auto_caching_supported: true` (or `cache_supported: true`) on the deployment's `features`
-  in `models.json`. This is a Core-side deployment flag, not app config — the app only
-  shapes cache-friendly requests (stable tool ordering, `LLM_CACHE_POLICY`) and relies on
-  Core to route matching requests to the same upstream so the provider's prompt cache stays
-  warm. See the [prompt-caching tutorial](https://docs.dialx.ai/tutorials/developers/prompt-caching).
+- **Prompt caching** is enabled on the model deployment in Core, not by this app.
+  The app's only job is to keep request prefixes byte-stable — deterministic tool ordering
+  and append-only message growth — so the cache can match across calls. Cached
+  input tokens show up in the `tokens=` log field as `cache_read`. See the
+  [prompt-caching tutorial](https://docs.dialx.ai/tutorials/developers/prompt-caching).
+  - Core caching must be enabled on the deployment's `features` in one of two modes:
+    **automatic** (`autoCachingSupported`) — Core chooses the cache breakpoints, no client
+    changes needed; or **manual** (`cacheSupported`) — the client must mark breakpoints with
+    `custom_fields.cache_breakpoint` on messages and tool definitions. This app does not set
+    breakpoints, so its deployments must use automatic mode.
+  - `X-DIAL-CACHE-POLICY` header (set via `LLM_CACHE_POLICY`) only affects
+    which upstream Core routes to on a *retry*;
+    it does not turn caching on or off. `cache-priority` value keeps a retry on the
+    cache-warm upstream; `availability-priority` value sends the retry to a different upstream
+    instead. The tutorial calls it
+    `X-CACHE-POLICY`, which is not the name Core reads — use `X-DIAL-CACHE-POLICY`.
 - `generated/application-schemas.json` is (re)rendered on every run from `APP_PORT`
   (default `5000`) — the same variable the app binds to, so one `.env` entry moves both
   ends. **macOS:** AirPlay Receiver occupies port 5000; set e.g. `APP_PORT=5001` in `.env`
