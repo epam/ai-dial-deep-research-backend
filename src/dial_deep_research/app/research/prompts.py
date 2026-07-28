@@ -89,6 +89,10 @@ references a table, chart, figure, exhibit, or diagram, fetch that page in **bot
 (text + image)** via `get_page`. Text extraction drops table structure and ignores visuals.
 3. **Use `retrieve_text_chunks` only as a complement to `rag_search`** — when you need the
 underlying raw text rather than the summary.
+4. **Image budget.** The conversation can hold only a limited number of images. When that
+budget overflows, the newest image results are dropped and replaced with a tool error stating
+the numbers and the remaining image allowance. Such an error means the budget is exhausted,
+not that the tool failed transiently.
 
 ## Quality bar before calling finish_iteration
 

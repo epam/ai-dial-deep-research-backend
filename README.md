@@ -76,6 +76,7 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 | **LLM models** | | | | |
 | `LLM_MODELS_<ENUM_NAME>` | | No | Override the DIAL Core deployment id for a given `LLMModelsEnum` member. E.g. `LLM_MODELS_GPT_5_2_2025_12_11=gpt-5.2-custom-name`. | |
 | `LLM_CACHE_POLICY` | | No | When set, every LLM call sends the `X-DIAL-CACHE-POLICY` header so DIAL Core's [prompt-cache](https://docs.dialx.ai/tutorials/developers/prompt-caching) routing follows the chosen retry policy. `cache-priority` keeps retries on the cache-warm upstream; `availability-priority` fails over to another upstream. Unset sends no header (Core defaults to `availability-priority`). | `availability-priority`, `cache-priority` |
+| `MAX_CONTEXT_IMAGES` | `50` | No | Cap on image content blocks in any LLM request; overflowing image tool results are dropped and replaced with an explanatory tool error. The default matches Azure OpenAI's images-per-request limit (50, counted across the conversation history) — documented for GPT-4o/GPT-4.1 and observed on the newer models in use. Other providers differ — OpenAI's own API documents up to 1500 images / 512 MB payload per request — and the values may change over time. | positive integer |
 | **Opik tracing** | | | | |
 | `OPIK_TRACING_ENABLED` | `false` | No | Enable or disable Opik LLM tracing. | `true`, `false` |
 | `OPIK_PROJECT_NAME` | `deep-research` | No | Opik project traces are grouped under. | |

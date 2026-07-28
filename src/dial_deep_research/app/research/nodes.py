@@ -27,6 +27,8 @@ from langchain_core.messages import (
 )
 from langchain_core.tools import BaseTool
 
+from dial_deep_research.app.middleware import ImageBudgetMiddleware
+from dial_deep_research.settings import settings
 from dial_deep_research.utils.agent_logging import agent_logging_middleware
 from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.llm import (
@@ -71,6 +73,7 @@ def build_researcher_agent(tools: list[BaseTool], today_date: str, client_name: 
             *agent_logging_middleware("researcher"),
             stream_drop_retry_middleware(),
             ForceToolChoiceMiddleware(),
+            ImageBudgetMiddleware(limit=settings.max_context_images),
         ],
     )
 
