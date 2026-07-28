@@ -25,6 +25,14 @@
 - [x] 2.5 Register the middleware on the playground agent in
   `src/dial_deep_research/app/playground/agent.py` (its MCP tools can return images)
 
+## 2b. Persisted slice
+
+- [x] 2b.1 In `src/dial_deep_research/app/research/runner.py`, stream `values` alongside
+  `updates`/`messages` with `version="v2"` and assign the slice to persist from the last
+  root-namespace `values` part, replacing the append-and-dedupe collection
+- [x] 2b.2 Drop the now-dead `_unpack` helper, the `self._messages.append` calls, and the
+  persistence-only `HumanMessage` branch; keep `_already_seen` for the live output
+
 ## 3. Prompt
 
 - [x] 3.1 Add one sentence to `RESEARCHER_SYSTEM_PROMPT` in
@@ -44,6 +52,9 @@
   substituted purely by image content
 - [x] 4.3a Test the id-less skip: no update, a WARNING for the skip and for the resulting
   shortfall, and the walk still reaching an older substitutable message
+- [x] 4.3b Test the persisted slice in `tests/test_research_dispatch.py`: the last root
+  `values` part wins, subgraph `values` are ignored, and a substituted message reaches the
+  slice even though `updates` only ever showed the original
 - [x] 4.4 Test budget override: small `max_context_images` value drives enforcement
 
 ## 5. Verify

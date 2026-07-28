@@ -18,6 +18,9 @@ image tool results across iterations and turns, so long runs inevitably cross th
   image slots remain (or that the budget is fully used).
 - The substitution is a state update (same message id), so later researcher calls in the
   turn and the report node inherit the clamped history.
+- `ResearchRunner` takes the slice it persists from the graph's final state (the last root
+  `values` stream part) instead of accumulating stream updates, so in-place substitutions
+  reach `custom_content.state` too. Stream parts move to `version="v2"` for a uniform shape.
 - Add one sentence to the researcher system prompt introducing the image budget.
 - Tool-agnostic by design: no tool names or argument patterns are configured; only
   returned image content is counted.
@@ -42,6 +45,8 @@ image tool results across iterations and turns, so long runs inevitably cross th
   — register the middleware on the researcher and playground agents.
 - `src/dial_deep_research/app/research/prompts.py` — researcher prompt line about the
   budget.
+- `src/dial_deep_research/app/research/runner.py` — persist the graph's final state instead
+  of accumulated stream updates; adopt the `version="v2"` stream-part shape.
 - `src/dial_deep_research/settings.py` + README env table — new `max_context_images`
   setting (`MAX_CONTEXT_IMAGES`, default 50).
 - Tests for the clamp walk, message rendering, and the persistence of substitutions.

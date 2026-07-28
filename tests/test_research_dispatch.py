@@ -2,8 +2,11 @@
 
 Exercise the routing logic without a live graph: only the report node's tokens
 become content, researcher tool calls become stages (finish_iteration excluded),
-reviewer-injected plans are persisted not shown, and messages arriving twice (from
-the subgraph and the parent aggregate) are processed once.
+reviewer-injected plans are not shown, and messages arriving twice (from the
+subgraph and the parent aggregate) are processed once.
+
+Persistence is a separate path — the slice comes from the root `values` parts, not
+from the updates that drive the live output.
 """
 
 from __future__ import annotations
@@ -76,11 +79,10 @@ def test_research_tool_call_emits_stage_finish_iteration_does_not() -> None:
     assert all("finish_iteration" not in t for t in choice.stage_titles)
 
 
-def test_injected_plan_is_persisted_not_shown() -> None:
+def test_injected_plan_is_not_shown() -> None:
     runner, choice = _make_runner()
     runner._handle_updates({"reviewer": {"messages": [HumanMessage(content="next plan")]}})
     assert choice.content == ""
-    assert any(isinstance(m, HumanMessage) for m in runner._messages)
 
 
 def test_duplicate_messages_processed_once() -> None:
@@ -94,4 +96,41 @@ def test_duplicate_messages_processed_once() -> None:
     runner._handle_updates({"tools": {"messages": [tool_msg]}})
     runner._handle_updates({"researcher": {"messages": [ai, tool_msg]}})
     assert len(choice.stage_titles) == 1
-    assert sum(isinstance(m, ToolMessage) for m in runner._messages) == 1
+
+
+def _values(messages: list[Any], ns: tuple[str, ...] = ()) -> dict[str, Any]:
+    return {"type": "values", "ns": ns, "data": {"messages": messages}}
+
+
+def test_persisted_slice_comes_from_the_last_root_values() -> None:
+    """Each root `values` part replaces the slice, so the final state is what persists."""
+    runner, _ = _make_runner()
+    first = [HumanMessage(content="q"), AIMessage(content="a")]
+    final = [*first, HumanMessage(content="plan 2"), AIMessage(content="the report")]
+    runner._handle_part(_values(first))
+    runner._handle_part(_values(final))
+    assert runner._messages == final
+
+
+def test_subgraph_values_do_not_overwrite_the_persisted_slice() -> None:
+    """A subgraph's state has no reviewer or report messages — only the root's counts."""
+    runner, _ = _make_runner()
+    root = [HumanMessage(content="q"), AIMessage(content="the report")]
+    runner._handle_part(_values(root))
+    runner._handle_part(_values([HumanMessage(content="q")], ns=("researcher:abc",)))
+    assert runner._messages == root
+
+
+def test_substituted_message_reaches_the_persisted_slice() -> None:
+    """An in-place edit is invisible in `updates` but present in the final state.
+
+    The image-budget middleware replaces a tool result under its original id; the
+    original arrives first from the subgraph, so replaying updates would keep it.
+    """
+    runner, _ = _make_runner()
+    original = ToolMessage(content=[{"type": "image"}], tool_call_id="call_1", id="tm1")
+    substituted = ToolMessage(content="dropped", tool_call_id="call_1", id="tm1", status="error")
+    runner._handle_updates({"tools": {"messages": [original]}})
+    runner._handle_updates({"ImageBudget.before_model": {"messages": [substituted]}})
+    runner._handle_part(_values([substituted]))
+    assert runner._messages == [substituted]

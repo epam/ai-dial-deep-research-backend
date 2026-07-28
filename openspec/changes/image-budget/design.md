@@ -37,10 +37,6 @@ replaces by id) — confirmed end-to-end with `create_agent` on langchain 1.3.12
 - The budget is a spec-level invariant that future architecture changes must respect.
 
 **Non-Goals:**
-- No clamping of the slice persisted into `custom_content.state`: `ResearchRunner` collects
-  that slice from the stream on its own path, which the substitution does not reach (see
-  Risks). Nothing reads a research transcript back today, so this costs uploads, not
-  correctness.
 - No intent-based gating of tool calls before execution (would require configuring tool
   names/argument patterns per deployment; content-based checking observes what actually
   came back).
@@ -70,14 +66,39 @@ batch has landed in state (`ToolNode` gathers results and appends them in `tool_
 order as one update), so there is no per-call race. Substituting via a state update (same
 message id) makes the fix stick for the rest of the turn: later researcher calls and the
 report node (which does not pass through researcher middleware) both inherit the clamped
-history. It does not reach the persisted DIAL state, which `ResearchRunner` collects on a
-separate path — see Risks.
+history, and so does the slice persisted into `custom_content.state` — see the next
+decision.
 
 Alternatives rejected:
 - `awrap_tool_call` (before or after execution): each wrapper sees only its own call;
   parallel siblings cannot see each other's results, so the budget can overshoot.
 - `awrap_model_call`: same visibility, but edits only the outgoing request copy — the
   rewrite would need recomputing on every call, and the report node would need its own.
+
+### Persist the graph's final state, not the collected stream updates
+
+`ResearchRunner` used to build the slice it persists by appending every message it saw on
+the stream, deduped by id (`_already_seen`) because the same message arrives from both the
+subgraph and the parent aggregate. A substitution reuses the original's id on purpose, so
+that dedupe skipped it and the persisted slice kept the image-carrying original — the
+images were uploaded to DIAL files and stored in `custom_content.state`, even though no LLM
+request ever carried them.
+
+The runner now streams `values` alongside `updates` and assigns the slice from the last
+root-namespace `values` part: the graph's final state, where `add_messages` has already
+applied every in-place edit. The two modes get distinct jobs — `updates` and `messages`
+drive the live DIAL output (they arrive from inside the subgraph, well before the parent
+re-emits them, which is what keeps stages live), `values` supplies what gets persisted.
+`_already_seen` stays, for the live output only.
+
+Collecting root-namespace `updates` instead was rejected: a compiled subgraph used as a node
+returns its *entire* state, not a delta, so the researcher's update re-emits every earlier
+message on each iteration. That needs id-based dedupe again — the mechanism that caused the
+bug.
+
+The stream uses `version="v2"`, which gives every part the same `{type, ns, data}` shape
+regardless of mode count or subgraphs, so the runner no longer normalises 2- and 3-tuples by
+hand.
 
 ### Count content, not intent
 
@@ -138,10 +159,7 @@ override it with a small value instead of building 51-image fixtures.
 - [Bottom-up can over-drop: a small result that would individually fit is dropped because
   it sits above a large one] → accepted for simplicity; the remaining-allowance message
   tells the agent how many images it may re-fetch.
-- [Dropped images still land in the persisted DIAL state] → `ResearchRunner._already_seen`
-  dedupes streamed messages by id, so the substitution — deliberately carrying the original
-  id — is skipped and the collected slice keeps the image-carrying message. The clamp holds
-  for every LLM request, which is what issue #25 needs; the cost is uploading images the
-  agent no longer sees. Harmless while no path reads a research transcript back, but the
-  runner would have to replace-by-id for the budget to hold if one ever does.
+- [The persisted slice now depends on `values` parts arriving] → if a future change drops
+  `values` from the stream modes or the root-namespace check, the runner silently persists
+  an empty slice rather than a stale one. Covered by tests on `_handle_part`.
 - [Provider limit changes] → single setting to adjust.

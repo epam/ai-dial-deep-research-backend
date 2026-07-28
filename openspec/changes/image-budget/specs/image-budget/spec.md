@@ -43,7 +43,9 @@ exceeds the budget, it SHALL substitute image-carrying tool messages with error 
 stopping as soon as the total is within the budget. Enforcement SHALL be tool-agnostic: it
 SHALL count image blocks in returned content and SHALL NOT depend on tool names or tool-call
 arguments. The substitution SHALL be a state update on the agent's messages, so later model
-calls in the same turn and the report node see the substituted messages.
+calls in the same turn and the report node see the substituted messages. The slice persisted
+into `custom_content.state` SHALL be taken from the graph's final state, so it carries the
+substituted messages rather than the originals.
 
 #### Scenario: Parallel batch overflows
 - **WHEN** the conversation holds 49 images against a budget of 50 and one tool round
@@ -60,6 +62,11 @@ calls in the same turn and the report node see the substituted messages.
 - **WHEN** tool messages are substituted and the turn later reaches the report node
 - **THEN** the report request SHALL contain the substituted error messages, not the
   original images
+
+#### Scenario: Substitution reaches the persisted state
+- **WHEN** tool messages are substituted and the turn is persisted
+- **THEN** the slice written to `custom_content.state` SHALL contain the substituted error
+  messages, and the dropped images SHALL NOT be uploaded to DIAL files
 
 ### Requirement: Substituted messages explain the drop and the remaining allowance
 
