@@ -97,6 +97,20 @@ tools or tool arguments.
 - **THEN** the terminal message SHALL state the budget is fully used and instruct the
   agent not to fetch more images
 
+### Requirement: Substitutions are not surfaced in the UI
+
+Substituted tool messages SHALL NOT be surfaced in the DIAL stages: the stage rendered for a
+tool call keeps the result the tool actually returned, and a later substitution SHALL NOT add
+a second stage or rewrite the first. The budget governs what the model sees, so the user's
+view stays a truthful record of what the tool returned. Surfacing a drop in the UI is out of
+scope here and MAY be added later if the silence proves confusing in practice.
+
+#### Scenario: A substituted result adds no stage
+- **WHEN** a tool result has been rendered as a DIAL stage and the image budget then
+  substitutes that result
+- **THEN** no additional stage SHALL appear, and the rendered stage SHALL still show the
+  original result
+
 ### Requirement: Researcher prompt discloses the image budget
 
 The researcher system prompt SHALL mention that a conversation-wide image budget exists and

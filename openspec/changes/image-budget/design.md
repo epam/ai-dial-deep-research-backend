@@ -159,6 +159,10 @@ override it with a small value instead of building 51-image fixtures.
 - [Bottom-up can over-drop: a small result that would individually fit is dropped because
   it sits above a large one] → accepted for simplicity; the remaining-allowance message
   tells the agent how many images it may re-fetch.
+- [The user cannot tell that a page image was dropped] → the DIAL stage shows what the tool
+  returned and the substitution is invisible there; only the model is told. Accepted for now
+  (the budget is a model-context concern), and reversible — surfacing it means rendering the
+  substituted message instead of skipping it as an already-seen id.
 - [The persisted slice now depends on `values` parts arriving] → if a future change drops
   `values` from the stream modes or the root-namespace check, the runner silently persists
   an empty slice rather than a stale one. Covered by tests on `_handle_part`.

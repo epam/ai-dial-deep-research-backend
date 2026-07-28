@@ -55,6 +55,8 @@
 - [x] 4.3b Test the persisted slice in `tests/test_research_dispatch.py`: the last root
   `values` part wins, subgraph `values` are ignored, and a substituted message reaches the
   slice even though `updates` only ever showed the original
+- [x] 4.3c Test that a substituted result adds no DIAL stage and leaves the rendered one
+  showing the original tool output
 - [x] 4.4 Test budget override: small `max_context_images` value drives enforcement
 
 ## 5. Verify

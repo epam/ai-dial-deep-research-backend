@@ -31,6 +31,7 @@ class _ChoiceSpy:
     def __init__(self) -> None:
         self.content = ""
         self.stage_titles: list[str] = []
+        self.stages: list[_StageSpy] = []
 
     def append_content(self, text: str) -> None:
         self.content += text
@@ -38,7 +39,9 @@ class _ChoiceSpy:
     @contextmanager
     def create_stage(self, title: str) -> Any:
         self.stage_titles.append(title)
-        yield _StageSpy()
+        stage = _StageSpy()
+        self.stages.append(stage)
+        yield stage
 
 
 def _make_runner() -> tuple[ResearchRunner, _ChoiceSpy]:
@@ -96,6 +99,22 @@ def test_duplicate_messages_processed_once() -> None:
     runner._handle_updates({"tools": {"messages": [tool_msg]}})
     runner._handle_updates({"researcher": {"messages": [ai, tool_msg]}})
     assert len(choice.stage_titles) == 1
+
+
+def test_substituted_result_adds_no_stage() -> None:
+    """The drop is a model-context concern; the stage keeps what the tool returned."""
+    runner, choice = _make_runner()
+    ai = AIMessage(
+        content="", tool_calls=[{"name": "get_page", "args": {}, "id": "call_1"}], id="am1"
+    )
+    original = ToolMessage(content="page text", tool_call_id="call_1", id="tm1")
+    substituted = ToolMessage(content="dropped", tool_call_id="call_1", id="tm1", status="error")
+    runner._handle_updates({"model": {"messages": [ai]}})
+    runner._handle_updates({"tools": {"messages": [original]}})
+    runner._handle_updates({"ImageBudget.before_model": {"messages": [substituted]}})
+    assert len(choice.stages) == 1
+    assert "page text" in choice.stages[0].body
+    assert "dropped" not in choice.stages[0].body
 
 
 def _values(messages: list[Any], ns: tuple[str, ...] = ()) -> dict[str, Any]:
