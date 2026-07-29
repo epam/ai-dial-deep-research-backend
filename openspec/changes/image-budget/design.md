@@ -1,16 +1,13 @@
 ## Context
 
-Issue #25: the models we currently use reject any request carrying more than 50 images.
-That matches Azure OpenAI's documented limit — "GPT-4o and GPT-4.1 maximum images per
-request (number of images in the messages array or conversation history): 50" — alongside
-a 20 MB per-input-image size limit. The doc row names only GPT-4o / GPT-4.1 and lags the
-model lineup: we run newer model families and observe the same 50 there. OpenAI's own API
-is far more permissive (up to 1500 image inputs and 512 MB total payload per request), so
-the 50 is platform-specific, and both docs note limits may change over time. Doc URLs are
-cited in the image-budget spec. Two call sites can exceed it: every researcher model call
-(the `create_agent` history accumulates image tool results across the turn's iterations) and
-the report node (it sends the full `state["messages"]` transcript). The reviewer is safe — it
-renders findings as text.
+Issue #25: the models we currently use reject any request carrying more than 50 images. The
+limit is counted across the whole conversation history, is platform-specific, and may change
+over time — the image-budget spec records the numbers, the sources, and why the budget is
+configurable rather than hard-coded.
+
+Two call sites can exceed it: every researcher model call (the `create_agent` history
+accumulates image tool results across the turn's iterations) and the report node (it sends the
+full `state["messages"]` transcript). The reviewer is safe — it renders findings as text.
 
 Images accumulate within one turn only, never across turns. The research graph starts from
 `build_initial_state(prep_state)`, not from the reconstructed history; once `research_started`

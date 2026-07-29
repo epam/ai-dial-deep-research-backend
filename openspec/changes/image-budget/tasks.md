@@ -33,6 +33,16 @@
 - [x] 2b.2 Drop the now-dead `_unpack` helper, the `self._messages.append` calls, and the
   persistence-only `HumanMessage` branch; keep `_already_seen` for the live output
 
+## 2c. Cleanups
+
+- [x] 2c.1 Move the image-block predicate to `utils/content.py` (`is_image_block`,
+  `count_image_blocks`) and use it from the middleware, `research/nodes.py` and
+  `utils/image_attachments.py` instead of three inline copies
+- [x] 2c.2 Move the playground runner to the `version="v2"` stream-part shape, matching the
+  research runner
+- [x] 2c.3 Keep the provider-limit rationale in the spec only; shorten the README row and the
+  `settings.py` comment to what a reader needs to act on
+
 ## 3. Prompt
 
 - [x] 3.1 Add one sentence to `RESEARCHER_SYSTEM_PROMPT` in
@@ -58,6 +68,9 @@
 - [x] 4.3c Test that a substituted result adds no DIAL stage and leaves the rendered one
   showing the original tool output
 - [x] 4.4 Test budget override: small `max_context_images` value drives enforcement
+- [x] 4.5 Test that the sync-only `before_model` still runs under `ainvoke` (production is
+  async and relies on langgraph's executor fallback), and that `ge=1` rejects a 0 budget
+- [x] 4.6 Unit-test `is_image_block` / `count_image_blocks` in `tests/test_content.py`
 
 ## 5. Verify
 

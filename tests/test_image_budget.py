@@ -14,6 +14,7 @@ from langchain.agents import create_agent
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
+from pydantic import ValidationError
 
 from dial_deep_research.app.middleware import ImageBudgetMiddleware
 from dial_deep_research.settings import Settings
@@ -158,6 +159,13 @@ def test_max_context_images_default(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().max_context_images == 50
 
 
+def test_max_context_images_rejects_below_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A budget of 0 would drop every image result; `ge=1` refuses it at startup."""
+    monkeypatch.setenv("MAX_CONTEXT_IMAGES", "0")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
 @tool
 def fetch_images() -> list[dict[str, Any]]:
     """Return two images."""
@@ -174,13 +182,30 @@ def _scripted_responses() -> Iterator[AIMessage]:
     yield AIMessage(content="done")
 
 
-def test_substitution_replaces_in_state_end_to_end() -> None:
-    agent = create_agent(
+def _budget_agent() -> Any:
+    return create_agent(
         model=_FakeToolCallingModel(messages=_scripted_responses()),
         tools=[fetch_images],
         middleware=[ImageBudgetMiddleware(limit=1)],
     )
-    result = agent.invoke({"messages": [HumanMessage(content="hi")]})
+
+
+async def test_sync_only_hook_still_runs_on_async_invoke() -> None:
+    """Production is async; `before_model` is sync-only and relies on langgraph's fallback.
+
+    `create_agent` wraps the hook in a `RunnableCallable` with no async variant, which runs
+    the sync fn in an executor. Nothing in this repo would catch that contract changing.
+    """
+    result = await _budget_agent().ainvoke({"messages": [HumanMessage(content="hi")]})
+
+    tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
+    assert len(tool_messages) == 1
+    assert tool_messages[0].status == "error"
+    assert "Tool result dropped: it contained 2 image(s)" in tool_messages[0].content
+
+
+def test_substitution_replaces_in_state_end_to_end() -> None:
+    result = _budget_agent().invoke({"messages": [HumanMessage(content="hi")]})
 
     tool_messages = [m for m in result["messages"] if isinstance(m, ToolMessage)]
     assert len(tool_messages) == 1  # replaced, not appended

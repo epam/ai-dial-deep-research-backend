@@ -11,8 +11,10 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import AgentState
-from langchain_core.messages import BaseMessage, ToolMessage
+from langchain_core.messages import ToolMessage
 from langgraph.runtime import Runtime
+
+from dial_deep_research.utils.content import count_image_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +37,6 @@ class ImageBudgetMiddleware(AgentMiddleware):
     def __init__(self, *, limit: int) -> None:
         super().__init__()
         self._limit = limit
-
-    @staticmethod
-    def _count_image_blocks(message: BaseMessage) -> int:
-        content = message.content
-        if not isinstance(content, list):
-            return 0
-        return sum(1 for b in content if isinstance(b, dict) and b.get("type") == "image")
 
     def _render_drop_text(self, *, num_images: int, cum: int) -> str:
         """The error text for one dropped tool result.
@@ -69,7 +64,7 @@ class ImageBudgetMiddleware(AgentMiddleware):
 
     def before_model(self, state: AgentState, runtime: Runtime[Any]) -> dict[str, Any] | None:
         messages = state["messages"]
-        total = sum(self._count_image_blocks(m) for m in messages)
+        total = sum(count_image_blocks(m.content) for m in messages)
         if total <= self._limit:
             return None
 
@@ -80,7 +75,7 @@ class ImageBudgetMiddleware(AgentMiddleware):
                 break
             if not isinstance(message, ToolMessage):
                 continue
-            num_images = self._count_image_blocks(message)
+            num_images = count_image_blocks(message.content)
             if num_images == 0:
                 continue
             if message.id is None:

@@ -61,11 +61,9 @@ class Settings(BaseSettings):
     # applies its own default (`availability-priority`).
     llm_cache_policy: CachePolicy | None = None
 
-    # Cap on image content blocks in any LLM request (see the image-budget spec). The
-    # default matches Azure OpenAI's images-per-request limit (50, counted across the
-    # conversation history) — documented for GPT-4o/GPT-4.1 and observed on the newer
-    # models we run. Other providers differ — OpenAI's own API documents up to 1500 images
-    # / 512 MB payload per request — and the values may change over time.
+    # Cap on image content blocks in any LLM request. The default is the provider's
+    # per-request limit; the image-budget spec records where it comes from and why it is
+    # configurable.
     max_context_images: int = Field(default=50, ge=1)
 
     # When true, also register the playground chat completion (a single tool-calling agent over
