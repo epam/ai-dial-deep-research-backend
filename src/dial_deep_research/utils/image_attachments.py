@@ -26,6 +26,8 @@ from urllib.parse import urlsplit, urlunsplit
 from aidial_client import AsyncDial
 from langchain_core.messages import BaseMessage, ToolMessage
 
+from dial_deep_research.utils.content import is_image_block
+
 logger = logging.getLogger(__name__)
 
 _BUCKET_PREFIX = "dial-deep-research"
@@ -68,7 +70,7 @@ def _iter_image_blocks(
         if not isinstance(content, list):
             continue
         for content_idx, block in enumerate(content):
-            if isinstance(block, dict) and block.get("type") == "image":
+            if is_image_block(block):
                 yield msg, content_idx, block
 
 

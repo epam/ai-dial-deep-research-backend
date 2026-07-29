@@ -6,6 +6,9 @@ become the user-visible assistant content. Researcher reasoning and reviewer
 structured output are not streamed to content. Persistence is the caller's job —
 `run` returns the research message slice for the coordinator to persist with the
 preparation slice.
+
+The two stream modes have distinct jobs: `updates` and `messages` drive the live
+output, `values` supplies the slice to persist. See `_handle_part`.
 """
 
 from __future__ import annotations
@@ -20,9 +23,9 @@ from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     BaseMessage,
-    HumanMessage,
     ToolMessage,
 )
+from langgraph.types import StreamPart
 
 from dial_deep_research.app.history import PrepState
 from dial_deep_research.app.mcp_tools import load_mcp_tools
@@ -82,31 +85,39 @@ class ResearchRunner:
         if opik_tracer is not None:
             config["callbacks"] = [opik_tracer]
 
-        async for item in graph.astream(
+        async for part in graph.astream(
             build_initial_state(prep_state),
-            stream_mode=["updates", "messages"],
+            stream_mode=["updates", "messages", "values"],
             subgraphs=True,
+            version="v2",
             config=config,
         ):
-            namespace, mode, data = self._unpack(item)
-            if mode == "updates":
-                self._handle_updates(data)
-            elif mode == "messages":
-                chunk, metadata = data
-                self._handle_message_chunk(chunk, metadata)
+            self._handle_part(part)
         return self._messages
 
-    @staticmethod
-    def _unpack(item: tuple) -> tuple[tuple, str, Any]:
-        """Normalise a stream item to `(namespace, mode, data)`.
+    def _handle_part(self, part: StreamPart) -> None:
+        """Route one stream part by mode.
 
-        With `subgraphs=True` and a list `stream_mode`, items are 3-tuples; the
-        2-tuple fallback covers a no-subgraph shape.
+        `version="v2"` gives every part the same `{type, ns, data}` shape, whatever the
+        mode or namespace.
+
+        `updates` and `messages` drive the live output. They arrive per node, including
+        from inside the researcher subgraph — well before the parent re-emits them — which
+        is what keeps the stages live.
+
+        `values` carries the whole root state after each super-step, so the last one is the
+        turn's final transcript. Taking it wholesale is what lets an in-place edit reach the
+        persisted slice: the image-budget middleware substitutes a tool result under its
+        original id, and collecting `updates` instead would only ever see the superseded
+        original. `ns` must be empty — a subgraph's state has no reviewer or report messages.
         """
-        if len(item) == 3:
-            return item
-        mode, data = item
-        return (), mode, data
+        if part["type"] == "updates":
+            self._handle_updates(part["data"])
+        elif part["type"] == "messages":
+            chunk, metadata = part["data"]
+            self._handle_message_chunk(chunk, metadata)
+        elif part["type"] == "values" and not part["ns"]:
+            self._messages = part["data"]["messages"]
 
     def _handle_updates(self, data: dict[str, Any]) -> None:
         for node_update in data.values():
@@ -119,12 +130,10 @@ class ResearchRunner:
                     self._handle_ai_message(msg)
                 elif isinstance(msg, ToolMessage):
                     self._handle_tool_message(msg)
-                elif isinstance(msg, HumanMessage):
-                    # Reviewer-injected next-iteration plan: persisted, not shown.
-                    self._messages.append(msg)
 
     def _already_seen(self, msg: BaseMessage) -> bool:
-        """Dedupe messages that arrive both from the subgraph and the parent aggregate."""
+        """Dedupe the live output for messages arriving from both the subgraph and the
+        parent aggregate. Persistence does not go through here — it reads the final state."""
         key = msg.id or f"{id(msg)}"
         if key in self._seen_ids:
             return True
@@ -132,7 +141,6 @@ class ResearchRunner:
         return False
 
     def _handle_ai_message(self, msg: AIMessage) -> None:
-        self._messages.append(msg)
         if msg.tool_calls:
             start = datetime.now()
             for tc in msg.tool_calls:
@@ -145,7 +153,6 @@ class ResearchRunner:
                 )
 
     def _handle_tool_message(self, msg: ToolMessage) -> None:
-        self._messages.append(msg)
         tool_call = self._pending_tool_calls.pop(msg.tool_call_id, None)
         if tool_call is None:
             # No matching pending call (e.g. a duplicated emission already staged); skip.

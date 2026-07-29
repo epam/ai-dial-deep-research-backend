@@ -61,6 +61,11 @@ class Settings(BaseSettings):
     # applies its own default (`availability-priority`).
     llm_cache_policy: CachePolicy | None = None
 
+    # Cap on image content blocks in any LLM request. The default is the provider's
+    # per-request limit; the image-budget spec records where it comes from and why it is
+    # configurable.
+    max_context_images: int = Field(default=50, ge=1)
+
     # When true, also register the playground chat completion (a single tool-calling agent over
     # the configured MCP servers, no clarification/research flow) for testing MCP tools.
     enable_playground_channel: bool = False

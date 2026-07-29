@@ -90,11 +90,16 @@ class PlaygroundRunner:
         )
         config: dict[str, Any] = {"callbacks": [opik_tracer]} if opik_tracer is not None else {}
 
-        async for mode, payload in agent.astream(
-            {"messages": history}, stream_mode=["updates", "messages"], config=config
+        # `version="v2"` gives every part the same `{type, ns, data}` shape. The agent is
+        # streamed directly rather than as a subgraph, so `ns` is always empty here.
+        async for part in agent.astream(
+            {"messages": history},
+            stream_mode=["updates", "messages"],
+            version="v2",
+            config=config,
         ):
-            if mode == "updates":
-                for node_update in payload.values():
+            if part["type"] == "updates":
+                for node_update in part["data"].values():
                     if node_update is None:
                         continue
                     for msg in node_update.get("messages") or []:
@@ -102,8 +107,8 @@ class PlaygroundRunner:
                             self._handle_ai_message(msg)
                         elif isinstance(msg, ToolMessage):
                             self._handle_tool_message(msg)
-            elif mode == "messages":
-                chunk, metadata = payload
+            elif part["type"] == "messages":
+                chunk, metadata = part["data"]
                 self._handle_message_chunk(chunk, metadata)
 
     def _handle_ai_message(self, msg: AIMessage) -> None:

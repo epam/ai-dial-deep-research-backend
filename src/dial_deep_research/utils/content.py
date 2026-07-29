@@ -1,8 +1,25 @@
-"""Flatten LangChain message/chunk content (str or list-of-blocks) to plain text."""
+"""Read LangChain message/chunk content, which may be a `str` or a list of blocks."""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypeGuard
+
+
+def is_image_block(block: Any) -> TypeGuard[dict[str, Any]]:
+    """True for a LangChain v1 image content block.
+
+    Dict-only on purpose: the MCP adapter builds these blocks as `TypedDict`s, and a
+    round-trip through `custom_content.state` is JSON, so they stay dicts either way.
+    A `TypeGuard` so callers that go on to read the block keep their dict narrowing.
+    """
+    return isinstance(block, dict) and block.get("type") == "image"
+
+
+def count_image_blocks(content: Any) -> int:
+    """Number of image blocks in message content; 0 when content is not a list."""
+    if not isinstance(content, list):
+        return 0
+    return sum(1 for block in content if is_image_block(block))
 
 
 def extract_text_from_content(content: Any) -> str:

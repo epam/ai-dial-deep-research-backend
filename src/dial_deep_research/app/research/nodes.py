@@ -27,8 +27,10 @@ from langchain_core.messages import (
 )
 from langchain_core.tools import BaseTool
 
+from dial_deep_research.app.middleware import ImageBudgetMiddleware
+from dial_deep_research.settings import settings
 from dial_deep_research.utils.agent_logging import agent_logging_middleware
-from dial_deep_research.utils.content import extract_text_from_content
+from dial_deep_research.utils.content import count_image_blocks, extract_text_from_content
 from dial_deep_research.utils.llm import (
     STREAM_DROP_MAX_ATTEMPTS,
     TRANSIENT_STREAM_DROP_ERRORS,
@@ -71,6 +73,7 @@ def build_researcher_agent(tools: list[BaseTool], today_date: str, client_name: 
             *agent_logging_middleware("researcher"),
             stream_drop_retry_middleware(),
             ForceToolChoiceMiddleware(),
+            ImageBudgetMiddleware(limit=settings.max_context_images),
         ],
     )
 
@@ -92,10 +95,7 @@ def _render_findings(messages: list[BaseMessage]) -> str:
                 lines.append(f"NOTE: {text}")
         elif isinstance(message, ToolMessage):
             text = extract_text_from_content(message.content).strip()
-            has_image = isinstance(message.content, list) and any(
-                isinstance(b, dict) and b.get("type") == "image" for b in message.content
-            )
-            suffix = " [+image]" if has_image else ""
+            suffix = " [+image]" if count_image_blocks(message.content) else ""
             lines.append(f"RESULT:{suffix}\n{text or '(no text content)'}")
     return "\n\n".join(lines)
 

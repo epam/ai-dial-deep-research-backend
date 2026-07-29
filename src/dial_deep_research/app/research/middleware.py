@@ -4,6 +4,8 @@
 `"any"` so the researcher can never emit a free-form assistant message — every step
 is either an MCP tool call or `finish_iteration`. This removes any path for the model
 to write a premature summary or report; the report is a separate node.
+
+Shared middleware (the image budget) lives in `app/middleware.py`.
 """
 
 from __future__ import annotations
