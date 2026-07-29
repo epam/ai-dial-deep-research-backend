@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langgraph.types import ValuesStreamPart
 
 from dial_deep_research.app.research.runner import ResearchRunner
 
@@ -117,8 +118,9 @@ def test_substituted_result_adds_no_stage() -> None:
     assert "dropped" not in choice.stages[0].body
 
 
-def _values(messages: list[Any], ns: tuple[str, ...] = ()) -> dict[str, Any]:
-    return {"type": "values", "ns": ns, "data": {"messages": messages}}
+def _values(messages: list[Any], ns: tuple[str, ...] = ()) -> ValuesStreamPart[Any]:
+    """A `stream_mode="values"` part as the graph emits it under `version="v2"`."""
+    return ValuesStreamPart(type="values", ns=ns, data={"messages": messages}, interrupts=())
 
 
 def test_persisted_slice_comes_from_the_last_root_values() -> None:

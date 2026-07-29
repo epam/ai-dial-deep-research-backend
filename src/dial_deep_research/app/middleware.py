@@ -101,16 +101,6 @@ class ImageBudgetMiddleware(AgentMiddleware):
             )
             cum -= num_images
 
-        # Reachable only when some images sit outside a substitutable tool message (not in a
-        # `ToolMessage`, or in one with no id). The for-loop above makes such a state degrade
-        # to a log line, not a hang.
-        if cum > self._limit:
-            logger.warning(
-                "Image budget still exceeded after substituting every eligible image tool "
-                "message: kept=%d limit=%d",
-                cum,
-                self._limit,
-            )
         logger.info(
             "Image budget exceeded: total=%d limit=%d dropped_messages=%d dropped_images=%d "
             "kept=%d",
@@ -120,4 +110,15 @@ class ImageBudgetMiddleware(AgentMiddleware):
             total - cum,
             cum,
         )
+        # Reachable only when some images sit outside a substitutable tool message (not in a
+        # `ToolMessage`, or in one with no id). The for-loop above makes such a state degrade
+        # to a log line, not a hang. Logged after the summary so the counts explaining the
+        # shortfall come first.
+        if cum > self._limit:
+            logger.warning(
+                "Image budget still exceeded after substituting every eligible image tool "
+                "message: kept=%d limit=%d",
+                cum,
+                self._limit,
+            )
         return {"messages": substituted} if substituted else None

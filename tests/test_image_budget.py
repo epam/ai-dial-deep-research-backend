@@ -32,7 +32,7 @@ def _tool_message(msg_id: str, *, num_images: int, name: str = "some_tool") -> T
 
 def _clamp(messages: list[BaseMessage], *, limit: int) -> dict[str, Any] | None:
     middleware = ImageBudgetMiddleware(limit=limit)
-    return middleware.before_model({"messages": messages}, None)  # type: ignore[arg-type]
+    return middleware.before_model({"messages": messages}, None)  # type: ignore[arg-type, typeddict-item]
 
 
 def test_noop_within_budget() -> None:
