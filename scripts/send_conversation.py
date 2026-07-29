@@ -31,6 +31,12 @@ never corrupts existing history. (`overwrite` clears up front by design.)
 The target deployment is the application instance registered in DIAL Core, passed via
 `--deployment`.
 
+Requests stream (`stream: true`), like DIAL Chat. This matters for long turns: the app
+emits keep-alive heartbeats only on the streaming path, and without them DIAL Core sees an
+idle connection and closes it (its default client idle timeout is 300s), which surfaces
+here as `Server disconnected without sending a response`. `--no-stream` sends one blocking
+request instead — fine for short turns, and the way to exercise that path.
+
 Usage (from the repo root):
   poetry run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite -d deep-research-acme
   poetry run python scripts/send_conversation.py "and which one searches docs?" -f conv.json -m continue -d deep-research-acme
@@ -43,11 +49,19 @@ import hashlib
 import json
 import os
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import dotenv
 import httpx
 
+# Reassemble a streamed reply the way the SDK itself builds a blocking one, rather than
+# hand-rolling delta accumulation: `aidial_sdk.utils.streaming.merge_chunks` merges every
+# chunk and then runs `cleanup_indices` over the result. See `reply_from_chunks`.
+from aidial_sdk.utils.merge_chunks import cleanup_indices, merge
+
+# Streaming makes this a per-read gap, not a budget for the whole turn: with heartbeats
+# arriving every few seconds, only a stall longer than this trips it.
 DEFAULT_TIMEOUT = 300
 
 
@@ -81,7 +95,15 @@ def parse_args() -> argparse.Namespace:
         "--timeout",
         type=float,
         default=DEFAULT_TIMEOUT,
-        help=f"request timeout in seconds (default: {DEFAULT_TIMEOUT})",
+        help=(
+            f"timeout in seconds (default: {DEFAULT_TIMEOUT}); when streaming this bounds "
+            "the gap between chunks, not the whole turn"
+        ),
+    )
+    parser.add_argument(
+        "--no-stream",
+        action="store_true",
+        help="send stream=false (one blocking JSON reply); see the module docstring",
     )
     return parser.parse_args()
 
@@ -117,11 +139,56 @@ def conversation_id_for(path: Path) -> str:
     return f"send-conv-{digest}"
 
 
+def iter_sse_chunks(response: httpx.Response) -> Iterator[dict]:
+    """Yield the parsed `data:` payloads of an SSE response.
+
+    Heartbeats arrive as SSE comments (`: heartbeat`) and carry no payload, so they are
+    skipped here — their only job is keeping bytes on the wire.
+    """
+    for line in response.iter_lines():
+        if not line or line.startswith(":"):
+            continue
+        if not line.startswith("data:"):
+            continue
+        payload = line[len("data:") :].strip()
+        if payload == "[DONE]":
+            return
+        try:
+            yield json.loads(payload)
+        except json.JSONDecodeError:
+            raise SystemExit(f"non-JSON chunk in stream:\n{payload}") from None
+
+
+def reply_from_chunks(chunks: list[dict], url: str) -> dict:
+    """Merge chunks into one reply, mirroring how the SDK builds a blocking response.
+
+    Starting from `{}` (so no caller chunk is mutated), then `cleanup_indices` over the
+    accumulated delta — the two steps `aidial_sdk.utils.streaming.merge_chunks` performs.
+    The cleanup is not optional: merging leaves the OpenAI-style `index` key on indexed list
+    elements such as `custom_content.stages`, and this script resends the reply verbatim on
+    the next turn, where those keys would be re-slotted and stripped again (see CLAUDE.md).
+    """
+    merged = merge({}, *chunks)
+    try:
+        choice = merged["choices"][0]
+    except (KeyError, IndexError, TypeError):
+        raise SystemExit(
+            f"unexpected response shape from {url}:\n{json.dumps(merged, indent=2)}"
+        ) from None
+    if (delta := choice.get("delta")) is not None:
+        return cleanup_indices(delta)
+    # A blocking reply arrives already assembled and cleaned up by the app.
+    if (message := choice.get("message")) is not None:
+        return message
+    raise SystemExit(f"no message in response from {url}:\n{json.dumps(merged, indent=2)}")
+
+
 def send(
     timeout: float,
     messages: list[dict],
     conversation_id: str,
     deployment: str,
+    stream: bool,
 ) -> dict:
     """POST the chat-completion request and return `choices[0].message` verbatim.
 
@@ -144,29 +211,49 @@ def send(
         "Content-Type": "application/json",
         "X-Conversation-Id": conversation_id,
     }
-    body = {"messages": messages, "stream": False}
+    body = {"messages": messages, "stream": stream}
+    mode = "stream" if stream else "blocking"
     print(
-        f"→ {url} | {len(messages)} message(s) | conversation-id {conversation_id}",
+        f"→ {url} | {len(messages)} message(s) | {mode} | conversation-id {conversation_id}",
         file=sys.stderr,
     )
+
+    def fail_on_error(payload: object) -> None:
+        # `object`, not `dict`: a blocking reply is whatever `resp.json()` produced, so the
+        # isinstance check is load-bearing rather than decorative.
+        if isinstance(payload, dict) and payload.get("error"):
+            raise SystemExit(
+                f"API error:\n{json.dumps(payload['error'], indent=2, ensure_ascii=False)}"
+            )
+
+    if not stream:
+        try:
+            resp = httpx.post(url, json=body, headers=headers, timeout=timeout)
+        except httpx.RequestError as exc:
+            raise SystemExit(f"request failed ({url}): {exc}") from None
+        if resp.status_code != 200:
+            raise SystemExit(f"HTTP {resp.status_code} from {url}:\n{resp.text}")
+        try:
+            data = resp.json()
+        except json.JSONDecodeError:
+            raise SystemExit(f"non-JSON response from {url}:\n{resp.text}") from None
+        fail_on_error(data)
+        return reply_from_chunks([data], url)
+
+    chunks: list[dict] = []
     try:
-        resp = httpx.post(url, json=body, headers=headers, timeout=timeout)
+        with httpx.stream("POST", url, json=body, headers=headers, timeout=timeout) as resp:
+            if resp.status_code != 200:
+                resp.read()
+                raise SystemExit(f"HTTP {resp.status_code} from {url}:\n{resp.text}")
+            for chunk in iter_sse_chunks(resp):
+                fail_on_error(chunk)
+                chunks.append(chunk)
     except httpx.RequestError as exc:
         raise SystemExit(f"request failed ({url}): {exc}") from None
-    if resp.status_code != 200:
-        raise SystemExit(f"HTTP {resp.status_code} from {url}:\n{resp.text}")
-    try:
-        data = resp.json()
-    except json.JSONDecodeError:
-        raise SystemExit(f"non-JSON response from {url}:\n{resp.text}") from None
-    if isinstance(data, dict) and data.get("error"):
-        raise SystemExit(f"API error:\n{json.dumps(data['error'], indent=2, ensure_ascii=False)}")
-    try:
-        return data["choices"][0]["message"]
-    except (KeyError, IndexError, TypeError):
-        raise SystemExit(
-            f"unexpected response shape from {url}:\n{json.dumps(data, indent=2)}"
-        ) from None
+    if not chunks:
+        raise SystemExit(f"stream from {url} carried no chunks")
+    return reply_from_chunks(chunks, url)
 
 
 def report_extras(message: dict) -> None:
@@ -206,6 +293,7 @@ def main() -> None:
         messages=messages,
         conversation_id=conversation_id,
         deployment=deployment,
+        stream=not args.no_stream,
     )
     messages.append(reply)
     write_messages(args.file, messages)
