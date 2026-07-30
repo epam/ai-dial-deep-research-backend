@@ -27,6 +27,7 @@ research loop grounded in the MCP tools, and streams progress to DIAL as timed s
 - [Running the app in Docker (opt-in)](#running-the-app-in-docker-opt-in)
 - [Driving the app from the CLI](#driving-the-app-from-the-cli)
 - [LLM tracing with Opik (optional)](#llm-tracing-with-opik-optional)
+- [Spec-driven development](#spec-driven-development)
 - [License](#license)
 
 ## Configuration
@@ -304,6 +305,45 @@ Tear down:
 ```sh
 make opik-down        # stops Opik containers; .opik-local/ stays for the next `opik-up`
 ```
+
+## Spec-driven development
+
+Changes are planned as specs before they are coded, using the `openspec` CLI. Two
+directories hold everything:
+
+- **`openspec/specs/<capability>/spec.md`** — the living contract: what the app does
+  today, written as requirements with WHEN/THEN scenarios.
+- **`openspec/changes/<name>/`** — one proposed change: `proposal.md` (why and what),
+  `specs/` (the delta against the living specs), `design.md` (how), `tasks.md` (the
+  implementation checklist). On archive the delta folds into `openspec/specs/` and the
+  change moves under `openspec/changes/archive/`.
+
+Two Claude Code skills wrap the planning half, so the approach is settled — and
+challenged — before any code exists:
+
+```
+/plan-change <description>   clarify scope with the user, then write
+                             proposal → specs → design
+/review-plan <name>          adversarial loop: a critic subagent asks whether the
+                             change makes sense at all, then hunts gaps, then checks
+                             the artifacts against each other; every finding is
+                             verified against the real code and logged to the
+                             change's review-log.md
+       ↓                     you read the artifacts + review log, and approve;
+                             the review log is scratch and is deleted on approval
+/opsx:continue               tasks
+/opsx:apply                  implement
+/opsx:verify                 implementation vs artifacts
+/opsx:archive                fold the delta into openspec/specs/
+```
+
+`/plan-change` deliberately stops before `tasks`: it depends on both specs and design,
+so every accepted review finding would churn it. In the review loop, gaps and
+inconsistencies are fixed automatically, but findings that question the **approach**
+are always escalated to a human instead of applied.
+
+For a change too small to be worth reviewing, `/opsx:propose` writes all four artifacts
+in one pass.
 
 ## License
 
