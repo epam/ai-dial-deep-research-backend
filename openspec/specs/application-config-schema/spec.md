@@ -19,6 +19,9 @@ SHALL expose:
 
 - `max_research_iterations: int` — default `10`, constrained `ge=1`; the cap on
   researcher → reviewer loops before the report is forced.
+- `max_research_graph_steps: int` — default `500`, constrained `ge=1`; the per-graph-run step
+  ceiling passed to LangGraph as `recursion_limit` (see the **research-execution**
+  capability's step-budget requirement for what it counts).
 - `prompts` — a nested required model with three required, non-empty (`min_length=1`) string
   fields: `client_name`, `agent_name`, `data_sources_descriptions`.
 
@@ -57,9 +60,9 @@ meta-schema (`https://dial.epam.com/application_type_schemas/schema#`). Generati
 #### Scenario: Root properties carry dial:meta
 
 - **WHEN** the schema is generated
-- **THEN** every root property (`max_research_iterations`, `prompts`) SHALL contain a
-  `dial:meta` object with `dial:propertyKind` equal to `"server"` and a unique
-  `dial:propertyOrder` integer
+- **THEN** every root property (`max_research_iterations`, `max_research_graph_steps`,
+  `mcp_servers`, `prompts`) SHALL contain a `dial:meta` object with `dial:propertyKind` equal
+  to `"server"` and a unique `dial:propertyOrder` integer
 
 #### Scenario: Wrapper keywords only with include_dial_fields
 

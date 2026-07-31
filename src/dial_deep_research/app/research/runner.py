@@ -50,8 +50,6 @@ logger = logging.getLogger(__name__)
 # The report node is the only one whose streamed tokens become assistant content.
 _REPORT_NODE = "report"
 _FINISH_TOOL = "finish_iteration"
-# Super-step ceiling for one research turn (many tool calls across several iterations).
-_RECURSION_LIMIT = 200
 
 
 class ResearchRunner:
@@ -81,7 +79,9 @@ class ResearchRunner:
             max_iterations=properties.max_research_iterations,
             client_name=properties.prompts.client_name,
         )
-        config: dict[str, Any] = {"recursion_limit": _RECURSION_LIMIT}
+        # LangGraph applies this to each graph run separately, so the same value bounds the
+        # research graph and every researcher-subgraph run (see the property's description).
+        config: dict[str, Any] = {"recursion_limit": properties.max_research_graph_steps}
         if opik_tracer is not None:
             config["callbacks"] = [opik_tracer]
 

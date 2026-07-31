@@ -27,7 +27,7 @@ SHALL stop at the preparation stage as before.
 - **WHEN** a turn ends with clarifying questions or an unapproved plan (no `start_research`)
 - **THEN** the research graph SHALL NOT run, and the turn SHALL produce only the preparation output
 
-#### Scenario: Reflection always precedes the report
+#### Scenario: Review always precedes the report
 
 - **WHEN** the researcher finishes an iteration
 - **THEN** control SHALL pass to the reviewer before any report is produced, and the report node SHALL run only after the reviewer returns an empty next plan (or the iteration cap is reached)
@@ -47,15 +47,22 @@ the first plan SHALL be presented to the researcher as its instruction.
 ### Requirement: Researcher investigates with forced tool choice and a finish_iteration sentinel
 
 The researcher node SHALL be a tool-calling agent over the MCP-loaded tools plus one
-sentinel tool, `finish_iteration`. The agent SHALL be run with **forced tool
-choice** so that every model step emits a tool call and the model cannot produce a
-free-form assistant message (in particular, it cannot write a summary or a report).
-When the researcher judges the current iteration complete, it SHALL call
-`finish_iteration`, which SHALL end the iteration without a further model
-round-trip. `finish_iteration` SHALL be a no-op signal that only ends the
-iteration; it SHALL NOT decide whether to review or report. The researcher's prompt
-SHALL contain no report-writing instructions. A per-iteration step cap SHALL bound a
-researcher that never calls `finish_iteration`.
+sentinel tool, `finish_iteration`. The agent SHALL be run with **forced tool choice**
+(every model call issued with `tool_choice="any"`) so that every model step emits a
+tool call and the model cannot produce a free-form assistant message (in particular,
+it cannot write a summary or a report).
+
+A researcher iteration SHALL therefore end **only** when the researcher calls
+`finish_iteration`. That tool SHALL be declared `return_direct=True`, so the agent
+loop returns as soon as it executes, with no further model round-trip. Since the
+loop's only other exit is a tool-call-free assistant message, which forced tool choice
+makes unreachable, `finish_iteration` is the single exit from a researcher iteration
+and the researcher cannot stop early. `finish_iteration` SHALL be a no-op signal that only
+ends the iteration; it SHALL NOT decide whether to review or report. The researcher's
+prompt SHALL contain no report-writing instructions.
+
+A researcher that never calls `finish_iteration` SHALL be bounded by the step budget
+of the **A per-graph-run step budget bounds every graph run** requirement below.
 
 #### Scenario: Researcher cannot emit a free-form report
 
@@ -112,6 +119,43 @@ indefinitely.
 #### Scenario: Cap default and override
 
 - **WHEN** the process starts without `MAX_RESEARCH_ITERATIONS` set, the cap SHALL resolve to 10; **AND WHEN** it is set to a valid integer ≥ 1, the loop SHALL use that value as the maximum number of research iterations
+
+### Requirement: A per-graph-run step budget bounds every graph run
+
+The app SHALL pass a step budget to the research graph as LangGraph's
+`recursion_limit`, configured per channel by the `max_research_graph_steps`
+application property (default 500, minimum 1; see the
+**application-config-schema** capability).
+
+What the budget limits SHALL be read precisely. It counts LangGraph super-steps — node
+executions — within a single graph run, and each nested graph run receives the budget
+again instead of drawing on what the parent has left. The researcher node is itself a
+compiled graph, so one researcher iteration gets its own budget.
+
+The budget therefore constrains the researcher's own loop, whose length nothing else
+bounds, while the outer graph's length is already fixed by `max_research_iterations`. Tool
+calls the researcher requests together execute in a single super-step (they are fanned out
+with `Send`, and dispatches made in one tick share that tick), so the budget limits the
+researcher's model calls rather than the number of tool calls it may issue.
+
+The budget SHALL NOT be read as a cap on the number of research iterations (that is
+`max_research_iterations`, a separate property), as one allowance shared across the whole
+turn, or as a per-tool-call cap — it bounds tool calls only indirectly, through the number
+of model calls, with no limit on how many tools one of them may request.
+
+Exhausting the budget SHALL raise LangGraph's `GraphRecursionError` and fail the turn
+through the DIAL error protocol (see **dial-agent-with-mcp**'s **Failures delivered as
+DIAL protocol errors** requirement), never deliver a half-finished answer as a success.
+
+#### Scenario: Budget comes from the channel configuration
+
+- **WHEN** a research turn starts on a channel that sets `max_research_graph_steps`
+- **THEN** the research graph SHALL be invoked with `recursion_limit` equal to that value; **AND WHEN** the channel omits the property, the value SHALL be 500
+
+#### Scenario: A researcher that never finishes is bounded
+
+- **WHEN** the researcher keeps calling MCP tools without ever calling `finish_iteration`, until its agent run exhausts the step budget
+- **THEN** the turn SHALL fail through the DIAL error protocol with the step-budget message, and SHALL NOT deliver a partial report as a successful answer
 
 ### Requirement: Report node writes the final cited report and is the only assistant content
 

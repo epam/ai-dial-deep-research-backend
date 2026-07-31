@@ -158,6 +158,18 @@ class ApplicationProperties(BaseModel):
         description="Max number of research iterations (researcher → reviewer loops) before"
         " the report is forced",
     )
+    max_research_graph_steps: int = Field(
+        default=500,
+        ge=1,
+        description="Max super-steps in one execution of the research graph, passed to LangGraph"
+        " as recursion_limit. A super-step is one iteration over the graph nodes: nodes that run"
+        " in parallel belong to the same super-step, sequential ones to separate super-steps. The"
+        " count is per graph execution, and a nested graph counts as an execution of its own, so"
+        " this is not a total for the DIAL turn (one user message and the assistant's reply to"
+        " it). Treat it as a safety stop for research that does not finish on its own, not as a"
+        " way to tune research depth: hitting the limit raises GraphRecursionError and the turn"
+        " fails with an error. Raise it if long research legitimately runs out of super-steps.",
+    )
     mcp_servers: list[MCPClientSettings] = Field(
         min_length=1,
         description="MCP servers the research agent connects to. At least one is required;"

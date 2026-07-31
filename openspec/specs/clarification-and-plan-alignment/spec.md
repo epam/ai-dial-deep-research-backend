@@ -7,18 +7,23 @@ TBD - created by archiving change clarification-and-plan-alignment. Update Purpo
 
 On each chat completion request the app SHALL drive a single-context LangChain
 tool-calling agent (the **preparation agent**) that holds one conversation and
-advances a clarify → plan → approve → launch flow by calling tools. The app SHALL
-NOT run the research/reflection/report path in this change. The preparation agent
-SHALL have exactly these control tools and no MCP/data tools: `update_query`,
-`update_plan`, `approve_plan`, `start_research`.
+advances a clarify → plan → approve → launch flow by calling tools. The preparation
+agent SHALL have exactly these control tools and no MCP/data tools: `update_query`,
+`update_plan`, `approve_plan`, `start_research`. Research itself runs only after
+approval, in the same turn, as a separate graph (see the **research-execution**
+capability); the preparation agent SHALL NOT research or write a report.
 
 The flow's ordering SHALL be enforced by tool preconditions (hard gates), not by
 the agent's discretion: research SHALL NOT be startable until the working query's
 clarifications are resolved and the plan is user-approved.
 
-#### Scenario: Request handled by the preparation agent, not the research agent
-- **WHEN** a chat completion request is processed
-- **THEN** the app SHALL run the preparation agent for that turn, and SHALL NOT construct an MCP client, fetch tools, or run the tool-calling research agent
+#### Scenario: Every turn starts with the preparation agent
+- **WHEN** a chat completion request is processed and the loaded `PrepState` does not have the research-started flag set
+- **THEN** the app SHALL run the preparation agent for that turn
+
+#### Scenario: No MCP client or research graph unless the agent calls start_research
+- **WHEN** the preparation agent's run for a turn finishes without having called `start_research`
+- **THEN** the app SHALL NOT construct an MCP client, fetch tools, or run the research graph for that turn
 
 #### Scenario: A clear, approved request can launch; an unprepared one cannot
 - **WHEN** the agent calls `start_research` while the query is unclear or the plan is unapproved
@@ -151,14 +156,15 @@ recorded plan or the clarifications are unresolved.
 - **WHEN** the user's latest message requests changes to the plan
 - **THEN** `approve_plan` SHALL NOT approve, and SHALL indicate the requested changes so the agent can revise and re-record the plan
 
-### Requirement: start_research hard-gates and stops at readiness in this change
+### Requirement: start_research hard-gates and stops at readiness
 
 The `start_research()` tool SHALL fail with an error naming the missing
 precondition unless the working query is set, the clarifications are resolved, and
-the plan is approved. Because research execution is deferred in this change, on a
-passing gate the tool SHALL mark research as started and return a ready-to-research
-summary (the finalized query and the approved plan); it SHALL NOT run research,
-reflection, or report generation.
+the plan is approved. On a passing gate the tool SHALL mark research as started and
+return a ready-to-research summary (the finalized query and the approved plan). The
+tool itself SHALL NOT run research, review, or report generation: the turn
+coordinator launches the research graph after the preparation agent's run finishes
+(see the **research-execution** capability), so the flag is the hand-off signal.
 
 #### Scenario: Gate failure names the missing precondition
 - **WHEN** `start_research` is called with the plan not yet approved
@@ -166,7 +172,7 @@ reflection, or report generation.
 
 #### Scenario: Gate pass returns the ready-to-research summary
 - **WHEN** `start_research` is called with the query clear and the plan approved
-- **THEN** it SHALL mark research as started and return a summary containing the finalized query and the approved plan, and SHALL NOT produce a research report
+- **THEN** it SHALL mark research as started and return a summary containing the finalized query and the approved plan; the tool call itself SHALL NOT produce a research report
 
 ### Requirement: Stateless turns persist PrepState and transcript in DIAL custom state
 

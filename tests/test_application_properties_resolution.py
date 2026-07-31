@@ -123,7 +123,12 @@ def test_schema_endpoint_serves_unwrapped_schema(client: TestClient) -> None:
     response = client.get(SCHEMA_URL)
     assert response.status_code == 200
     schema = response.json()
-    assert set(schema["properties"]) == {"max_research_iterations", "prompts", "mcp_servers"}
+    assert set(schema["properties"]) == {
+        "max_research_iterations",
+        "max_research_graph_steps",
+        "prompts",
+        "mcp_servers",
+    }
     assert schema["properties"]["prompts"]["dial:meta"]["dial:propertyKind"] == "server"
     assert "$id" not in schema
     assert "$schema" not in schema

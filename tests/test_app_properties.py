@@ -31,6 +31,7 @@ VALID_PROPERTIES: dict = {
 def test_valid_properties_load_with_default_iterations() -> None:
     properties = ApplicationProperties.model_validate(VALID_PROPERTIES)
     assert properties.max_research_iterations == 10
+    assert properties.max_research_graph_steps == 500
     assert properties.prompts.client_name == "Test Corp"
 
 
@@ -51,6 +52,11 @@ def test_missing_prompts_is_rejected() -> None:
 def test_non_positive_iterations_is_rejected() -> None:
     with pytest.raises(ValidationError):
         ApplicationProperties.model_validate({**VALID_PROPERTIES, "max_research_iterations": 0})
+
+
+def test_non_positive_graph_steps_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ApplicationProperties.model_validate({**VALID_PROPERTIES, "max_research_graph_steps": 0})
 
 
 def test_schema_root_properties_carry_dial_meta() -> None:

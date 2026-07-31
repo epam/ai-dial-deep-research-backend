@@ -11,13 +11,18 @@ from the updates that drive the live output.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import contextmanager
 from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.types import ValuesStreamPart
+from pytest import MonkeyPatch
 
+from dial_deep_research.app.history import Plan, PrepState
+from dial_deep_research.app.research import runner as runner_module
 from dial_deep_research.app.research.runner import ResearchRunner
+from dial_deep_research.app_properties import ApplicationProperties
 
 
 class _StageSpy:
@@ -140,6 +145,66 @@ def test_subgraph_values_do_not_overwrite_the_persisted_slice() -> None:
     runner._handle_part(_values(root))
     runner._handle_part(_values([HumanMessage(content="q")], ns=("researcher:abc",)))
     assert runner._messages == root
+
+
+def _properties(**overrides: Any) -> ApplicationProperties:
+    return ApplicationProperties.model_validate(
+        {
+            "prompts": {
+                "client_name": "Test Corp",
+                "agent_name": "Test Deep Research",
+                "data_sources_descriptions": "## report\n\nA report.",
+            },
+            "mcp_servers": [{"server_name": "rag", "deployment_id": "generic-rag-mcp"}],
+            **overrides,
+        }
+    )
+
+
+def _approved_prep_state() -> PrepState:
+    return PrepState(
+        current_query="q", plan=Plan(steps=["step"]), plan_approved=True, research_started=True
+    )
+
+
+class _GraphStub:
+    """Stands in for the compiled graph, recording the config it was invoked with."""
+
+    def __init__(self, captured: dict[str, Any]) -> None:
+        self._captured = captured
+
+    async def astream(self, _state: Any, **kwargs: Any) -> AsyncIterator[Any]:
+        self._captured["config"] = kwargs["config"]
+        for _ in ():  # empty stream: the dispatch paths are covered above
+            yield
+
+
+def _stub_graph_build(monkeypatch: MonkeyPatch, captured: dict[str, Any]) -> None:
+    async def _no_tools(**_kwargs: Any) -> list[Any]:
+        return []
+
+    monkeypatch.setattr(runner_module, "load_mcp_tools", _no_tools)
+    monkeypatch.setattr(runner_module, "build_research_graph", lambda **_kw: _GraphStub(captured))
+
+
+async def test_step_budget_comes_from_the_channel_properties(monkeypatch: MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+    _stub_graph_build(monkeypatch, captured)
+    runner, _ = _make_runner()
+
+    await runner.run(_approved_prep_state(), properties=_properties(max_research_graph_steps=42))
+
+    assert captured["config"]["recursion_limit"] == 42
+
+
+async def test_step_budget_defaults_to_500(monkeypatch: MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+    _stub_graph_build(monkeypatch, captured)
+    runner, _ = _make_runner()
+
+    await runner.run(_approved_prep_state(), properties=_properties())
+
+    assert captured["config"]["recursion_limit"] == 500
 
 
 def test_substituted_message_reaches_the_persisted_slice() -> None:

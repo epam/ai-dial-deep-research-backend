@@ -5,6 +5,7 @@
       "applicationTypeSchemaId": "https://mydial.epam.com/custom_application_schemas/deep-research",
       "applicationProperties": {
         "max_research_iterations": 10,
+        "max_research_graph_steps": 500,
         "mcp_servers": [
           {
             "server_name": "generic-rag",

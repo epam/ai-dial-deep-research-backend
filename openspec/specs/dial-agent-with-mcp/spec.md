@@ -46,12 +46,20 @@ The researcher node SHALL be a fresh per-request LangChain `create_agent` over t
 tools fetched from a freshly-constructed MCP client, plus one sentinel tool
 (`finish_iteration`). It SHALL have access only to MCP-loaded tools and that
 sentinel — no other built-in tools, subagents, skills, or persistent memory beyond
-the graph state. The researcher SHALL be run with **forced tool choice** (every
-model step emits a tool call) via an in-process `AgentMiddleware`, so the model
-cannot emit a free-form assistant message; it ends an iteration by calling
-`finish_iteration` (a `return_direct` sentinel). The previously-permitted reflection
-middleware is removed; phase control now lives in the research graph's edges, not in
-middleware that redirects a single agent's control flow.
+the graph state. The researcher SHALL be run with **forced tool choice** — every model
+call re-issued with `tool_choice="any"` by an in-process `AgentMiddleware` — so every
+model step emits a tool call and the model can never emit a free-form assistant
+message.
+
+A researcher iteration therefore ends **only** when the researcher calls
+`finish_iteration`, which SHALL be declared `return_direct=True`: the agent loop
+returns as soon as that tool executes, with no further model round-trip. The two
+mechanisms together make `finish_iteration` the single exit from a researcher
+iteration — the loop's other exit is a tool-call-free assistant message, which forced
+tool choice makes unreachable — so the researcher cannot stop early and leave the graph
+without a reviewer verdict. Phase
+control lives in the research graph's edges (see the **research-execution**
+capability), not in middleware over a single agent's control flow.
 
 The MCP client SHALL NOT be cached across requests, the app SHALL NOT open a
 long-lived SSE listening stream on the MCP endpoint, and the app SHALL NOT issue or
