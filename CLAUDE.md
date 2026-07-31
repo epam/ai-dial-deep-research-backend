@@ -19,10 +19,30 @@ comments, docs, commit messages). Committed content must be self-contained.
 
 - Always use simple and clear phrasings, without unnecessary complexity.
   Including comments, docstrings, git commits and pull requests
+- Use clear and precise wordings; never abstract and vague ones. Name the real thing instead of a
+  category, prefer one plain sentence to a chain of qualifiers, and cut words that carry no fact.
+- Abstraction is not a cure for wording that is too tied to today's implementation. Blurring it
+  ("an agent loop", "the relevant component") only trades a dated sentence for a hollow one.
+  Instead state plainly the part that stays true, and keep the precise mechanics in the place
+  whose readers need them — a spec, or a comment next to the code — rather than watering them
+  down everywhere. A docstring or a config description should tell its reader what to do with
+  the thing; internals belong where they are implemented.
 - If not sure, ask questions. Do not make design decisions based on your assumptions.
   Except for cases when user explicitly asks you to work autonomously or make decisions yourself.
 - Do not cite design docs or other code without naming the source.
   User is not LLM and does not remember everything by heart.
+- Do not present plausible reasoning as an observed fact. Anything about how a dependency,
+  runtime or protocol actually behaves is a guess until checked, however sound the reasoning
+  that produced it — especially quantitative claims: what counts as one unit, what scope a
+  limit applies to, how many X fit into one Y. Before such a claim goes into code, a comment,
+  a spec or docs, run the cheapest decisive check: read the installed source under `.venv/`,
+  or write a ~10-line probe that measures the behavior directly. Two real examples: a
+  framework limit assumed to span a whole run while it is in fact applied to each nested call
+  separately; a batch of N parallel operations assumed to cost N units while it costs one.
+- Reread your draft and ask which sentences you verified and which you inferred. Check the
+  inferences, or say plainly that they are unverified — do not state them flatly. A claim about
+  to be copied into several places (a spec, a field description, a README) is worth the check
+  twice over, since a wrong one then has to be corrected in every copy.
 
 ## Sending a query to the DR server
 
