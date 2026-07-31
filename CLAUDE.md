@@ -72,6 +72,15 @@ Override `--timeout` as needed.
 - **No new aliases on pydantic-settings fields** — rely on the default field-name → env-var mapping (with the class's `env_prefix`). E.g. `heartbeat_interval` under `env_prefix=""` reads `HEARTBEAT_INTERVAL`.
 - **Keep the README environment-variables table in sync with the settings.** Update it whenever an env var is added or removed (required or optional alike), and whenever a var's required/optional status changes.
 - **Keep the application-properties artifacts in sync with the model.** When `ApplicationProperties` (`src/dial_deep_research/app_properties.py`) changes: `make format` regenerates `docs/generated-app-schema.json` (and `make lint` fails on drift), but `dial_conf/core/applications-template.json` and the README core-config snippets are updated by hand. Field descriptions live in the pydantic schema (`Field(description=...)`), not as comments in the example.
+- **Every LLM call states its inputs and outputs in the spec that owns it.** When adding an LLM
+  call or changing what an existing one receives, write it down: which system prompt and what
+  fills it, which messages (and whether history is full, filtered, or rendered to text), whether
+  image content is included, which tools are bound, and what comes back (free text, a structured
+  schema, or tool calls only). Name the deliberate omissions too — "this call does not receive
+  the findings" is part of the contract. Inputs are the one thing about an LLM call that code
+  review reliably misses: a reviewer judging coverage without the images it is judging looks
+  correct in the diff and is wrong in production, and nothing fails when a refactor quietly
+  changes what a prompt sees.
 - **LLM structured-output schemas put the verdict last.** Order fields so a decision/verdict field comes *after* the supporting content that justifies it — the model emits fields in schema order, so reasoning-first yields better decisions. E.g. `questions` before `sufficient`; `revised_plan` (or `problems_found`) before `approved` (or `verdict`). Among the supporting fields themselves, order by logical precedence — a precondition/gating check before any check that only matters once it holds (e.g. `recorded_plan_matches` before `user_approved_a_plan`). Pydantic v2 allows a required field after defaulted ones, so the ordering is free.
 - **Logging follows the `logging-policy` spec** (`openspec/specs/logging-policy/spec.md`):
   level semantics with a single-ERROR ownership rule, the INFO request skeleton, and the
