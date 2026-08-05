@@ -59,6 +59,112 @@ def test_non_positive_graph_steps_is_rejected() -> None:
         ApplicationProperties.model_validate({**VALID_PROPERTIES, "max_research_graph_steps": 0})
 
 
+def test_report_defaults_resolve_without_configuration() -> None:
+    properties = ApplicationProperties.model_validate(VALID_PROPERTIES)
+    sections = properties.default_report_structure
+    assert [section.name for section in sections] == [
+        "Key Findings",
+        "Detailed Analysis",
+        "Conclusion",
+        "References",
+    ]
+    assert [section.protected for section in sections] == [False, False, False, True]
+    assert properties.max_report_words == 2750
+    assert properties.max_report_revisions == 2
+
+
+def test_default_references_description_owns_the_source_entry_rules() -> None:
+    # Both cited types are decoded in that one description, so it is the whole answer to how
+    # sources are listed.
+    references = ApplicationProperties.model_validate(VALID_PROPERTIES).default_report_structure[-1]
+    assert "doc id" in references.description
+    assert "dataset id" in references.description
+
+
+def test_empty_report_structure_is_rejected() -> None:
+    data = {**VALID_PROPERTIES, "default_report_structure": []}
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(data)
+    assert any(err["loc"] == ("default_report_structure",) for err in excinfo.value.errors())
+
+
+@pytest.mark.parametrize("field", ["name", "description"])
+def test_empty_report_section_field_is_rejected(field: str) -> None:
+    section = {"name": "Summary", "description": "The answer.", "protected": True, field: ""}
+    data = {**VALID_PROPERTIES, "default_report_structure": [section]}
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(data)
+    assert any(
+        err["loc"] == ("default_report_structure", 0, field) for err in excinfo.value.errors()
+    )
+
+
+def test_structure_with_no_protected_section_is_rejected() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "default_report_structure": [
+            {"name": "Summary", "description": "The answer."},
+            {"name": "Evidence", "description": "What the sources say."},
+        ],
+    }
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(data)
+    message = str(excinfo.value)
+    assert "default_report_structure" in message
+    assert "at least one section with protected=true" in message
+
+
+def test_duplicate_report_section_names_are_rejected() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "default_report_structure": [
+            {"name": "Summary", "description": "The answer.", "protected": True},
+            {"name": "Summary", "description": "The answer again."},
+        ],
+    }
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(data)
+    assert "duplicate report section name(s): ['Summary']" in str(excinfo.value)
+
+
+def test_a_deployment_protects_a_section_of_its_own() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "default_report_structure": [
+            {"name": "Summary", "description": "The answer."},
+            {
+                "name": "Regulatory disclaimer",
+                "description": "The mandated wording, verbatim.",
+                "protected": True,
+            },
+        ],
+    }
+    properties = ApplicationProperties.model_validate(data)
+    assert [section.name for section in properties.default_report_structure] == [
+        "Summary",
+        "Regulatory disclaimer",
+    ]
+    assert properties.default_report_structure[1].protected is True
+
+
+def test_non_positive_report_words_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ApplicationProperties.model_validate({**VALID_PROPERTIES, "max_report_words": 0})
+
+
+def test_negative_report_revisions_is_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ApplicationProperties.model_validate({**VALID_PROPERTIES, "max_report_revisions": -1})
+
+
+def test_zero_report_revisions_is_accepted() -> None:
+    # Unlike the other numeric properties, 0 is a valid value: it disables the review.
+    properties = ApplicationProperties.model_validate(
+        {**VALID_PROPERTIES, "max_report_revisions": 0}
+    )
+    assert properties.max_report_revisions == 0
+
+
 def test_schema_root_properties_carry_dial_meta() -> None:
     schema = ApplicationProperties.model_json_schema()
     orders = []
@@ -83,6 +189,13 @@ def test_schema_inlines_list_item_model() -> None:
     assert "$ref" not in items
     assert set(items["required"]) == {"server_name"}
     assert "tools_to_include" in items["properties"]
+
+
+def test_schema_inlines_report_section_items() -> None:
+    schema = ApplicationProperties.model_json_schema()
+    items = schema["properties"]["default_report_structure"]["items"]
+    assert "$ref" not in items
+    assert set(items["properties"]) == {"name", "description", "protected"}
 
 
 def test_at_least_one_mcp_server_required() -> None:

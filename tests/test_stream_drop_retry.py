@@ -13,6 +13,7 @@ from langchain_core.messages import AIMessageChunk, BaseMessage
 from langchain_core.runnables import RunnableLambda
 
 from dial_deep_research.app.research import nodes
+from dial_deep_research.app_properties import DEFAULT_REPORT_STRUCTURE
 from dial_deep_research.utils import llm as llm_module
 from dial_deep_research.utils.llm import (
     STREAM_DROP_MAX_ATTEMPTS,
@@ -86,8 +87,22 @@ def test_middleware_reraises_on_exhaustion_and_uses_shared_budget() -> None:
 # --- report node retry loop ---------------------------------------------------------------------
 
 
-def _report_state() -> dict[str, Any]:
-    return {"plans": [["step one"]], "messages": [], "original_query": "q", "iteration": 1}
+def _report_state(**overrides: Any) -> dict[str, Any]:
+    state: dict[str, Any] = {
+        "plans": [["step one"]],
+        "messages": [],
+        "original_query": "q",
+        "iteration": 1,
+        "report": None,
+        "report_revision_instruction": None,
+        "revisions_used": 0,
+        "revision_failed": False,
+    }
+    return {**state, **overrides}
+
+
+def _make_report_node() -> Any:
+    return nodes.make_report_node("2026-07-16", DEFAULT_REPORT_STRUCTURE, 2750)
 
 
 class _FlakyReportLLM:
@@ -112,12 +127,14 @@ async def test_report_node_retries_and_keeps_only_the_successful_attempt(
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: llm)
     monkeypatch.setattr(nodes, "stream_drop_retry_delay", lambda retry_number: 0.0)
 
-    report = nodes.make_report_node(today_date="2026-07-16")
+    report = _make_report_node()
     result = await report(_report_state())  # type: ignore[arg-type]
 
     assert llm.attempts == 2
-    # The failed attempt's partial text is not persisted.
+    # The failed attempt's partial text is neither persisted nor ever shown: nothing streams.
     assert result["report"] == "full report"
+    # Drafts stay out of the transcript; the runner builds the assistant message.
+    assert "messages" not in result
 
 
 class _AlwaysDroppingReportLLM:
@@ -137,7 +154,7 @@ async def test_report_node_reraises_after_budget_exhausted(
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: llm)
     monkeypatch.setattr(nodes, "stream_drop_retry_delay", lambda retry_number: 0.0)
 
-    report = nodes.make_report_node(today_date="2026-07-16")
+    report = _make_report_node()
     with pytest.raises(httpx.RemoteProtocolError):
         await report(_report_state())  # type: ignore[arg-type]
     assert llm.attempts == STREAM_DROP_MAX_ATTEMPTS

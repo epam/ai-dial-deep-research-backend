@@ -1,7 +1,7 @@
-"""Middleware that forces the researcher to call a tool on every step.
+"""Middleware that forces research-agent to call a tool on every step.
 
 `create_agent` always calls the model with `tool_choice=None`. We override that to
-`"any"` so the researcher can never emit a free-form assistant message — every step
+`"any"` so research-agent can never emit a free-form assistant message — every step
 is either an MCP tool call or `finish_iteration`. This removes any path for the model
 to write a premature summary or report; the report is a separate node.
 

@@ -1,7 +1,7 @@
 """Streams the playground agent into a DIAL `Choice`.
 
 A single tool-calling agent over the configured MCP servers — no clarification, no
-research/reviewer loop, no report node. Tool calls become timed DIAL stages; the
+research/review loop, no report node. Tool calls become timed DIAL stages; the
 agent's own text becomes the assistant content. Stateless: nothing is persisted, so
 prior turns reach the agent as visible text only (see `reconstruct_plain_history`).
 """

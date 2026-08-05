@@ -65,7 +65,8 @@ class DeepResearchCompletion(ChatCompletion):
             raise ResearchAlreadyHandedOffError()
 
         prep_started_at = time.monotonic()
-        prep_messages = await PrepAgentRunner(choice).run(
+        prep_runner = PrepAgentRunner(choice)
+        prep_messages = await prep_runner.run(
             request=request,
             dial=dial,
             prep_state=prep_state,
@@ -86,7 +87,9 @@ class DeepResearchCompletion(ChatCompletion):
             # start_research fired this turn — run the research graph on the same choice.
             # The per-request bearer token (when present) is forwarded to the RAG MCP for
             # per-user access; the api-key is handled by header propagation.
-            research_messages = await ResearchRunner(choice).run(
+            research_messages = await ResearchRunner(
+                choice, content_already_streamed=prep_runner.appended_content
+            ).run(
                 prep_state,
                 properties=properties,
                 opik_tracer=opik_tracer,

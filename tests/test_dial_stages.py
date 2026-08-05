@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from dial_deep_research.utils.dial_stages import (
+    DialStageReportReviewFormatter,
     DialStageToolCallFormatter,
     PendingToolCall,
     log_tool_call_completed,
@@ -33,6 +34,53 @@ def test_result_stage_title_error() -> None:
         DialStageToolCallFormatter.format_title("search_docs", start, end, is_error=True)
         == '[TOOL] "search_docs" - error ❌ (1.00s, start: 14:30:05, end: 14:30:06)'
     )
+
+
+class TestReportReviewStage:
+    """The report-review stage: its own title shape, and the one place findings are shown."""
+
+    def test_title_carries_the_draft_number_the_action_and_the_time(self) -> None:
+        title = DialStageReportReviewFormatter.format_title(
+            draft_number=2, action="revise", duration_seconds=1.5
+        )
+        # Its own prefix, not the tool-call one: a review is not a tool call.
+        assert title == "[REPORT REVIEW] draft 2 - revise ❌ (1.50s)"
+
+    def test_delivered_draft_is_titled_as_a_success(self) -> None:
+        title = DialStageReportReviewFormatter.format_title(
+            draft_number=1, action="deliver", duration_seconds=0.5
+        )
+        assert title == "[REPORT REVIEW] draft 1 - deliver ✅ (0.50s)"
+
+    def test_body_carries_both_counts_and_the_findings(self) -> None:
+        body = DialStageReportReviewFormatter.format_body(
+            draft_number=1,
+            word_count=3910,
+            max_words=2750,
+            verdict="revise",
+            findings=["The draft is over the ceiling.", "Two lines:\nthe second one."],
+        )
+        assert "**Draft** 1" in body
+        assert "3910 words (ceiling 2750)" in body
+        assert "**Verdict** revise" in body
+        assert "1. The draft is over the ceiling." in body
+        assert "2. Two lines:\nthe second one." in body
+        # Fenced, so a multi-line finding stays readable instead of collapsing.
+        assert "```" in body
+
+    def test_body_records_an_approval_when_there_are_no_findings(self) -> None:
+        body = DialStageReportReviewFormatter.format_body(
+            draft_number=1, word_count=900, max_words=2750, verdict="approved", findings=[]
+        )
+        assert "900 words (ceiling 2750)" in body
+        assert "satisfies every check" in body
+
+    def test_body_records_a_failed_call_in_place_of_findings(self) -> None:
+        body = DialStageReportReviewFormatter.format_body(
+            draft_number=1, word_count=3910, max_words=2750, verdict="failed", findings=[]
+        )
+        assert "the review call failed" in body
+        assert "satisfies every check" not in body
 
 
 class TestToolCallEvent:

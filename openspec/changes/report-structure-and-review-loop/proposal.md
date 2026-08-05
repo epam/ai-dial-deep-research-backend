@@ -111,9 +111,13 @@ criterion is deferred, the reason is in design.md — Non-Goals.
   `ReportSection` model.
 - `dial-agent-with-mcp`: **Streaming response path** currently requires *all* assistant text to
   stream token-by-token via the `messages` stream mode; it is rescoped to preparation text, with
-  the report appended once after the loop settles. **Transient LLM stream drops retried in-app**
-  gains the report-review call in its list of covered surfaces. **Failures delivered as DIAL
-  protocol errors** loses its assumption that partial *report* content can already be on screen.
+  the report appended once after the loop settles. **Assistant message content contains only model
+  text** makes the paragraph boundary the assistant *message* rather than an intervening tool
+  round, so two segments separate whether or not a tool ran between them — which is what a retried
+  call needs. **Transient LLM stream drops retried in-app** gains the report-review call in its
+  list of covered surfaces, and states that a retry's abandoned fragment is separated from the full
+  answer. **Failures delivered as DIAL protocol errors** loses its assumption that partial *report*
+  content can already be on screen.
 - `logging-policy`: the **INFO request skeleton** is an exhaustive enumeration of events, so it
   gains a report-reviewed event and a draft ordinal on the report-generated event, and its
   model-call middleware set follows the `researcher` → `research-agent` rename.

@@ -22,6 +22,18 @@ def count_image_blocks(content: Any) -> int:
     return sum(1 for block in content if is_image_block(block))
 
 
+def count_words(text: str) -> int:
+    """Word count as whitespace-separated tokens.
+
+    The one definition of "how long is this text", used wherever a length is stated — the
+    report prompts, the report-review stage, the log records and the over-ceiling routing
+    gate — so those can never disagree. It counts Markdown syntax as words (every table
+    pipe, heading hash and bullet dash), so it overstates prose length by an amount that
+    grows with how many tables a report carries.
+    """
+    return len(text.split())
+
+
 def extract_text_from_content(content: Any) -> str:
     """Flatten message content to plain text, keeping only `text`-typed blocks.
 

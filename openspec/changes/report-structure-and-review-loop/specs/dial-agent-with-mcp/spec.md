@@ -37,8 +37,11 @@ retries per call (3 attempts total) with exponential backoff and jitter. A retry
 failed call from scratch with the same inputs; partial tokens the failed attempt already streamed
 to the user are not retracted, so a retried call MAY render duplicated partial text in the chat
 (accepted: observed drops occur at stream start, and a rare visual duplicate is preferred over
-losing a long research turn). Since the report no longer streams to the user, a retried report
-call cannot duplicate visible text.
+losing a long research turn). Where that happens, the retry is a distinct assistant message, so a
+`"\n\n"` separates the abandoned fragment from the full answer per **Assistant message content
+contains only model text** — the duplicate reads as its own paragraph rather than running into the
+text that replaces it. The report does not stream to the user, so a retried report call cannot
+duplicate visible text at all.
 
 When the budget is exhausted, the last exception SHALL propagate unchanged to the top-level
 handler and deliver through the DIAL error protocol per **Failures delivered as DIAL protocol
@@ -53,6 +56,10 @@ keep their existing handling.
 - **WHEN** an agent model call's stream dies with `httpx.RemoteProtocolError` and the retried
   call succeeds
 - **THEN** the turn SHALL complete normally with no error delivered to the user
+
+#### Scenario: A retry's abandoned fragment is separated from the full answer
+- **WHEN** a streaming model call has already appended some tokens to the choice, drops, and the retried call succeeds
+- **THEN** the fragment SHALL remain visible (it cannot be retracted) and the retried text SHALL be appended after a `"\n\n"`, since the retry is a distinct assistant message
 
 #### Scenario: Stream drops persistently
 - **WHEN** an LLM call whose failure aborts the turn fails with `httpx.RemoteProtocolError` on every attempt in the budget
@@ -307,3 +314,30 @@ which the original message structure could be recovered.
 
 - **WHEN** a research turn produces a `ToolMessage` whose `content` includes one or more `{type: "image", base64, mime_type}` blocks
 - **THEN** the persisted entry for that `ToolMessage` SHALL contain the same blocks rewritten to `{type: "image", url, mime_type}` (with `base64` absent), and the serialized state blob SHALL NOT include the original image byte payload
+
+### Requirement: Assistant message content contains only model text
+The DIAL response message content SHALL carry all of the agent's natural-language assistant text emitted during the turn, in chronological order — including text produced on intermediate `AIMessage` instances that also carry `tool_calls`, not just the final text-only `AIMessage`. Tool calls, tool results, and any structured non-text content blocks (e.g. Anthropic-style `thinking` blocks, image blocks) SHALL NOT appear in the assistant message content; they are conveyed via stages (for tool execution UI display) and via `assistant.custom_content.state["messages"]` (for cross-turn replay). Text streamed from **distinct assistant messages** SHALL be separated by a `"\n\n"` in `message.content`, so the segments render as separate paragraphs rather than running together; the tokens of one message SHALL be concatenated untouched. The boundary is the message, not the tool round: two segments SHALL be separated whether or not a tool ran between them — including the same model call re-streamed after a transient failure, whose already-streamed fragment cannot be retracted. The first segment of a turn SHALL take no leading separator. A streamed chunk carries the id of the message it belongs to (the provider's response id, or one langchain_core stamps per LLM run), which is what makes the boundary observable.
+
+#### Scenario: Tool-using turn streams intermediate text alongside the final answer
+- **WHEN** the agent produces an intermediate `AIMessage` carrying both natural-language text (e.g. `"Plan: ..."`) and `tool_calls`, then tool result(s), then a final `AIMessage` with the answer
+- **THEN** the DIAL response `message.content` SHALL contain the intermediate text followed by the final text, in that order, with a `"\n\n"` separator between them; tool stages SHALL still render between the two segments via the stage channel; the response content SHALL NOT contain serialized tool calls, tool result payloads, or `messages_to_dict` blobs
+
+#### Scenario: Text-only turn (no tool calls)
+- **WHEN** the agent answers without invoking any tool, producing a single text-only final `AIMessage`
+- **THEN** the DIAL response `message.content` SHALL equal that message's text, with no leading or trailing separator, streamed token-by-token
+
+#### Scenario: Structured content blocks flattened to text
+- **WHEN** an `AIMessageChunk` carries `content` as a list of content blocks (e.g. `[{type: "text", text: "..."}, {type: "thinking", thinking: "..."}, {type: "image", ...}]`) instead of a bare string
+- **THEN** the app SHALL append the concatenation of every `text`-typed block's `text` payload to `choice` and SHALL silently skip every non-text block (no append, no error, no stage)
+
+#### Scenario: Cross-turn replay of tool messages
+- **WHEN** a follow-up chat completion request arrives after an earlier tool-using turn
+- **THEN** the second turn's agent SHALL receive the prior turn's intermediate `AIMessage(tool_calls=…, content=…)` and `ToolMessage(...)` slice plus the prior turn's final `AIMessage` as conversation history, reconstructed from the prior assistant message's `custom_content.state["messages"]` field, in the original order, instead of being limited to prior assistant text
+
+#### Scenario: A new assistant message starts a new paragraph with no tool round between
+- **WHEN** two text segments from distinct assistant messages reach the choice with no tool result between them
+- **THEN** the app SHALL still insert a `"\n\n"` between them, because the boundary is the change of message
+
+#### Scenario: Tokens of one message are not separated
+- **WHEN** one assistant message streams as many chunks
+- **THEN** the app SHALL append them with nothing inserted between, producing one paragraph

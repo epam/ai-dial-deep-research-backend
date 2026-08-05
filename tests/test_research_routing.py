@@ -1,13 +1,29 @@
-"""Routing logic for the research loop (the reviewer → researcher | report edge).
+"""Every loop/termination decision of the research graph, decided in Python over the state.
 
-`route_after_review` is the sole loop/termination decision. It loops back to the
-researcher only when the reviewer recorded a plan for a not-yet-run iteration
-(`len(plans) > iteration`) and the iteration cap is not yet reached.
+Three edges and the one helper that decides for two of them:
+
+- `route_after_research_review` (research-review → research-agent | report) loops back only when
+  research-review recorded a plan for a not-yet-run iteration (`len(plans) > iteration`) and the
+  iteration cap is not yet reached.
+- `decide_report_action` is the report loop's decision table: the measured word count, the review's
+  findings and the revision budget in, the action and the revision instruction out. The router maps
+  its action to an edge and the report-review node logs the same action, so neither can disagree
+  with it.
+- `route_after_report` (report → report-review | END) and `route_after_report_review`
+  (report-review → report | END).
 """
 
 from __future__ import annotations
 
-from dial_deep_research.app.research.nodes import route_after_review
+from typing import Any
+
+from dial_deep_research.app.research.nodes import (
+    ReportAction,
+    decide_report_action,
+    route_after_report,
+    route_after_report_review,
+    route_after_research_review,
+)
 from dial_deep_research.app.research.state import ResearchState
 
 
@@ -22,18 +38,134 @@ def _state(plans: list[list[str]], iteration: int) -> ResearchState:
 
 
 def test_empty_review_routes_to_report() -> None:
-    # Reviewer returned no new plan after iteration 1: len(plans) == iteration.
-    route = route_after_review(max_iterations=10)
+    # research-review returned no new plan after iteration 1: len(plans) == iteration.
+    route = route_after_research_review(max_iterations=10)
     assert route(_state(plans=[["a"]], iteration=1)) == "report"
 
 
-def test_new_plan_under_cap_routes_to_researcher() -> None:
-    # Reviewer added a plan for iteration 2: len(plans) > iteration, under cap.
-    route = route_after_review(max_iterations=10)
-    assert route(_state(plans=[["a"], ["b"]], iteration=1)) == "researcher"
+def test_new_plan_under_cap_routes_to_research_agent() -> None:
+    # research-review added a plan for iteration 2: len(plans) > iteration, under cap.
+    route = route_after_research_review(max_iterations=10)
+    assert route(_state(plans=[["a"], ["b"]], iteration=1)) == "research-agent"
 
 
 def test_cap_forces_report_even_with_new_plan() -> None:
-    route = route_after_review(max_iterations=2)
+    route = route_after_research_review(max_iterations=2)
     # iteration reached the cap; even though a plan was recorded, force the report.
     assert route(_state(plans=[["a"], ["b"], ["c"]], iteration=2)) == "report"
+
+
+# --- decide_report_action -----------------------------------------------------------------------
+
+
+def _decide(**overrides: Any) -> tuple[ReportAction, str | None]:
+    """The decision for a first draft within the ceiling, with the given fields overridden."""
+    inputs: dict[str, Any] = {
+        "word_count": 900,
+        "max_words": 2750,
+        "findings": [],
+        "revisions_used": 0,
+        "max_revisions": 2,
+    }
+    return decide_report_action(**{**inputs, **overrides})
+
+
+def test_clean_draft_under_the_ceiling_is_delivered() -> None:
+    assert _decide() == (ReportAction.DELIVER, None)
+
+
+def test_findings_drive_a_revision_carrying_them() -> None:
+    action, instruction = _decide(
+        findings=["The references section is missing.", "Drop 'Confidence: High'."]
+    )
+    assert action is ReportAction.REVISE
+    assert instruction is not None
+    assert "The references section is missing." in instruction
+    assert "Drop 'Confidence: High'." in instruction
+
+
+def test_over_the_ceiling_with_no_findings_revises_on_the_length_alone() -> None:
+    action, instruction = _decide(word_count=3910)
+    assert action is ReportAction.REVISE_OVER_CEILING
+    assert instruction is not None
+    # The instruction is app-rendered, so it states both numbers even with nothing from the model.
+    assert "3910" in instruction
+    assert "2750" in instruction
+
+
+def test_over_the_ceiling_with_findings_merges_both_into_one_instruction() -> None:
+    action, instruction = _decide(word_count=3910, findings=["The citations were renumbered."])
+    assert action is ReportAction.REVISE
+    assert instruction is not None
+    assert "The citations were renumbered." in instruction
+    assert "3910" in instruction
+    assert "2750" in instruction
+
+
+def test_draft_exactly_at_the_ceiling_is_within_it() -> None:
+    assert _decide(word_count=2750) == (ReportAction.DELIVER, None)
+
+
+def test_exhausted_budget_delivers_the_draft_despite_findings() -> None:
+    # No instruction: an exhausted budget must not leave one behind, or the loop would run on.
+    assert _decide(findings=["The conclusion is missing."], revisions_used=2, max_revisions=2) == (
+        ReportAction.BUDGET_EXHAUSTED,
+        None,
+    )
+
+
+def test_exhausted_budget_delivers_an_over_long_draft() -> None:
+    assert _decide(word_count=3910, revisions_used=2, max_revisions=2) == (
+        ReportAction.BUDGET_EXHAUSTED,
+        None,
+    )
+
+
+def test_zero_budget_exhausts_on_the_first_draft() -> None:
+    assert _decide(word_count=3910, findings=["x"], revisions_used=0, max_revisions=0) == (
+        ReportAction.BUDGET_EXHAUSTED,
+        None,
+    )
+
+
+# --- the report loop's two edges ----------------------------------------------------------------
+
+
+def _report_state(**overrides: Any) -> ResearchState:
+    state: dict[str, Any] = {
+        "messages": [],
+        "original_query": "q",
+        "plans": [["a"]],
+        "iteration": 1,
+        "report": "the draft",
+        "report_revision_instruction": None,
+        "revisions_used": 0,
+        "revision_failed": False,
+    }
+    return ResearchState(**{**state, **overrides})  # type: ignore[typeddict-item]
+
+
+def test_report_routes_to_review_when_the_budget_allows() -> None:
+    assert route_after_report(max_revisions=2)(_report_state()) == "report-review"
+
+
+def test_failed_revision_ends_the_loop_even_with_budget_left() -> None:
+    # Re-reviewing the unchanged draft would route straight back into a call that fails again,
+    # and a failed revision increments no counter, so nothing would bound the cycle.
+    route = route_after_report(max_revisions=2)
+    assert route(_report_state(revision_failed=True)) == "end"
+
+
+def test_zero_budget_skips_the_review_entirely() -> None:
+    assert route_after_report(max_revisions=0)(_report_state()) == "end"
+
+
+def test_recorded_instruction_routes_back_to_report() -> None:
+    route = route_after_report_review()
+    assert route(_report_state(report_revision_instruction="Shorten it.")) == "report"
+
+
+def test_no_instruction_ends_the_turn() -> None:
+    # `decide_report_action` already folded in the count and the budget, so an absent
+    # instruction is the whole signal to deliver.
+    assert route_after_report_review()(_report_state()) == "end"

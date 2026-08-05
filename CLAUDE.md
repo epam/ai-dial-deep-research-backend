@@ -98,6 +98,13 @@ Override `--timeout` as needed.
 - use kwargs whenever possible instead of positional arguments - this improves readability.
   Note that some functions and methods have positional-only arguments - it's ok.
 - use comments to explain non-obvious code. don't write comments that restate the code.
+- **comments describe the code as it is, never how it changed.** no "instead of X", "the old
+  rule", "previously", "no longer", "this used to". a reader who does not have the diff cannot
+  use such a comment, and it goes stale the moment the next change lands — the reason a rule
+  exists is durable, the thing it replaced is not. write the rule and why it holds: not
+  "keying on the segment rather than on whether a tool ran", but "every chunk of one message
+  carries the same id, so a change in it means a new segment". this covers docstrings and test
+  names and docstrings too: a test asserts current behavior, not the absence of a past bug.
 - when writing docstrings, be concise
 - single source of truth, and mind staleness (docstrings, comments, READMEs, and similar):
   keep each fact — a concept, rule, mode, or concrete detail like a URL format, path, or

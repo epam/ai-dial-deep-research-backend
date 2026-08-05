@@ -1,11 +1,18 @@
-"""The three research-graph nodes: researcher, reviewer, report.
+"""The four research-graph nodes: research-agent, research-review, report, report-review.
 
-- `build_researcher_agent` returns a `create_agent` compiled graph used directly as
-  the researcher subgraph node (forced tool choice + the finish_iteration sentinel).
-- `make_reviewer_node` returns the reviewer node: an independent structured LLM call
+- `build_research_agent` returns a `create_agent` compiled graph used directly as
+  the research-agent subgraph node (forced tool choice + the finish_iteration sentinel).
+- `make_research_review_node` returns the research-review node: an independent structured LLM call
   that judges coverage and produces the next iteration's plan.
-- `make_report_node` returns the report node: a streamed LLM call writing the final
-  report. Its tokens are the only node output that becomes assistant content.
+- `make_report_node` returns the report node: it writes the first draft and every revision after
+  it. Nothing it produces is streamed to the user — a draft may still be revised, so only the
+  draft the loop settles on becomes assistant content, appended by the runner.
+- `make_report_review_node` returns the report-review node: an independent structured LLM call
+  that judges the draft against the report rules, emits its DIAL stage through the runner-supplied
+  callback, and records the instruction a revision would act on.
+
+`decide_report_action` is the single source for what happens to a reviewed draft: the router
+turns its result into an edge and the review node logs the same value.
 """
 
 from __future__ import annotations
@@ -13,7 +20,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
+from enum import StrEnum
 from typing import Any
 
 from langchain.agents import create_agent
@@ -26,11 +34,17 @@ from langchain_core.messages import (
     UsageMetadata,
 )
 from langchain_core.tools import BaseTool
+from pydantic import BaseModel
 
 from dial_deep_research.app.middleware import ImageBudgetMiddleware
+from dial_deep_research.app_properties import ReportSection
 from dial_deep_research.settings import settings
 from dial_deep_research.utils.agent_logging import agent_logging_middleware
-from dial_deep_research.utils.content import count_image_blocks, extract_text_from_content
+from dial_deep_research.utils.content import (
+    count_image_blocks,
+    count_words,
+    extract_text_from_content,
+)
 from dial_deep_research.utils.llm import (
     STREAM_DROP_MAX_ATTEMPTS,
     TRANSIENT_STREAM_DROP_ERRORS,
@@ -44,33 +58,41 @@ from dial_deep_research.utils.llm import (
 
 from .middleware import ForceToolChoiceMiddleware
 from .prompts import (
+    LENGTH_REVISION_INSTRUCTION,
     REPORT_REQUEST,
+    REPORT_REVIEW_REQUEST,
+    REPORT_REVIEW_SYSTEM_PROMPT,
+    REPORT_REVISION_REQUEST,
     REPORT_SYSTEM_PROMPT,
-    RESEARCHER_SYSTEM_PROMPT,
-    REVIEWER_SYSTEM_PROMPT,
+    RESEARCH_AGENT_SYSTEM_PROMPT,
+    RESEARCH_REVIEW_SYSTEM_PROMPT,
+    ReportReview,
     ResearchReview,
     render_next_instruction,
     render_plan,
+    render_protected_section_names,
+    render_report_structure,
 )
 from .state import ResearchState
 
 logger = logging.getLogger(__name__)
 
-ReviewerNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
+ResearchReviewNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
 ReportNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
+ReportReviewNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
 
 
-def build_researcher_agent(tools: list[BaseTool], today_date: str, client_name: str) -> Any:
-    """Build the researcher: a `create_agent` over the tools, forced to call a tool every step."""
+def build_research_agent(tools: list[BaseTool], today_date: str, client_name: str) -> Any:
+    """Build research-agent: a `create_agent` over the tools, forced to call a tool every step."""
     return create_agent(
         model=get_chat_model(LLMModelConfig()),
         tools=tools,
-        system_prompt=RESEARCHER_SYSTEM_PROMPT.format(
+        system_prompt=RESEARCH_AGENT_SYSTEM_PROMPT.format(
             today_date=today_date,
             client_name=client_name,
         ),
         middleware=[
-            *agent_logging_middleware("researcher"),
+            *agent_logging_middleware("research-agent"),
             stream_drop_retry_middleware(),
             ForceToolChoiceMiddleware(),
             ImageBudgetMiddleware(limit=settings.max_context_images),
@@ -79,10 +101,10 @@ def build_researcher_agent(tools: list[BaseTool], today_date: str, client_name: 
 
 
 def _render_findings(messages: list[BaseMessage]) -> str:
-    """Render the research transcript as a readable findings log for the reviewer.
+    """Render the research transcript as a readable findings log for research-review.
 
-    Images are noted but not embedded; the reviewer judges coverage from the text the
-    tools returned, the searches the researcher ran, and the instructions it followed.
+    Images are noted but not embedded; research-review judges coverage from the text the
+    tools returned, the searches research-agent ran, and the instructions it followed.
     """
     lines: list[str] = []
     for message in messages:
@@ -101,14 +123,14 @@ def _render_findings(messages: list[BaseMessage]) -> str:
 
 
 def _should_continue(*, plans_count: int, iteration: int, max_iterations: int) -> bool:
-    """One more researcher iteration iff a not-yet-run plan exists and the cap allows it."""
+    """One more research-agent iteration iff a not-yet-run plan exists and the cap allows it."""
     return plans_count > iteration and iteration < max_iterations
 
 
-def make_reviewer_node(today_date: str, max_iterations: int) -> ReviewerNode:
-    """Build the reviewer node over the given date and iteration cap."""
+def make_research_review_node(today_date: str, max_iterations: int) -> ResearchReviewNode:
+    """Build the research-review node over the given date and iteration cap."""
 
-    async def reviewer(state: ResearchState) -> dict[str, Any]:
+    async def research_review(state: ResearchState) -> dict[str, Any]:
         start = time.monotonic()
         # include_raw keeps the raw AIMessage alongside the parsed verdict so we can log the
         # call's token usage (including cached input tokens); with it, parse failures surface
@@ -122,12 +144,12 @@ def make_reviewer_node(today_date: str, max_iterations: int) -> ReviewerNode:
         plans_text = "\n\n".join(
             f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
         )
-        # Order sections stable → append-only so successive reviewer calls in a run share a
+        # Order sections stable → append-only so successive research-review calls in a run share a
         # byte prefix (question, then the growing findings) that the provider's prompt cache
         # can reuse; the small plans list, which also only grows, comes last.
         result: dict[str, Any] = await llm.ainvoke(
             [
-                SystemMessage(content=REVIEWER_SYSTEM_PROMPT.format(today_date=today_date)),
+                SystemMessage(content=RESEARCH_REVIEW_SYSTEM_PROMPT.format(today_date=today_date)),
                 HumanMessage(
                     content=(
                         f"Research question:\n{state['original_query']}\n\n"
@@ -150,7 +172,7 @@ def make_reviewer_node(today_date: str, max_iterations: int) -> ReviewerNode:
             update["plans"] = plans
             update["messages"] = [HumanMessage(content=render_next_instruction(review.next_steps))]
 
-        # Verdict mirrors `route_after_review` over the post-update state, so the
+        # Verdict mirrors `route_after_research_review` over the post-update state, so the
         # skeleton event never disagrees with the actual routing.
         will_continue = _should_continue(
             plans_count=len(plans), iteration=update["iteration"], max_iterations=max_iterations
@@ -166,11 +188,87 @@ def make_reviewer_node(today_date: str, max_iterations: int) -> ReviewerNode:
         )
         return update
 
-    return reviewer
+    return research_review
 
 
-def make_report_node(today_date: str) -> ReportNode:
-    """Build the report node over the given date."""
+class ReportAction(StrEnum):
+    """What the app does with a reviewed draft. Distinct from the review model's verdict."""
+
+    DELIVER = "deliver"
+    REVISE = "revise"
+    REVISE_OVER_CEILING = "revise_over_ceiling"
+    BUDGET_EXHAUSTED = "budget_exhausted"
+
+
+class ReportVerdict(StrEnum):
+    """What the review model said, or that its call never produced a verdict."""
+
+    APPROVED = "approved"
+    REVISE = "revise"
+    FAILED = "failed"
+
+
+class ReportReviewOutcome(BaseModel):
+    """One report review's result, handed to the runner so it can render a DIAL stage.
+
+    Carries no DIAL types: the node decides what to report, the runner decides how it is
+    rendered. `findings` is the review's text and belongs in the stage only — never in a log
+    record, per the logging-policy content allowlist.
+    """
+
+    draft_number: int
+    word_count: int
+    max_words: int
+    findings: list[str]
+    verdict: ReportVerdict
+    action: ReportAction
+    duration_seconds: float
+
+
+ReportReviewStageEmitter = Callable[[ReportReviewOutcome], None]
+
+
+def decide_report_action(
+    *,
+    word_count: int,
+    max_words: int,
+    findings: list[str],
+    revisions_used: int,
+    max_revisions: int,
+) -> tuple[ReportAction, str | None]:
+    """Decide what happens to a reviewed draft, and the instruction a revision gets.
+
+    The single source for that decision: the router turns the action into an edge and the
+    report-review node logs the same value, so the log can never describe a different
+    outcome than the one the graph took.
+
+    Exceeding the ceiling forces a revision even when the review found nothing — the count is
+    the app's, not the model's opinion. A failed review call reaches here with no findings, so
+    it revises on length alone or delivers.
+    """
+    over_ceiling = word_count > max_words
+    if not findings and not over_ceiling:
+        return ReportAction.DELIVER, None
+    if revisions_used >= max_revisions:
+        return ReportAction.BUDGET_EXHAUSTED, None
+
+    length_instruction = (
+        LENGTH_REVISION_INSTRUCTION.format(word_count=word_count, max_words=max_words)
+        if over_ceiling
+        else None
+    )
+    if not findings:
+        return ReportAction.REVISE_OVER_CEILING, length_instruction
+    parts = [f"- {finding}" for finding in findings]
+    if length_instruction:
+        parts.append(f"- {length_instruction}")
+    return ReportAction.REVISE, "\n".join(parts)
+
+
+def make_report_node(
+    today_date: str, sections: Sequence[ReportSection], max_words: int
+) -> ReportNode:
+    """Build the report node: it writes the first draft, and every revision after it."""
 
     async def report(state: ResearchState) -> dict[str, Any]:
         start = time.monotonic()
@@ -178,55 +276,206 @@ def make_report_node(today_date: str) -> ReportNode:
         plans_text = "\n\n".join(
             f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
         )
+        # Branch on whether a draft exists, NOT on `revisions_used`: the counter is still 0
+        # while the first revision is being written, so it would misroute that call.
+        previous_draft = state.get("report")
         report_messages: list[BaseMessage] = [
-            SystemMessage(content=REPORT_SYSTEM_PROMPT.format(today_date=today_date)),
+            SystemMessage(
+                content=REPORT_SYSTEM_PROMPT.format(
+                    today_date=today_date,
+                    report_structure=render_report_structure(sections),
+                    max_words=max_words,
+                    protected_sections=render_protected_section_names(sections),
+                )
+            ),
             *state["messages"],
             HumanMessage(
                 content=REPORT_REQUEST.format(query=state["original_query"], plans=plans_text)
             ),
         ]
-        # `with_retry` does not cover streaming, so the stream-drop retry is a loop here. The
-        # accumulated chunks reset each attempt, so the persisted report is one attempt's full
-        # text (partial tokens an aborted attempt already streamed to the user stay visible).
-        chunks: list[str] = []
-        usage: UsageMetadata | None = None
-        for attempt in range(STREAM_DROP_MAX_ATTEMPTS):
-            chunks = []
-            usage = None
-            try:
-                async for chunk in llm.astream(report_messages):
-                    text = extract_text_from_content(chunk.content)
-                    if text:
-                        chunks.append(text)
-                    # Usage arrives on the final chunk when stream_usage is on; keep the last.
-                    if chunk_usage := chunk.usage_metadata:
-                        usage = chunk_usage
-                break
-            except TRANSIENT_STREAM_DROP_ERRORS:
-                if attempt + 1 >= STREAM_DROP_MAX_ATTEMPTS:
-                    raise
-                logger.warning(
-                    "Report stream dropped mid-response, retrying (attempt %d of %d)",
-                    attempt + 2,
-                    STREAM_DROP_MAX_ATTEMPTS,
+        if previous_draft is not None:
+            # Appended after the first draft's request, never inserted before the transcript,
+            # so the byte prefix holds and the provider's prompt cache can serve it.
+            report_messages.append(
+                HumanMessage(
+                    content=REPORT_REVISION_REQUEST.format(
+                        word_count=count_words(previous_draft),
+                        max_words=max_words,
+                        instruction=state.get("report_revision_instruction") or "",
+                        draft=previous_draft,
+                    )
                 )
-                await asyncio.sleep(stream_drop_retry_delay(attempt))
-        text = "".join(chunks)
+            )
+        draft_number = state.get("revisions_used", 0) + (1 if previous_draft is None else 2)
+        try:
+            text, usage = await _stream_report(llm, report_messages)
+        except Exception as exc:
+            # Once a draft exists, no later failure may discard it: deliver the previous draft
+            # and leave the loop. The first draft has nothing to fall back to, so it propagates.
+            if previous_draft is None:
+                raise
+            logger.warning(
+                "Report revision failed, delivering the previous draft: "
+                "failed_draft=%d delivered_draft=%d error=%s",
+                draft_number,
+                draft_number - 1,
+                type(exc).__name__,
+            )
+            return {"revision_failed": True}
+
         logger.info(
-            "Report generated: duration=%.1fs length=%d tokens=%s",
+            "Report generated: draft=%d duration=%.1fs length=%d words=%d tokens=%s",
+            draft_number,
             time.monotonic() - start,
             len(text),
+            count_words(text),
             format_token_usage(usage),
         )
-        return {"report": text, "messages": [AIMessage(content=text)]}
+        # No `AIMessage` into `messages`: drafts stay out of the transcript, so a rejected one
+        # is never re-sent to a model nor persisted. The runner builds the assistant message
+        # for the delivered report from the graph's final state.
+        update: dict[str, Any] = {"report": text}
+        if previous_draft is not None:
+            update["revisions_used"] = state.get("revisions_used", 0) + 1
+        return update
 
     return report
 
 
-def route_after_review(max_iterations: int) -> Callable[[ResearchState], str]:
-    """Decide the edge out of the reviewer node.
+async def _stream_report(llm: Any, messages: list[BaseMessage]) -> tuple[str, UsageMetadata | None]:
+    """Stream one report call to completion, retrying transient mid-stream drops.
 
-    Continue researching when the reviewer recorded a plan for a not-yet-run iteration
+    `with_retry` does not cover streaming, so the retry is a loop here. The accumulated chunks
+    reset each attempt, so the returned report is one attempt's full text. Nothing is forwarded
+    to the user while streaming — the report reaches the choice only once the review loop
+    settles — so a retry cannot duplicate visible text.
+    """
+    for attempt in range(STREAM_DROP_MAX_ATTEMPTS):
+        chunks: list[str] = []
+        usage: UsageMetadata | None = None
+        try:
+            async for chunk in llm.astream(messages):
+                text = extract_text_from_content(chunk.content)
+                if text:
+                    chunks.append(text)
+                # Usage arrives on the final chunk when stream_usage is on; keep the last.
+                if chunk_usage := chunk.usage_metadata:
+                    usage = chunk_usage
+            return "".join(chunks), usage
+        except TRANSIENT_STREAM_DROP_ERRORS:
+            if attempt + 1 >= STREAM_DROP_MAX_ATTEMPTS:
+                raise
+            logger.warning(
+                "Report stream dropped mid-response, retrying (attempt %d of %d)",
+                attempt + 2,
+                STREAM_DROP_MAX_ATTEMPTS,
+            )
+            await asyncio.sleep(stream_drop_retry_delay(attempt))
+    raise AssertionError("unreachable: the retry loop either returns or raises")
+
+
+def make_report_review_node(
+    today_date: str,
+    sections: Sequence[ReportSection],
+    max_words: int,
+    max_revisions: int,
+    emit_stage: ReportReviewStageEmitter,
+) -> ReportReviewNode:
+    """Build the report-review node: judge the draft, emit its stage, decide the next step.
+
+    It sees the draft, the configuration and the query and plan — never the findings, which is
+    why it cannot reopen evidence coverage. A failing call never fails the turn: the loop falls
+    back to the measured count alone.
+    """
+
+    async def report_review(state: ResearchState) -> dict[str, Any]:
+        start = time.monotonic()
+        draft = state["report"] or ""
+        word_count = count_words(draft)
+        draft_number = state.get("revisions_used", 0) + 1
+
+        findings: list[str] = []
+        verdict = ReportVerdict.FAILED
+        usage: UsageMetadata | None = None
+        try:
+            llm = with_stream_drop_retry(
+                get_chat_model(LLMModelConfig()).with_structured_output(
+                    ReportReview, include_raw=True
+                )
+            )
+            result: dict[str, Any] = await llm.ainvoke(
+                [
+                    SystemMessage(
+                        content=REPORT_REVIEW_SYSTEM_PROMPT.format(today_date=today_date)
+                    ),
+                    HumanMessage(
+                        content=REPORT_REVIEW_REQUEST.format(
+                            report_structure=render_report_structure(sections),
+                            protected_sections=render_protected_section_names(sections),
+                            max_words=max_words,
+                            query=state["original_query"],
+                            plan=render_plan(state["plans"][0]) if state["plans"] else "(none)",
+                            word_count=word_count,
+                            draft=draft,
+                        )
+                    ),
+                ]
+            )
+            if result["parsing_error"] is not None:
+                raise result["parsing_error"]
+            review: ReportReview = result["parsed"]
+            usage = result["raw"].usage_metadata
+            findings = list(review.findings)
+            verdict = ReportVerdict.APPROVED if not findings else ReportVerdict.REVISE
+        except Exception as exc:
+            # A failed review must not cost the report. The measured count still applies, so
+            # the loop can still shorten an over-long draft on its own instruction.
+            logger.warning(
+                "Report review failed, falling back to the measured length: draft=%d error=%s",
+                draft_number,
+                type(exc).__name__,
+            )
+
+        action, instruction = decide_report_action(
+            word_count=word_count,
+            max_words=max_words,
+            findings=findings,
+            revisions_used=state.get("revisions_used", 0),
+            max_revisions=max_revisions,
+        )
+        duration = time.monotonic() - start
+        emit_stage(
+            ReportReviewOutcome(
+                draft_number=draft_number,
+                word_count=word_count,
+                max_words=max_words,
+                findings=findings,
+                verdict=verdict,
+                action=action,
+                duration_seconds=duration,
+            )
+        )
+        logger.info(
+            "Report reviewed: draft=%d duration=%.1fs verdict=%s action=%s words=%d ceiling=%d "
+            "findings=%d tokens=%s",
+            draft_number,
+            duration,
+            verdict.value,
+            action.value,
+            word_count,
+            max_words,
+            len(findings),
+            format_token_usage(usage),
+        )
+        return {"report_revision_instruction": instruction}
+
+    return report_review
+
+
+def route_after_research_review(max_iterations: int) -> Callable[[ResearchState], str]:
+    """Decide the edge out of the research-review node.
+
+    Continue researching when research-review recorded a plan for a not-yet-run iteration
     (`len(plans) > iteration`) and the iteration cap is not yet reached; otherwise report.
     """
 
@@ -236,7 +485,38 @@ def route_after_review(max_iterations: int) -> Callable[[ResearchState], str]:
             iteration=state["iteration"],
             max_iterations=max_iterations,
         ):
-            return "researcher"
+            return "research-agent"
         return "report"
+
+    return route
+
+
+def route_after_report(max_revisions: int) -> Callable[[ResearchState], str]:
+    """Decide the edge out of the report node.
+
+    Three exits. A revision whose own call failed leaves the loop immediately with the previous
+    draft: returning to review would re-judge an unchanged draft and route straight back to a
+    call that fails again, and since a failed revision writes nothing, no counter would bound
+    that cycle. A zero revision budget skips the review entirely rather than calling it and
+    ignoring the verdict. Otherwise the draft is reviewed.
+    """
+
+    def route(state: ResearchState) -> str:
+        if state.get("revision_failed"):
+            return "end"
+        return "report-review" if max_revisions > 0 else "end"
+
+    return route
+
+
+def route_after_report_review() -> Callable[[ResearchState], str]:
+    """Decide the edge out of the report-review node.
+
+    Revise iff the review left an instruction. `decide_report_action` already folded in the
+    measured count and the revision budget, so this reads one field rather than re-deciding.
+    """
+
+    def route(state: ResearchState) -> str:
+        return "report" if state.get("report_revision_instruction") else "end"
 
     return route

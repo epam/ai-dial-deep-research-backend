@@ -124,8 +124,9 @@ on **whether a previous draft exists** — `state["report"]` is set. That is *no
 in that call), so branching on it would send the first revision down the first-draft path, which is
 the failure this branch exists to avoid. Branch on the draft, not the counter. With no previous
 draft the node writes the first one; with one, it rewrites it. `report-review` is a structured LLM
-call that returns the findings and then the verdict (findings-before-verdict, per the CLAUDE.md
-schema convention).
+call whose only output is the findings list; there is no separate approval field, so an empty
+list is the approval. That closes off "approved, but here's a minor note" as a shape the schema
+can express — a finding always forces a revision, whatever the model would have called it.
 
 The branch is deliberately **not** "are there revision instructions", because a revision can be
 forced with none: when the review model approves a draft that the measured count says is over the
@@ -164,6 +165,11 @@ Alternatives rejected:
 - **A LangGraph subgraph for the report loop.** The recursion limit is applied per graph run
   (`max_research_graph_steps`), so a subgraph would get its own budget — extra indirection for
   no gain, since the outer graph's length is already bounded by the revision budget.
+- **A separate `approved: bool` field alongside `findings`.** Lets the model approve a draft
+  while still leaving a note. Rejected: a model that hedges this way is common, not an edge case,
+  and the field only widens the disagreement the app already has to arbitrate (the ceiling
+  override shows the app overrides the model's opinion regardless). One field, findings-empty-is-
+  approval, means there is nothing to disagree with.
 
 ### Report-review reads the report, the config and the query; the reviser also reads the findings
 

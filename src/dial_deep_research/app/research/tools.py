@@ -1,4 +1,4 @@
-"""Research-specific tools: the finish sentinel the researcher uses to end an iteration.
+"""Research-specific tools: the finish sentinel research-agent uses to end an iteration.
 
 MCP tool loading is shared across agents and lives in `app/mcp_tools.py`.
 """
@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from langchain_core.tools import BaseTool, tool
 
-FINISH_ITERATION_RESULT = "Research iteration complete; handing off to the reviewer."
+FINISH_ITERATION_RESULT = "Research iteration complete; handing off to the research review."
 
 
 def build_finish_iteration_tool() -> BaseTool:
-    """A no-op sentinel: the researcher calls it to end the current iteration.
+    """A no-op sentinel: research-agent calls it to end the current iteration.
 
     `return_direct=True` makes `create_agent` exit its loop right after this tool
     executes, so the iteration ends with no further model round-trip. It only signals

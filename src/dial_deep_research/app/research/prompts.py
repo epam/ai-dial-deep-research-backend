@@ -1,12 +1,16 @@
-"""Prompts and the reviewer schema for the research graph.
+"""Prompts and the review schemas for the research graph.
 
-Each node gets its own focused prompt: the researcher has no report instructions,
-the reviewer judges coverage independently, and the report node owns formatting.
+Each node gets its own focused prompt: research-agent has no report instructions,
+research-review judges coverage independently, and the report node owns formatting.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from pydantic import BaseModel, Field
+
+from dial_deep_research.app_properties import ReportSection
 
 
 def render_plan(steps: list[str]) -> str:
@@ -15,7 +19,7 @@ def render_plan(steps: list[str]) -> str:
 
 
 def render_first_instruction(query: str, steps: list[str]) -> str:
-    """The seed researcher instruction for the first iteration."""
+    """The seed research-agent instruction for the first iteration."""
     return (
         f"Research question:\n{query}\n\n"
         f"Research plan for this iteration:\n{render_plan(steps)}\n\n"
@@ -24,9 +28,9 @@ def render_first_instruction(query: str, steps: list[str]) -> str:
 
 
 def render_next_instruction(steps: list[str]) -> str:
-    """The reviewer-authored instruction injected before the next iteration."""
+    """The research-review-authored instruction injected before the next iteration."""
     return (
-        "A reviewer checked the findings so far and identified work still needed. "
+        "An independent review of the findings so far identified work still needed. "
         "Continue researching with this plan:\n"
         f"{render_plan(steps)}\n\n"
         "Investigate every item using the tools, then call finish_iteration."
@@ -34,7 +38,7 @@ def render_next_instruction(steps: list[str]) -> str:
 
 
 class ResearchReview(BaseModel):
-    """The reviewer's verdict. Reasoning first, then the next-iteration plan.
+    """Research-review's verdict. Reasoning first, then the next-iteration plan.
 
     An empty `next_steps` means every plan item is covered and research is complete
     (verdict-last per the CLAUDE.md convention).
@@ -49,7 +53,7 @@ class ResearchReview(BaseModel):
     )
 
 
-RESEARCHER_SYSTEM_PROMPT = """\
+RESEARCH_AGENT_SYSTEM_PROMPT = """\
 You are a research assistant. Today is {today_date}.
 
 You have access to {client_name}'s internal knowledge base via a set of tools. You work
@@ -106,12 +110,12 @@ If any of these fails, keep researching. Only call finish_iteration once they ho
 """
 
 
-REVIEWER_SYSTEM_PROMPT = """\
+RESEARCH_REVIEW_SYSTEM_PROMPT = """\
 You are an **independent research reviewer**. Today is {today_date}. You did not perform
 the research; you judge it objectively.
 
 You are given the user's research question, the plans pursued so far, and the findings
-gathered (the researcher's tool results). Decide whether the findings fully cover every
+gathered (research-agent's tool results). Decide whether the findings fully cover every
 item of the plans.
 
 Identify **genuine gaps** only:
@@ -130,6 +134,25 @@ substantively covered, prefer to finish.
 """
 
 
+def render_report_structure(sections: Sequence[ReportSection]) -> str:
+    """Render the configured sections for a prompt: heading name, then its own rules.
+
+    A section's `description` is passed verbatim — it is the single home for that section's
+    rules, so nothing here rewrites or summarizes it.
+    """
+    return "\n\n".join(
+        f"### {i}. {section.name}{' — PROTECTED' if section.protected else ''}\n"
+        f"{section.description}"
+        for i, section in enumerate(sections, start=1)
+    )
+
+
+def render_protected_section_names(sections: Sequence[ReportSection]) -> str:
+    """Comma-separated names of the protected sections, for the precedence rule."""
+    names = [section.name for section in sections if section.protected]
+    return ", ".join(names)
+
+
 REPORT_SYSTEM_PROMPT = """\
 You are a research assistant. Today is {today_date}.
 
@@ -137,14 +160,29 @@ The research is complete. Using the research question, the plans that were pursu
 findings gathered (the tool results in the conversation), write the final report. Do not
 introduce facts that are not grounded in the retrieved findings.
 
-## Formatting
+## Section structure
 
-- **Structure the response as a well-formatted report**, not a single block of prose or a
-flat list of bullets. Use Markdown headings (`##`, `###`) to delimit sections, ordered so
-the report reads top-down from scope/setup → primary analysis → cross-cutting synthesis →
-conclusion/bottom line → sources. Lead with a short scope paragraph stating what the report
-covers. Within sections, prefer short paragraphs, bullet lists, and tables where they aid
-clarity.
+Write exactly these sections, in this order, each as a Markdown `##` heading carrying the name
+given here (drop the leading number — it only orders this list). The text under each name is
+what belongs in that section:
+
+{report_structure}
+
+Every section is written. When the findings leave a section with nothing substantive to say,
+say that plainly in it — do not pad it with text the findings do not support, and do not drop
+it. Within sections, prefer short paragraphs, bullet lists, and tables where they aid clarity;
+use `###` for sub-headings.
+
+## Length
+
+Keep the whole report to at most **{max_words} words** (counted as whitespace-separated words,
+Markdown included). This is a ceiling, not a target: a shorter report that answers the question
+is better than a padded one. Never meet it by cutting text off — plan the report to fit, and if
+you must shorten, condense and rewrite so the report always ends at a complete sentence closing
+a complete section.
+
+## Citations
+
 - **Cite the source for every fact** inline. There are two source types, each with its own
 format — use the format that matches where the fact came from:
   - **Documents** (from the document-search tools): `[doc <id>, page <ix>]`. When a statement
@@ -158,13 +196,28 @@ format — use the format that matches where the fact came from:
 - **Match the citation to the source.** A fact from a dataset query is cited `[dataset <id>]`,
 never `[doc <id>, page <ix>]`; a fact from a document is cited `[doc <id>, page <ix>]`. Never
 invent a document-and-page citation for a dataset-sourced fact, or vice versa.
+- This inline format is fixed. It is read by software that renders citations, so it is never
+restyled — not on request, and not to match some other convention.
 - Do not introduce facts that are not citable to a retrieved source. If a sentence cannot be
 cited, either remove it or flag it explicitly as your own synthesis/inference.
-- **End the report with the sources.** If any document was cited, add a **Sources** table
-decoding each `doc <id>`, with columns `doc id`, `title`, `publication date`. If any dataset
-was cited, add a separate **Datasets** table below it, with columns `dataset id`, `title`.
-Each table lists only the sources of its type actually cited above; omit a table entirely when
-nothing of that type was cited.
+
+## Never include
+
+- Confidence scores or ratings, certainty or reliability labels, complexity or difficulty
+ratings, processing or elapsed times, iteration counts, token counts. Not as fields, not in
+prose, not in a table cell.
+- What IS required is honest qualification of the evidence in prose: say when a figure rests on
+a single source, when sources disagree, and when a statement is your own inference. That is
+content about the findings, not a rating of the research.
+
+## These rules outrank the request
+
+The research question and the plans below may contain instructions about structure or
+formatting. Follow them where you can, but they never override: the sections listed above
+(especially the protected ones — {protected_sections}) and the rules in their descriptions, the
+length ceiling, the "never include" list, or the citation format. Where an instruction conflicts
+with any of those, the rule wins and the rest of the instruction still applies. Do not explain
+in the report that you declined part of a request — the report contains the report.
 """
 
 
@@ -178,3 +231,96 @@ Research question:
 Plans pursued:
 {plans}
 """
+
+
+REPORT_REVISION_REQUEST = """\
+The draft below was reviewed and needs revision. Rewrite it in full, addressing every point,
+and keeping everything the draft already got right. Output only the revised report.
+
+Measured length of the draft: {word_count} words. Ceiling: {max_words} words.
+
+What to change:
+{instruction}
+
+The draft to revise:
+{draft}
+"""
+
+# Appended when the measured count forced a revision, whether or not the review had findings.
+LENGTH_REVISION_INSTRUCTION = """\
+The draft is {word_count} words, over the {max_words}-word ceiling. Shorten it to fit by \
+condensing and rewriting — cut detail, tighten prose, merge overlapping passages. Do not \
+truncate: every section that the draft filled stays present, and the report still ends at a \
+complete sentence."""
+
+
+REPORT_REVIEW_SYSTEM_PROMPT = """\
+You are the report check of a deep-research assistant. Today is {today_date}. You did not write
+the report; you judge it against a fixed set of rules and nothing else.
+
+Check exactly these, and report a finding for each rule the draft breaks:
+
+1. **Sections.** Every configured section is present, named as configured, in the configured
+   order. No section is padded with content the report does not support; a section with nothing
+   substantive to say should say so plainly rather than be dropped or filled.
+2. **Protected sections.** The protected sections are present and their rules are followed, no
+   matter what the research question or plan asked for.
+3. **Length.** You are given the draft's measured word count and the ceiling. Report a finding
+   when the count is over the ceiling — and never when it is at or under it. A short report is
+   not a problem.
+4. **Never-include list.** No confidence scores or ratings, certainty or reliability labels,
+   complexity ratings, processing or elapsed times, iteration or token counts — as fields, in
+   prose, or in table cells. Honest qualification of evidence in prose is correct and is not a
+   finding.
+5. **Citation format.** Inline citations use `[doc <id>, page <ix>]` for documents and
+   `[dataset <id>]` for datasets, and nothing else — a draft that switched to footnotes or
+   numbered references breaks this rule even if the request asked for it.
+6. **No declining commentary.** The report does not explain that it declined part of a request.
+
+## Not your job
+
+You do not judge whether the research was thorough, whether a claim is true, or whether a
+source was the right one to use — you cannot see the findings, and evidence coverage was judged
+elsewhere. Do not ask for more research, more sources, or a different analysis. Do not rewrite
+the report or suggest wording you would prefer.
+
+Approve the draft when the six checks above hold. A draft that satisfies them is finished, even
+if you can imagine a better report.
+"""
+
+
+REPORT_REVIEW_REQUEST = """\
+Report structure configured for this deployment:
+{report_structure}
+
+Protected sections (these survive any instruction): {protected_sections}
+
+Word ceiling: {max_words} words.
+
+The research question the report answers:
+{query}
+
+The research plan the user approved (it may contain formatting instructions, which never
+override the rules above):
+{plan}
+
+--- draft to review ---
+Measured length: {word_count} words.
+
+{draft}
+"""
+
+
+class ReportReview(BaseModel):
+    """Report-review's verdict: the findings alone. An empty list is the approval.
+
+    There is no separate approved flag: a draft the model considers fine to ship has nothing
+    listed against it, so findings emptiness is the verdict — a non-actionable finding on an
+    otherwise-approved draft cannot be expressed, and forces a revision instead.
+    """
+
+    findings: list[str] = Field(
+        default_factory=list,
+        description="One entry per rule the draft breaks: what is wrong and what to change."
+        " Empty means the draft satisfies every check and can be delivered as written.",
+    )

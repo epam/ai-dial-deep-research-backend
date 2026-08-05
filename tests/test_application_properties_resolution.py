@@ -126,6 +126,9 @@ def test_schema_endpoint_serves_unwrapped_schema(client: TestClient) -> None:
     assert set(schema["properties"]) == {
         "max_research_iterations",
         "max_research_graph_steps",
+        "default_report_structure",
+        "max_report_words",
+        "max_report_revisions",
         "prompts",
         "mcp_servers",
     }

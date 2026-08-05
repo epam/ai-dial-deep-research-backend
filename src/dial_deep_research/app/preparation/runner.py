@@ -49,11 +49,23 @@ _MODEL_NODE = "model"
 class PrepAgentRunner:
     """Drives one preparation agent run and emits it to DIAL (no persistence)."""
 
+    @property
+    def appended_content(self) -> bool:
+        """Whether any preparation text reached the choice this turn.
+
+        The research runner needs it: the report is separated from preparation text by a blank
+        line, and with the silent hand-off there usually is none to separate from. It also drives
+        the separator between preparation's own text segments — the first segment of a turn takes
+        no leading blank line.
+        """
+        return self._appended_content
+
     def __init__(self, choice: Choice) -> None:
         self._choice = choice
         self._pending_tool_calls: dict[str, PendingToolCall] = {}
         self._messages: list[BaseMessage] = []
-        self._separator_pending = False
+        self._appended_content = False
+        self._streamed_message_id: str | None = None
 
     async def run(
         self,
@@ -109,7 +121,6 @@ class PrepAgentRunner:
 
     def _handle_tool_message(self, msg: ToolMessage) -> None:
         self._messages.append(msg)
-        self._separator_pending = True
         tool_call = self._pending_tool_calls.pop(msg.tool_call_id, None)
         if tool_call is None:
             raise ValueError(
@@ -142,7 +153,13 @@ class PrepAgentRunner:
         text = extract_text_from_content(chunk.content)
         if not text:
             return
-        if self._separator_pending:
+        # A blank line goes between text segments, not between tokens. Every chunk of one
+        # assistant message shares an id — the provider's response id, or one langchain_core
+        # stamps per LLM run (`chat_models.py`, `chunk.message.id = run_id` when the provider
+        # sent none) — so a change of id means a new message: the next model call, or the same
+        # call re-streamed after a transient failure.
+        if self._appended_content and chunk.id != self._streamed_message_id:
             text = "\n\n" + text
-            self._separator_pending = False
+        self._streamed_message_id = chunk.id
         self._choice.append_content(text)
+        self._appended_content = True

@@ -1,5 +1,6 @@
 import json
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
@@ -46,6 +47,54 @@ def log_tool_call_completed(
 def timed_stage_title(base_name: str, start: datetime, end: datetime) -> str:
     elapsed = (end - start).total_seconds()
     return f"{base_name} ({elapsed:.2f}s, start: {start:%H:%M:%S}, end: {end:%H:%M:%S})"
+
+
+class DialStageReportReviewFormatter:
+    """Renders one report review as a DIAL stage.
+
+    Its own title shape rather than the tool-call one: a review is not a tool call, and the
+    `[TOOL] "<name>"` form would read as one. The body carries the review's findings, which is
+    the one place they appear — the logs get counts only.
+    """
+
+    _PREFIX = "[REPORT REVIEW]"
+
+    @classmethod
+    def format_title(cls, *, draft_number: int, action: str, duration_seconds: float) -> str:
+        emoji = _RESULT_EMOJI if action == "deliver" else _ERROR_EMOJI
+        return f"{cls._PREFIX} draft {draft_number} - {action} {emoji} ({duration_seconds:.2f}s)"
+
+    @classmethod
+    def format_body(
+        cls,
+        *,
+        draft_number: int,
+        word_count: int,
+        max_words: int,
+        verdict: str,
+        findings: Sequence[str],
+    ) -> str:
+        lines = [
+            f"**Draft** {draft_number}",
+            "",
+            f"**Length** {word_count} words (ceiling {max_words})",
+            "",
+            f"**Verdict** {verdict}",
+            "",
+        ]
+        if verdict == "failed":
+            lines.append("**Findings** the review call failed, so it produced no verdict.")
+        elif findings:
+            lines.append("**Findings**")
+            lines.append("")
+            # Fenced so a multi-line finding stays readable — single newlines collapse in
+            # markdown, the same reason tool stages fence their payloads.
+            lines.append("```")
+            lines.extend(f"{i}. {finding}" for i, finding in enumerate(findings, start=1))
+            lines.append("```")
+        else:
+            lines.append("**Findings** none — the draft satisfies every check.")
+        return "\n".join(lines)
 
 
 class DialStageToolCallFormatter:

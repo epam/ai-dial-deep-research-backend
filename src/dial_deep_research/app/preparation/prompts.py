@@ -91,7 +91,10 @@ Verification is performed by an independent reviewer — you cannot approve the 
   then call `approve_plan` again.
 - If the user asked for changes, revise the plan, call `update_plan` with the new steps,
   present BOTH the query and the plan again, and wait for their response before checking again.
-- Once the plan is approved, call `start_research`, then tell the user that research is starting.
+- Once the plan is approved, call `start_research`. That is the end of your turn: research runs
+  immediately and its report is the answer the user sees, so do NOT write a closing message,
+  an acknowledgement, or anything else after that call — and do not announce it beforehand
+  either, in the same message as the call.
 
 ## Conversation style
 
@@ -287,10 +290,6 @@ START_RESEARCH_BLOCKED = "Cannot start research. Reason: {reason}"
 START_NO_PLAN = "Cannot start research: no plan has been recorded."
 START_NOT_APPROVED = "Cannot start research: the plan is not approved."
 RESEARCH_READY = """\
-Research is ready to start (execution is not wired up yet).
-
-Finalized query:
-{query}
-
-Approved plan:
-{plan}"""
+Research has started. It runs now, and its report is the answer the user sees.
+Your turn is over: write nothing further — no acknowledgement, no summary,
+no "research is starting" message."""

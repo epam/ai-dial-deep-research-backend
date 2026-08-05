@@ -132,6 +132,70 @@ class MCPClientSettings(BaseModel):
         return self
 
 
+class ReportSection(BaseModel):
+    """One section of the report structure.
+
+    `description` is the single home for that section's rules — what belongs in it, how to
+    render it, any table columns it carries. It is passed verbatim to the report writer and
+    to report-review, so changing a section's behavior means editing this one string.
+    """
+
+    name: str = Field(
+        min_length=1,
+        description="The section's heading in the report.",
+    )
+    description: str = Field(
+        min_length=1,
+        description="Everything the report writer and the review step need to know about this"
+        " section's content: its purpose, what belongs in it, how to render it, any table columns."
+        " This is the only place a section's rules live.",
+    )
+    protected: bool = Field(
+        default=False,
+        description="Whether this section survives any user instruction. A protected section can be"
+        " neither dropped nor restyled by anything the user asked for, and neither can the rules in"
+        " its description. At least one section must be protected.",
+    )
+
+
+# The references section's description owns the source-entry rules for every type a report may
+# cite. It lives here rather than in the report prompt because a section's rules have one home
+# (see `ReportSection.description`). The inline citation format is deliberately NOT here: it
+# applies to every section's body, so it stays a report-wide rule in the report prompt.
+_REFERENCES_DESCRIPTION = """\
+Decode every source cited in the report. If any document was cited, add a Sources table decoding \
+each `doc <id>`, with columns `doc id`, `title`, `publication date`. If any dataset was cited, add \
+a separate Datasets table below it, with columns `dataset id`, `title`. Each table lists only the \
+sources of its type actually cited above, so a type with nothing cited drops its own table. The \
+section itself is always written: if the research cited no source at all, say so plainly here \
+rather than leaving the section out or inventing entries."""
+
+DEFAULT_REPORT_STRUCTURE: list[ReportSection] = [
+    ReportSection(
+        name="Key Findings",
+        description="A brief summary of what the research found, leading with the direct answer to"
+        " the user's question where the findings support one. Short paragraphs or bullets, not a"
+        " retelling of the analysis that follows.",
+    ),
+    ReportSection(
+        name="Detailed Analysis",
+        description="The substance of the report: what the sources say, how they fit together, and"
+        " what follows from them. Use sub-headings, short paragraphs, and tables where they aid"
+        " clarity. Note where sources disagree or where a figure rests on a single source.",
+    ),
+    ReportSection(
+        name="Conclusion",
+        description="The bottom line the analysis supports, and the limits of what the findings can"
+        " answer. No new facts here.",
+    ),
+    ReportSection(
+        name="References",
+        description=_REFERENCES_DESCRIPTION,
+        protected=True,
+    ),
+]
+
+
 class Prompts(BaseModel):
     """Per-instance content injected into the prompt templates."""
 
@@ -155,8 +219,8 @@ class ApplicationProperties(BaseModel):
     max_research_iterations: int = Field(
         default=10,
         ge=1,
-        description="Max number of research iterations (researcher → reviewer loops) before"
-        " the report is forced",
+        description="Max number of research iterations (research-agent → research-review loops)"
+        " before the report is forced",
     )
     max_research_graph_steps: int = Field(
         default=500,
@@ -169,6 +233,29 @@ class ApplicationProperties(BaseModel):
         " it). Treat it as a safety stop for research that does not finish on its own, not as a"
         " way to tune research depth: hitting the limit raises GraphRecursionError and the turn"
         " fails with an error. Raise it if long research legitimately runs out of super-steps.",
+    )
+    default_report_structure: list[ReportSection] = Field(
+        default=DEFAULT_REPORT_STRUCTURE,
+        min_length=1,
+        description="The ordered sections a report follows, each rendered as a Markdown heading."
+        " Section names must be unique, and at least one section must be protected. Report-wide"
+        " rules (the word ceiling, the ban on confidence scores and processing times, the inline"
+        " citation format) are not configured here — only the sections and what belongs in them.",
+    )
+    max_report_words: int = Field(
+        default=2750,
+        ge=1,
+        description="The report's word ceiling, counted as whitespace-separated tokens of the"
+        " report's Markdown. Enforced by reviewing the finished report and revising it, never by"
+        " cutting text off: a report over the ceiling is rewritten to fit while the revision budget"
+        " allows, and always ends at a complete sentence.",
+    )
+    max_report_revisions: int = Field(
+        default=2,
+        ge=0,
+        description="How many revisions the report review loop may write before the latest draft is"
+        " delivered as-is. Each revision costs one report call plus one review call. 0 disables the"
+        " review entirely: the first draft is delivered unreviewed.",
     )
     mcp_servers: list[MCPClientSettings] = Field(
         min_length=1,
@@ -183,6 +270,24 @@ class ApplicationProperties(BaseModel):
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
             raise ValueError(f"duplicate MCP server_name(s): {duplicates}")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_report_structure(self) -> ApplicationProperties:
+        """Unique section names, and at least one protected section.
+
+        Uniqueness mirrors `_validate_unique_server_names`: duplicate headings make "every
+        configured section is present" ambiguous. The protected-section floor keeps configuration
+        from producing a report whose every section a user instruction may remove.
+        """
+        names = [section.name for section in self.default_report_structure]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate report section name(s): {duplicates}")
+        if not any(section.protected for section in self.default_report_structure):
+            raise ValueError(
+                "default_report_structure must contain at least one section with protected=true"
+            )
         return self
 
     @classmethod

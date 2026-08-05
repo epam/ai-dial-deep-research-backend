@@ -7,7 +7,7 @@
   "properties": {
     "max_research_iterations": {
       "default": 10,
-      "description": "Max number of research iterations (researcher → reviewer loops) before the report is forced",
+      "description": "Max number of research iterations (research-agent → research-review loops) before the report is forced",
       "minimum": 1,
       "title": "Max Research Iterations",
       "type": "integer",
@@ -25,6 +25,89 @@
       "dial:meta": {
         "dial:propertyKind": "server",
         "dial:propertyOrder": 2
+      }
+    },
+    "default_report_structure": {
+      "default": [
+        {
+          "name": "Key Findings",
+          "description": "A brief summary of what the research found, leading with the direct answer to the user's question where the findings support one. Short paragraphs or bullets, not a retelling of the analysis that follows.",
+          "protected": false
+        },
+        {
+          "name": "Detailed Analysis",
+          "description": "The substance of the report: what the sources say, how they fit together, and what follows from them. Use sub-headings, short paragraphs, and tables where they aid clarity. Note where sources disagree or where a figure rests on a single source.",
+          "protected": false
+        },
+        {
+          "name": "Conclusion",
+          "description": "The bottom line the analysis supports, and the limits of what the findings can answer. No new facts here.",
+          "protected": false
+        },
+        {
+          "name": "References",
+          "description": "Decode every source cited in the report. If any document was cited, add a Sources table decoding each `doc <id>`, with columns `doc id`, `title`, `publication date`. If any dataset was cited, add a separate Datasets table below it, with columns `dataset id`, `title`. Each table lists only the sources of its type actually cited above, so a type with nothing cited drops its own table. The section itself is always written: if the research cited no source at all, say so plainly here rather than leaving the section out or inventing entries.",
+          "protected": true
+        }
+      ],
+      "description": "The ordered sections a report follows, each rendered as a Markdown heading. Section names must be unique, and at least one section must be protected. Report-wide rules (the word ceiling, the ban on confidence scores and processing times, the inline citation format) are not configured here — only the sections and what belongs in them.",
+      "items": {
+        "description": "One section of the report structure.\n\n`description` is the single home for that section's rules — what belongs in it, how to\nrender it, any table columns it carries. It is passed verbatim to the report writer and\nto report-review, so changing a section's behavior means editing this one string.",
+        "properties": {
+          "name": {
+            "description": "The section's heading in the report.",
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "description": {
+            "description": "Everything the report writer and the review step need to know about this section's content: its purpose, what belongs in it, how to render it, any table columns. This is the only place a section's rules live.",
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "protected": {
+            "default": false,
+            "description": "Whether this section survives any user instruction. A protected section can be neither dropped nor restyled by anything the user asked for, and neither can the rules in its description. At least one section must be protected.",
+            "title": "Protected",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ],
+        "title": "ReportSection",
+        "type": "object"
+      },
+      "minItems": 1,
+      "title": "Default Report Structure",
+      "type": "array",
+      "dial:meta": {
+        "dial:propertyKind": "server",
+        "dial:propertyOrder": 3
+      }
+    },
+    "max_report_words": {
+      "default": 2750,
+      "description": "The report's word ceiling, counted as whitespace-separated tokens of the report's Markdown. Enforced by reviewing the finished report and revising it, never by cutting text off: a report over the ceiling is rewritten to fit while the revision budget allows, and always ends at a complete sentence.",
+      "minimum": 1,
+      "title": "Max Report Words",
+      "type": "integer",
+      "dial:meta": {
+        "dial:propertyKind": "server",
+        "dial:propertyOrder": 4
+      }
+    },
+    "max_report_revisions": {
+      "default": 2,
+      "description": "How many revisions the report review loop may write before the latest draft is delivered as-is. Each revision costs one report call plus one review call. 0 disables the review entirely: the first draft is delivered unreviewed.",
+      "minimum": 0,
+      "title": "Max Report Revisions",
+      "type": "integer",
+      "dial:meta": {
+        "dial:propertyKind": "server",
+        "dial:propertyOrder": 5
       }
     },
     "mcp_servers": {
@@ -86,7 +169,7 @@
       "type": "array",
       "dial:meta": {
         "dial:propertyKind": "server",
-        "dial:propertyOrder": 3
+        "dial:propertyOrder": 6
       }
     },
     "prompts": {
@@ -120,7 +203,7 @@
       "type": "object",
       "dial:meta": {
         "dial:propertyKind": "server",
-        "dial:propertyOrder": 4
+        "dial:propertyOrder": 7
       }
     }
   },

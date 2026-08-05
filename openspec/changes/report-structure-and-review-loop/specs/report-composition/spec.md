@@ -329,8 +329,10 @@ protected sections and their rules, the word ceiling (given the draft's measured
 prohibited meta-annotations, and the citation format rules the **research-execution** capability
 defines.
 
-The review step SHALL return either approval or concrete revision instructions naming what to
-change, and its structured output SHALL place those findings before the verdict.
+The review step's structured output SHALL be the findings alone, one entry per rule the draft
+breaks and naming what to change. There SHALL be no separate approval field: an empty list SHALL
+mean the draft is approved, so a finding that is not meant to block delivery cannot be expressed —
+every returned finding forces a revision.
 
 The step SHALL NOT receive the research findings: every criterion above is decidable from the
 draft, the configuration, and the query and plan.
@@ -384,6 +386,13 @@ route control back to research-agent.
   budget is 2
 - **THEN** a revision SHALL be written against those instructions and SHALL itself be judged by
   the review step before delivery
+
+#### Scenario: A finding always forces a revision, with no way to leave it merely informative
+
+- **WHEN** the review step returns one finding on a draft it would otherwise consider fine to
+  ship
+- **THEN** the draft SHALL still be treated as not approved and a revision SHALL be written
+  against that finding, because the schema has no field to mark a finding non-actionable
 
 #### Scenario: Exhausted budget delivers the latest draft
 

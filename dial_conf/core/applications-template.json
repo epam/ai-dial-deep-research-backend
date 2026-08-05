@@ -6,6 +6,30 @@
       "applicationProperties": {
         "max_research_iterations": 10,
         "max_research_graph_steps": 500,
+        "default_report_structure": [
+          {
+            "name": "Key Findings",
+            "description": "A brief summary of what the research found, leading with the direct answer to the user's question where the findings support one. Short paragraphs or bullets, not a retelling of the analysis that follows.",
+            "protected": false
+          },
+          {
+            "name": "Detailed Analysis",
+            "description": "The substance of the report: what the sources say, how they fit together, and what follows from them. Use sub-headings, short paragraphs, and tables where they aid clarity. Note where sources disagree or where a figure rests on a single source.",
+            "protected": false
+          },
+          {
+            "name": "Conclusion",
+            "description": "The bottom line the analysis supports, and the limits of what the findings can answer. No new facts here.",
+            "protected": false
+          },
+          {
+            "name": "References",
+            "description": "Decode every source cited in the report. If any document was cited, add a Sources table decoding each `doc <id>`, with columns `doc id`, `title`, `publication date`. If any dataset was cited, add a separate Datasets table below it, with columns `dataset id`, `title`. Each table lists only the sources of its type actually cited above, so a type with nothing cited drops its own table. The section itself is always written: if the research cited no source at all, say so plainly here rather than leaving the section out or inventing entries.",
+            "protected": true
+          }
+        ],
+        "max_report_words": 2750,
+        "max_report_revisions": 2,
         "mcp_servers": [
           {
             "server_name": "generic-rag",
