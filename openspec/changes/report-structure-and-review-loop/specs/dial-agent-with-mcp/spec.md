@@ -316,15 +316,61 @@ which the original message structure could be recovered.
 - **THEN** the persisted entry for that `ToolMessage` SHALL contain the same blocks rewritten to `{type: "image", url, mime_type}` (with `base64` absent), and the serialized state blob SHALL NOT include the original image byte payload
 
 ### Requirement: Assistant message content contains only model text
-The DIAL response message content SHALL carry all of the agent's natural-language assistant text emitted during the turn, in chronological order — including text produced on intermediate `AIMessage` instances that also carry `tool_calls`, not just the final text-only `AIMessage`. Tool calls, tool results, and any structured non-text content blocks (e.g. Anthropic-style `thinking` blocks, image blocks) SHALL NOT appear in the assistant message content; they are conveyed via stages (for tool execution UI display) and via `assistant.custom_content.state["messages"]` (for cross-turn replay). Text streamed from **distinct assistant messages** SHALL be separated by a `"\n\n"` in `message.content`, so the segments render as separate paragraphs rather than running together; the tokens of one message SHALL be concatenated untouched. The boundary is the message, not the tool round: two segments SHALL be separated whether or not a tool ran between them — including the same model call re-streamed after a transient failure, whose already-streamed fragment cannot be retracted. The first segment of a turn SHALL take no leading separator. A streamed chunk carries the id of the message it belongs to (the provider's response id, or one langchain_core stamps per LLM run), which is what makes the boundary observable.
+The DIAL response message content SHALL, in chronological order, contain only the
+natural-language assistant text that each component is specified below to forward — never tool
+calls, tool results, or structured non-text content blocks (e.g. Anthropic-style `thinking`
+blocks, image blocks); those are conveyed via stages (for tool execution UI display) and via
+`assistant.custom_content.state["messages"]` (for cross-turn replay). Coverage differs by
+component: preparation forwards its own text, while the research graph forwards none of
+research-agent's, research-review's, or report-review's text — only the settled report — as the
+next paragraph specifies.
 
-#### Scenario: Tool-using turn streams intermediate text alongside the final answer
-- **WHEN** the agent produces an intermediate `AIMessage` carrying both natural-language text (e.g. `"Plan: ..."`) and `tool_calls`, then tool result(s), then a final `AIMessage` with the answer
-- **THEN** the DIAL response `message.content` SHALL contain the intermediate text followed by the final text, in that order, with a `"\n\n"` separator between them; tool stages SHALL still render between the two segments via the stage channel; the response content SHALL NOT contain serialized tool calls, tool result payloads, or `messages_to_dict` blobs
+**Preparation and research populate this content by entirely different means.** Preparation
+streams its own `AIMessage` text token-by-token as the model produces it, including text on an
+intermediate `AIMessage` that also carries `tool_calls` — not just the final text-only
+`AIMessage` — and each of its tool calls becomes a DIAL stage alongside that streamed text. The
+research graph SHALL NOT stream, or otherwise forward, any `AIMessage`'s text into
+`message.content`: research-agent's own reasoning is discarded, whatever text accompanies its
+tool calls, and its tool calls become DIAL stages only, as does each report review (see
+**report-composition**). The research graph's sole contribution to `message.content` is the one
+report the review loop settles on, appended once the loop ends (see **Streaming response path**
+for the append-once cadence) — never streamed, and no other text of its own.
 
-#### Scenario: Text-only turn (no tool calls)
-- **WHEN** the agent answers without invoking any tool, producing a single text-only final `AIMessage`
-- **THEN** the DIAL response `message.content` SHALL equal that message's text, with no leading or trailing separator, streamed token-by-token
+Text streamed from **distinct assistant messages** SHALL be separated by a `"\n\n"` in
+`message.content`, so the segments render as separate paragraphs rather than running together;
+the tokens of one message SHALL be concatenated untouched. The boundary is the message, not the
+tool round: two segments SHALL be separated whether or not a tool ran between them — including
+the same model call re-streamed after a transient failure, whose already-streamed fragment cannot
+be retracted. The first segment of a turn SHALL take no leading separator. A streamed chunk
+carries the id of the message it belongs to (the provider's response id, or one langchain_core
+stamps per LLM run), which is what makes the boundary observable.
+
+#### Scenario: Preparation's tool-using turn streams intermediate text alongside the final answer
+- **WHEN** the preparation agent produces an intermediate `AIMessage` carrying both
+  natural-language text (e.g. `"Plan: ..."`) and `tool_calls`, the tool call returns a result,
+  and the agent then produces a final `AIMessage` with the answer
+- **THEN** the DIAL response `message.content` SHALL contain the intermediate text followed by
+  the final text, in that order, with a `"\n\n"` separator between them; tool stages SHALL still
+  render between the two segments via the stage channel; the response content SHALL NOT contain
+  serialized tool calls, tool result payloads, or `messages_to_dict` blobs
+
+#### Scenario: Preparation's text-only turn (no tool calls)
+- **WHEN** the preparation agent answers without invoking any tool, producing a single
+  text-only final `AIMessage`
+- **THEN** the DIAL response `message.content` SHALL equal that message's text, with no leading
+  or trailing separator, streamed token-by-token
+
+#### Scenario: Research-agent's tool-calling text never reaches content
+- **WHEN** research-agent produces an `AIMessage` carrying both natural-language text and
+  `tool_calls`
+- **THEN** the tool call SHALL become a DIAL stage as usual, and the message's text SHALL NOT
+  appear in `message.content` at any point in the turn — not streamed, not appended later
+
+#### Scenario: A research turn's content is the report alone
+- **WHEN** a turn hands off to research and the review loop settles on a report
+- **THEN** `message.content` SHALL gain exactly one addition from the research phase — that
+  report, appended once — and no text from research-agent, research-review, or report-review
+  SHALL appear in it at any point
 
 #### Scenario: Structured content blocks flattened to text
 - **WHEN** an `AIMessageChunk` carries `content` as a list of content blocks (e.g. `[{type: "text", text: "..."}, {type: "thinking", thinking: "..."}, {type: "image", ...}]`) instead of a bare string
