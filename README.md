@@ -16,6 +16,8 @@ A DIAL-native **deep research** application: a LangChain/LangGraph agent that co
 generic-RAG MCP server, clarifies the user's query, aligns on a research plan, runs a
 research loop grounded in the MCP tools, and streams progress to DIAL as timed stages.
 
+See [docs/architecture.md](docs/architecture.md) for diagrams of the runtime flow.
+
 - [Configuration](#configuration)
 - [Environment variables](#environment-variables)
   - [Notes on the environment variables](#notes-on-the-environment-variables)

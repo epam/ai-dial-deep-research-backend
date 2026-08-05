@@ -70,8 +70,25 @@ Override `--timeout` as needed.
 
 - **LLM prompts use triple-quoted multiline strings**, not adjacent/parenthesized string-literal concatenation. Do **not** escape newlines with trailing backslashes to join wrapped lines — let long lines wrap as real newlines (harmless inside an LLM prompt) and keep each source line within the 100-col limit. A leading `"""\` to avoid a blank first line is fine. This keeps prompt copy readable and diff-friendly. Applies to system prompts (`app/preparation/prompts.py`, `app/research/prompts.py`) and any injected/middleware prompt text.
 - **No new aliases on pydantic-settings fields** — rely on the default field-name → env-var mapping (with the class's `env_prefix`). E.g. `heartbeat_interval` under `env_prefix=""` reads `HEARTBEAT_INTERVAL`.
+- **LLM structured-output schemas put the verdict last.** Order fields so a decision/verdict field comes *after* the supporting content that justifies it — the model emits fields in schema order, so reasoning-first yields better decisions. E.g. `questions` before `sufficient`; `revised_plan` (or `problems_found`) before `approved` (or `verdict`). Among the supporting fields themselves, order by logical precedence — a precondition/gating check before any check that only matters once it holds (e.g. `recorded_plan_matches` before `user_approved_a_plan`). Pydantic v2 allows a required field after defaulted ones, so the ordering is free.
+- **Logging follows the `logging-policy` spec** (`openspec/specs/logging-policy/spec.md`):
+  level semantics with a single-ERROR ownership rule, the INFO request skeleton, and the
+  content allowlist — log structure (names, counts, durations, ids, outcomes), never message
+  bodies, tool arguments, response bodies, header values, or URL query strings, at any level.
+  Payload records exist only behind `LOG_PAYLOADS`.
 - **Keep the README environment-variables table in sync with the settings.** Update it whenever an env var is added or removed (required or optional alike), and whenever a var's required/optional status changes.
 - **Keep the application-properties artifacts in sync with the model.** When `ApplicationProperties` (`src/dial_deep_research/app_properties.py`) changes: `make format` regenerates `docs/generated-app-schema.json` (and `make lint` fails on drift), but `dial_conf/core/applications-template.json` and the README core-config snippets are updated by hand. Field descriptions live in the pydantic schema (`Field(description=...)`), not as comments in the example.
+- **Keep `docs/architecture.md` up to date with the runtime flow.** It is a map over
+  `app/preparation/` and `app/research/`: the turn structure, the node graphs, and their
+  diagrams. When a change alters a node, an edge, a routing condition, a state field, or a
+  turn-boundary behavior (what starts a turn, what ends it, what persists across turns), update
+  the affected diagram and prose in the same change — don't leave it for later. Write for a
+  reader who has neither this codebase's context nor the change history: name the current
+  behavior plainly, never how it changed ("previously", "now", "instead of"). The
+  [OpenSpec specs](../openspec/specs) stay the one place that owns a requirement's full wording;
+  this page links to the spec section and quotes only the short excerpt needed for the diagram,
+  never restates a rule at length — a rule duplicated here goes stale the moment the spec changes
+  and no one edits both.
 - **Every LLM call states its inputs and outputs in the spec that owns it.** When adding an LLM
   call or changing what an existing one receives, write it down: which system prompt and what
   fills it, which messages (and whether history is full, filtered, or rendered to text), whether
@@ -81,12 +98,6 @@ Override `--timeout` as needed.
   review reliably misses: a reviewer judging coverage without the images it is judging looks
   correct in the diff and is wrong in production, and nothing fails when a refactor quietly
   changes what a prompt sees.
-- **LLM structured-output schemas put the verdict last.** Order fields so a decision/verdict field comes *after* the supporting content that justifies it — the model emits fields in schema order, so reasoning-first yields better decisions. E.g. `questions` before `sufficient`; `revised_plan` (or `problems_found`) before `approved` (or `verdict`). Among the supporting fields themselves, order by logical precedence — a precondition/gating check before any check that only matters once it holds (e.g. `recorded_plan_matches` before `user_approved_a_plan`). Pydantic v2 allows a required field after defaulted ones, so the ordering is free.
-- **Logging follows the `logging-policy` spec** (`openspec/specs/logging-policy/spec.md`):
-  level semantics with a single-ERROR ownership rule, the INFO request skeleton, and the
-  content allowlist — log structure (names, counts, durations, ids, outcomes), never message
-  bodies, tool arguments, response bodies, header values, or URL query strings, at any level.
-  Payload records exist only behind `LOG_PAYLOADS`.
 - **Never name a list-element field `index` in anything persisted to `custom_content.state`.** The DIAL SDK's chunk-merge (`aidial_sdk.utils.merge_chunks` / `_indexed_list`) treats any list of dicts whose elements carry an `index` key as an OpenAI-style indexed streaming delta — it re-slots the elements by `index` and strips the key, corrupting the stored value (a 1-based list comes back as `[{}, {…}, …]` with the key gone). Use another name (e.g. `number`) for an ordinal field on a persisted list element.
 
 ## Code Style
