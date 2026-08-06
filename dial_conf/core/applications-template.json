@@ -29,7 +29,7 @@
           }
         ],
         "max_report_words": 2750,
-        "max_report_revisions": 2,
+        "max_report_versions": 3,
         "mcp_servers": [
           {
             "server_name": "generic-rag",

@@ -95,9 +95,9 @@ plan. The graph SHALL have no checkpointer and SHALL NOT use `interrupt()`. Phas
 SHALL be graph edges decided by Python over the graph state, never by the model:
 `START → research-agent → research-review → (research-agent when research-review returns a
 non-empty next plan and the iteration cap is not yet reached, else report) → (END when this call
-was a revision whose own model call failed, else report-review when the revision budget is
-non-zero, else END) → (report when the draft's measured word count exceeds the ceiling or
-report-review asks for a revision, and the revision budget allows, else END)`.
+was a revision whose own model call failed, or when the draft is the last version the budget
+permits — it is delivered without review — else report-review) → (report when the draft's
+measured word count exceeds the ceiling or report-review asks for a revision, else END)`.
 
 The first of those exits is what makes the failed-revision rule terminate: a swallowed revision
 failure leaves the previous draft in place unchanged, so returning to report-review would re-judge it
@@ -109,8 +109,9 @@ The measured count is part of that decision, not only the review's verdict: an o
 routes back to report even when report-review approved it or its call failed (see
 **report-composition**).
 
-A revision budget of zero SHALL therefore skip report-review entirely rather than call it and
-ignore its verdict.
+The last permitted version SHALL be delivered without calling report-review, rather than calling
+it and ignoring a verdict that could not be acted on; a version budget of one thereby skips the
+review entirely.
 
 Each node name SHALL distinguish the two review steps and separate the research agent from the
 graph that contains it: **research-review** judges evidence coverage and **report-review**
@@ -137,7 +138,7 @@ SHALL stop at the preparation stage as before.
 
 #### Scenario: Report review always precedes delivery
 
-- **WHEN** the report node produces a draft and the revision budget is non-zero
+- **WHEN** the report node produces a draft that is not the last version the budget permits
 - **THEN** control SHALL pass to report-review before the turn ends, and the routing decision after it SHALL be made by Python over the graph state, not by the model
 
 ### Requirement: Report node writes the final cited report and is the only assistant content
@@ -265,12 +266,12 @@ compiled graph, so one research-agent iteration gets its own budget.
 
 The budget therefore constrains research-agent's own loop, whose length nothing else
 bounds, while the outer graph's length is already fixed by its own caps —
-`max_research_iterations` for the research loop and `max_report_revisions` for the report loop.
+`max_research_iterations` for the research loop and `max_report_versions` for the report loop.
 Each node execution is one super-step, research-agent and research-review run once per iteration,
-and every draft is followed by a review, so the outer graph is bounded at
-`2 × max_research_iterations + 2 × (max_report_revisions + 1)` super-steps — 26 at the default
-caps, and `2 × max_research_iterations + 1` (21) when the revision budget is zero and no review
-runs. Both are far below the default budget. Tool
+and every version but the last permitted one is followed by a review, so the outer graph is
+bounded at `2 × max_research_iterations + 2 × max_report_versions − 1` super-steps — 25 at the
+default caps, and the same formula gives 21 for a version budget of one, where the single draft
+is never reviewed. Both are far below the default budget. Tool
 calls research-agent requests together execute in a single super-step (they are fanned out
 with `Send`, and dispatches made in one tick share that tick), so the budget limits the
 research-agent's model calls rather than the number of tool calls it may issue.

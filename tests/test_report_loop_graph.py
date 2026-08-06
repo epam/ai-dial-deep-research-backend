@@ -77,7 +77,7 @@ def _build(
     *,
     drafts: list[str | Exception],
     reviews: list[ReportReview],
-    max_report_revisions: int = 2,
+    max_report_versions: int = 3,
     max_report_words: int = 2750,
 ) -> tuple[Any, _FakeChatModel, list[Any]]:
     _stub_research(monkeypatch)
@@ -91,7 +91,7 @@ def _build(
         client_name="ACME",
         report_structure=DEFAULT_REPORT_STRUCTURE,
         max_report_words=max_report_words,
-        max_report_revisions=max_report_revisions,
+        max_report_versions=max_report_versions,
         emit_report_review_stage=stages.append,
     )
     return compiled, llm, stages
@@ -114,7 +114,7 @@ async def test_approved_first_draft_ends_the_loop(monkeypatch: pytest.MonkeyPatc
 
     assert (llm.report_calls, llm.review_calls) == (1, 1)
     assert final["report"] == "short draft"
-    assert final["revisions_used"] == 0
+    assert final["report_version"] == 1
     assert len(stages) == 1
     assert stages[0].action == nodes.ReportAction.DELIVER
 
@@ -132,7 +132,7 @@ async def test_findings_drive_a_revision_then_approval(monkeypatch: pytest.Monke
 
     assert (llm.report_calls, llm.review_calls) == (2, 2)
     assert final["report"] == "second draft"
-    assert final["revisions_used"] == 1
+    assert final["report_version"] == 2
     assert [stage.action for stage in stages] == [
         nodes.ReportAction.REVISE,
         nodes.ReportAction.DELIVER,
@@ -143,30 +143,31 @@ async def test_findings_drive_a_revision_then_approval(monkeypatch: pytest.Monke
     assert "Conclusion section missing" in str(revision[-1].content)
 
 
-async def test_budget_caps_report_calls_at_revisions_plus_one(
+async def test_budget_caps_report_calls_at_the_version_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A review that never approves still stops: budget 2 means 3 drafts, then delivery."""
+    """A review that never approves still stops: a budget of 3 versions means 3 drafts, and the
+    third is delivered without a review call — its verdict could not be acted on."""
     compiled, llm, stages = _build(
         monkeypatch,
         drafts=["draft one", "draft two", "draft three"],
         reviews=[ReportReview(findings=["still wrong"])] * 3,
-        max_report_revisions=2,
+        max_report_versions=3,
     )
     final = await _run(compiled)
 
-    assert (llm.report_calls, llm.review_calls) == (3, 3)
+    assert (llm.report_calls, llm.review_calls) == (3, 2)
     assert final["report"] == "draft three"
-    assert final["revisions_used"] == 2
-    assert stages[-1].action == nodes.ReportAction.BUDGET_EXHAUSTED
+    assert final["report_version"] == 3
+    assert [stage.action for stage in stages] == [nodes.ReportAction.REVISE] * 2
 
 
-async def test_zero_budget_skips_the_review_entirely(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_budget_of_one_skips_the_review_entirely(monkeypatch: pytest.MonkeyPatch) -> None:
     compiled, llm, stages = _build(
         monkeypatch,
         drafts=["the only draft"],
         reviews=[],
-        max_report_revisions=0,
+        max_report_versions=1,
     )
     final = await _run(compiled)
 
@@ -207,6 +208,8 @@ async def test_failed_revision_delivers_the_previous_draft(
 
     assert (llm.report_calls, llm.review_calls) == (2, 1)
     assert final["report"] == "the first draft"
+    # The failed write recorded no version, so the state still names the delivered draft.
+    assert final["report_version"] == 1
     assert final["revision_failed"] is True
 
 

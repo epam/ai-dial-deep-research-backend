@@ -30,7 +30,7 @@ See proposal.md — Why. What matters for the approach is the shape of the code 
   ceiling in configuration, the enforcement in the review step's prompt.
 - The launch turn's answer is the report and nothing else, guaranteed by control flow rather
   than by prompt wording.
-- The loop is cheap to disable (`max_report_revisions: 0`) and never fails a turn over a
+- The loop is cheap to disable (`max_report_versions: 1`) and never fails a turn over a
   formatting verdict — a completed multi-minute research run is not discarded.
 
 **Non-Goals** (deferred acceptance criteria of issue #32, and neighbours):
@@ -119,10 +119,7 @@ where only one of them says what it reviews.
 ### One report node writes both the draft and the revisions; a separate node reviews
 
 The graph becomes `… → report → (report-review | END) → (report | END)`. The `report` node branches
-on **whether a previous draft exists** — `state["report"]` is set. That is *not* the same test as
-`revisions_used > 0`: the counter is still 0 while the first revision is being written (it increments
-in that call), so branching on it would send the first revision down the first-draft path, which is
-the failure this branch exists to avoid. Branch on the draft, not the counter. With no previous
+on **whether a previous draft exists** — `state["report"]` is set. With no previous
 draft the node writes the first one; with one, it rewrites it. `report-review` is a structured LLM
 call whose only output is the findings list; there is no separate approval field, so an empty
 list is the approval. That closes off "approved, but here's a minor note" as a shape the schema
@@ -137,21 +134,26 @@ apply, the model's findings and the app's length instruction are merged into one
 revision always arrives with something concrete to act on; a `report` call that saw only an
 unchanged prompt would reproduce the same over-long draft and spend a revision doing it.
 
-Counter semantics, pinned because two nearly-identical numbers exist: `revisions_used` counts
-**revisions written**, so it is 0 after the first draft and increments only when the node runs with
-a previous draft present. Routing continues while `revisions_used < max_report_revisions`, giving
-`max_report_revisions + 1` report calls at most. The logged draft ordinal is `revisions_used + 1`,
-so the first draft logs ordinal 1.
+Counter semantics: `report_version` is the **1-based version index of the draft in state** — 1
+after the first draft, 0 while none exists — recorded by the report node on every successful
+write, so a failed write leaves it naming the draft that stands. `max_report_versions` counts the
+same unit, so the two compare without an offset: a draft is reviewed only while
+`report_version < max_report_versions`, giving `max_report_versions` report calls and
+`max_report_versions - 1` review calls at most. Both nodes number drafts from the same field: the
+report node writes draft `report_version + 1`, the review judges draft `report_version`.
 
-**The last draft is reviewed too, even though its verdict cannot be acted on.** With a budget of 2
-that is 3 drafts and 3 reviews, not 3 and 2. Skipping the final review would save one call per turn,
-and it is deliberately not skipped: the verdict on the draft that actually ships is the only way to
-learn whether delivered reports satisfy the checks, which is what the budget default and the review
-prompt get tuned from. A review call is also the cheap one in this loop — it carries the draft, not
-the transcript.
+**The last permitted version is delivered without a review call.** With a budget of 3 versions
+that is 3 drafts and 2 reviews. Its verdict would be non-actionable — no rewrite may follow — so
+the call would spend a review's time and cost only to log problems the loop can no longer fix;
+the runner announces the unreviewed delivery instead, with a deterministic closing stage and INFO
+record built from the state alone, keeping "approved" and "budget ran out, the previous review's
+findings may remain" distinguishable. Alternative rejected: **review the last version anyway** —
+the verdict on the draft that actually ships is a signal for tuning the budget default and the
+review prompt, but it costs one LLM call per capped turn and the loop can act on none of it; the
+announcement covers the user-facing need.
 
 Two budgets, never shared: `max_research_iterations` bounds research-agent ↔ research-review, and
-`max_report_revisions` bounds report ↔ report-review. They are separate properties because the loops
+`max_report_versions` bounds report ↔ report-review. They are separate properties because the loops
 cost different amounts and are tuned independently.
 
 Alternatives rejected:
@@ -164,7 +166,7 @@ Alternatives rejected:
   the research-execution spec deliberately keeps in Python.
 - **A LangGraph subgraph for the report loop.** The recursion limit is applied per graph run
   (`max_research_graph_steps`), so a subgraph would get its own budget — extra indirection for
-  no gain, since the outer graph's length is already bounded by the revision budget.
+  no gain, since the outer graph's length is already bounded by the version budget.
 - **A separate `approved: bool` field alongside `findings`.** Lets the model approve a draft
   while still leaving a note. Rejected: a model that hedges this way is common, not an edge case,
   and the field only widens the disagreement the app already has to arbitrate (the ceiling
@@ -448,12 +450,15 @@ Alternatives rejected:
   report written without references has usually shed the citations too, so there is nothing to
   attach; the section has to be written, not stapled on.
 
-### `max_report_revisions` defaults to 2, and `0` skips the review entirely
+### `max_report_versions` defaults to 3, and `1` skips the review entirely
 
-Two revisions bound the loop at three report calls plus two review calls in the worst case,
-against a run that has already spent far more on research. `0` is an explicit off switch that
-skips the review call as well, so a deployment that finds the loop not worth its cost pays
-nothing for it.
+The budget counts report versions — the first draft is version 1, each rewrite one more — the
+same unit the graph state's `report_version` carries, so the two compare without an offset.
+Three versions bound the loop at three report calls plus two review calls in the worst case,
+against a run that has already spent far more on research. `1` is an explicit off switch: the
+first draft is the last permitted version, so no review call is ever made, and a deployment
+that finds the loop not worth its cost pays nothing for it. Zero is rejected (`ge=1`) — zero
+versions would mean no report at all.
 
 ## No changes required
 
@@ -502,7 +507,7 @@ nothing for it.
 - **A swallowed revision failure must also stop the loop.** Delivering the previous draft is only
   safe if control then leaves the loop: report-review would otherwise re-judge the same unchanged
   draft, route back to `report`, and fail again — and since a failed revision writes nothing,
-  `revisions_used` never increments, so nothing but the graph's step budget would bound the cycle.
+  `report_version` never advances, so nothing but the graph's step budget would bound the cycle.
   → The edge out of `report` therefore exits to END when a revision's own call failed and a previous
   draft exists. It is app-owned state, not a model verdict, so it lives in the graph state beside the
   counter.
@@ -521,6 +526,6 @@ nothing for it.
   the answer changes one string in one place and touches neither the specs nor the loop. Until it
   arrives, the shipped default carries the current Sources/Datasets tables (columns `doc id`,
   `title`, `publication date`; `dataset id`, `title`) as a placeholder.
-- **Is the revision budget's default of 2 right?** Answerable from the logged verdicts and word
+- **Is the version budget's default of 3 right?** Answerable from the logged verdicts and word
   counts of real runs (how often the first draft is approved, how often the budget is
   exhausted). It is one property default, so changing it touches no design.

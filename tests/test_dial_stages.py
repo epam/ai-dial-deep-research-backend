@@ -82,6 +82,19 @@ class TestReportReviewStage:
         assert "the review call failed" in body
         assert "satisfies every check" not in body
 
+    def test_unreviewed_delivery_has_its_own_title_without_a_duration(self) -> None:
+        title = DialStageReportReviewFormatter.format_unreviewed_title(draft_number=3)
+        assert title == "[REPORT REVIEW] draft 3 - delivered without review ⚠️"
+
+    def test_unreviewed_delivery_body_names_the_exhausted_budget(self) -> None:
+        body = DialStageReportReviewFormatter.format_unreviewed_body(
+            draft_number=3, word_count=2100, max_words=2750, max_versions=3
+        )
+        assert "**Draft** 3" in body
+        assert "2100 words (ceiling 2750)" in body
+        assert "budget (3)" in body
+        assert "delivered without review" in body
+
 
 class TestToolCallEvent:
     """The tool-call event of the logging-policy INFO skeleton."""

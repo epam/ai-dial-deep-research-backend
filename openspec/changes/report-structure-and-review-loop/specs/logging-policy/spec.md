@@ -21,11 +21,14 @@ cached-input-token count, owned by the research-review node; (8) report generate
 measured words, token usage when available including the cached-input-token count, owned by the
 report node; (8a) report reviewed — draft ordinal, duration, the review model's
 `verdict` (`approved`/`revise`/`failed`) and separately the app's `action`
-(`deliver`/`revise`/`revise_over_ceiling`/`budget_exhausted`), the draft's measured word count, the
+(`deliver`/`revise`/`revise_over_ceiling`), the draft's measured word count, the
 configured ceiling, the **number** of findings the review returned, and token usage when available
 including the cached-input-token count, owned by the report-review node. The findings themselves are
 LLM response text and SHALL NOT appear in this record or any other, at any level — they are carried to
-the user in a DIAL stage instead (see **report-composition**); (9) request completed — outcome (`completed`/`failed`), total duration, and on
+the user in a DIAL stage instead (see **report-composition**); (8b) report delivered without
+review — draft ordinal, the configured version budget, the draft's measured word count, owned by
+the research runner: an exhausted budget makes no review call, so no report-reviewed event can
+carry it; (9) request completed — outcome (`completed`/`failed`), total duration, and on
 failure the same `error_reference` as the ERROR record. The `finish_iteration` sentinel tool SHALL
 NOT produce a tool-call event above DEBUG.
 
@@ -34,9 +37,10 @@ and the app revised anyway (because the measured count exceeded the ceiling) is 
 indistinguishable in the log from one the model asked to revise, and telling those apart is how the
 review step's usefulness gets judged over time.
 
-A report delivered with the review still unsatisfied SHALL be visible in the logs:
-`action=budget_exhausted` covers an exhausted revision budget, and `verdict=failed` a review call that
-did not produce a verdict; such a call SHALL additionally log a WARNING naming the failure kind.
+A report delivered with the review still unsatisfied SHALL be visible in the logs: an exhausted
+version budget fires the report-delivered-without-review event, and `verdict=failed` marks a
+review call that did not produce a verdict; such a call SHALL additionally log a WARNING naming
+the failure kind.
 
 A **failed revision** is recorded differently, because neither of the two report events can carry it:
 the report-review node never runs for it (the graph leaves the loop instead, see
@@ -50,7 +54,7 @@ allowlist.
 #### Scenario: Successful research turn reads as a skeleton at INFO
 
 - **WHEN** a turn runs preparation, hands off to research, and delivers a report on an instance
-  whose revision budget is non-zero, with all log levels at INFO
+  whose version budget is above one, with all log levels at INFO
 - **THEN** the log contains the request-received, preparation-completed, model-call, tool-call,
   iteration-reviewed, report-generated, report-reviewed, and request-completed events, none
   carrying message bodies or tool arguments

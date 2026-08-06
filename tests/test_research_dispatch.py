@@ -146,11 +146,17 @@ def test_substituted_result_adds_no_stage() -> None:
 
 
 def _values(
-    messages: list[Any], ns: tuple[str, ...] = (), report: str | None = None
+    messages: list[Any],
+    ns: tuple[str, ...] = (),
+    report: str | None = None,
+    report_version: int = 0,
 ) -> ValuesStreamPart[Any]:
     """A `stream_mode="values"` part as the graph emits it under `version="v2"`."""
     return ValuesStreamPart(
-        type="values", ns=ns, data={"messages": messages, "report": report}, interrupts=()
+        type="values",
+        ns=ns,
+        data={"messages": messages, "report": report, "report_version": report_version},
+        interrupts=(),
     )
 
 
@@ -231,6 +237,37 @@ async def test_step_budget_defaults_to_500(monkeypatch: MonkeyPatch) -> None:
     await runner.run(_approved_prep_state(), properties=_properties())
 
     assert captured["config"]["recursion_limit"] == 500
+
+
+def test_budget_exhausted_delivery_emits_the_unreviewed_stage() -> None:
+    # Version 3 with a budget of 3: the last permitted version got no review call.
+    runner, choice = _make_runner()
+    runner._handle_part(_values([HumanMessage(content="q")], report="w1 w2", report_version=3))
+    runner._emit_unreviewed_delivery_stage(_properties(max_report_versions=3))
+
+    [title] = choice.stage_titles
+    assert "draft 3" in title
+    assert "delivered without review" in title
+    assert "budget (3)" in choice.stages[0].body
+    assert "2 words" in choice.stages[0].body
+
+
+def test_reviewed_delivery_emits_no_unreviewed_stage() -> None:
+    # Version 2 within a budget of 3: the loop ended on an approving review instead.
+    runner, choice = _make_runner()
+    runner._handle_part(_values([HumanMessage(content="q")], report="fine", report_version=2))
+    runner._emit_unreviewed_delivery_stage(_properties(max_report_versions=3))
+
+    assert choice.stage_titles == []
+
+
+def test_budget_of_one_delivery_emits_no_unreviewed_stage() -> None:
+    # Review is off by configuration, not exhausted.
+    runner, choice = _make_runner()
+    runner._handle_part(_values([HumanMessage(content="q")], report="fine", report_version=1))
+    runner._emit_unreviewed_delivery_stage(_properties(max_report_versions=1))
+
+    assert choice.stage_titles == []
 
 
 def test_substituted_message_reaches_the_persisted_slice() -> None:

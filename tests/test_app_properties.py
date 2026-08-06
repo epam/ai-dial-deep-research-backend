@@ -70,7 +70,7 @@ def test_report_defaults_resolve_without_configuration() -> None:
     ]
     assert [section.protected for section in sections] == [False, False, False, True]
     assert properties.max_report_words == 2750
-    assert properties.max_report_revisions == 2
+    assert properties.max_report_versions == 3
 
 
 def test_default_references_description_owns_the_source_entry_rules() -> None:
@@ -152,17 +152,18 @@ def test_non_positive_report_words_is_rejected() -> None:
         ApplicationProperties.model_validate({**VALID_PROPERTIES, "max_report_words": 0})
 
 
-def test_negative_report_revisions_is_rejected() -> None:
+def test_zero_report_versions_is_rejected() -> None:
+    # Zero versions would mean no report at all; the minimum is one draft.
     with pytest.raises(ValidationError):
-        ApplicationProperties.model_validate({**VALID_PROPERTIES, "max_report_revisions": -1})
+        ApplicationProperties.model_validate({**VALID_PROPERTIES, "max_report_versions": 0})
 
 
-def test_zero_report_revisions_is_accepted() -> None:
-    # Unlike the other numeric properties, 0 is a valid value: it disables the review.
+def test_one_report_version_is_accepted() -> None:
+    # 1 delivers the first draft unreviewed: the version budget fails already for draft 1.
     properties = ApplicationProperties.model_validate(
-        {**VALID_PROPERTIES, "max_report_revisions": 0}
+        {**VALID_PROPERTIES, "max_report_versions": 1}
     )
-    assert properties.max_report_revisions == 0
+    assert properties.max_report_versions == 1
 
 
 def test_schema_root_properties_carry_dial_meta() -> None:

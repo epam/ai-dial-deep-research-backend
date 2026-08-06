@@ -35,8 +35,10 @@ SHALL expose:
 - `max_report_words: int` — default `2750`, constrained `ge=1`; the report's word ceiling (see
   the **report-composition** capability for how a word is counted and how the ceiling is
   enforced).
-- `max_report_revisions: int` — default `2`, constrained `ge=0`; how many revisions the report
-  review loop may request before the latest draft is delivered as-is. `0` disables the review.
+- `max_report_versions: int` — default `3`, constrained `ge=1`; how many report versions may be
+  written in one turn. Version 1 is the first draft; each later version is a rewrite the review
+  demanded. The last permitted version is delivered without another review. `1` disables the
+  review: the first draft is delivered unreviewed.
 - `prompts` — a nested required model with three required, non-empty (`min_length=1`) string
   fields: `client_name`, `agent_name`, `data_sources_descriptions`.
 
@@ -64,7 +66,7 @@ lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
 - **THEN** validation SHALL succeed, `default_report_structure` SHALL be the four default
   sections in order (Key Findings, Detailed Analysis, Conclusion, References) with References
   carrying `protected: true` and the source-table rules in its description, `max_report_words`
-  SHALL equal `2750`, and `max_report_revisions` SHALL equal `2`
+  SHALL equal `2750`, and `max_report_versions` SHALL equal `3`
 
 #### Scenario: Empty report structure is rejected
 

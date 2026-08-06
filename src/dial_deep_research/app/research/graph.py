@@ -37,7 +37,7 @@ def build_research_graph(
     client_name: str,
     report_structure: Sequence[ReportSection],
     max_report_words: int,
-    max_report_revisions: int,
+    max_report_versions: int,
     emit_report_review_stage: ReportReviewStageEmitter,
 ) -> Any:
     """Compile the research graph over the loaded tools and this turn's configuration.
@@ -76,7 +76,6 @@ def build_research_graph(
             today_date=today_date,
             sections=report_structure,
             max_words=max_report_words,
-            max_revisions=max_report_revisions,
             emit_stage=emit_report_review_stage,
         ),
     )
@@ -90,7 +89,7 @@ def build_research_graph(
     )
     builder.add_conditional_edges(
         source="report",
-        path=route_after_report(max_revisions=max_report_revisions),
+        path=route_after_report(max_versions=max_report_versions),
         path_map={"report-review": "report-review", "end": END},
     )
     builder.add_conditional_edges(

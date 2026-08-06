@@ -2,9 +2,9 @@
 
 What is protected here:
 
-- The report node branches on whether a draft already exists, never on `revisions_used` (still 0
-  while the first revision is written), counts a revision only when it wrote one, and never lets a
-  failed revision discard the draft it already had.
+- The report node branches on whether a draft already exists, records each successful draft's
+  1-based version in `report_version` (a failed write records nothing), and never lets a failed
+  revision discard the draft it already had.
 - A revision's request keeps the first draft's message prefix and appends the revision request
   last, so the provider's prompt cache can still serve the prefix.
 - The report-review node absorbs its own failures, routes on the app-measured word count whatever
@@ -69,7 +69,7 @@ def _state(**overrides: Any) -> Any:
         "iteration": 1,
         "report": None,
         "report_revision_instruction": None,
-        "revisions_used": 0,
+        "report_version": 0,
         "revision_failed": False,
     }
     return {**state, **overrides}
@@ -125,7 +125,7 @@ async def test_first_draft_asks_for_the_report_over_the_transcript(
 
     result = await node(_state())
 
-    assert result == {"report": "the report"}
+    assert result == {"report": "the report", "report_version": 1}
     [messages] = llm.calls
     # System prompt, the research transcript, then the report request — and nothing else.
     assert len(messages) == 3
@@ -155,19 +155,18 @@ async def test_first_draft_system_prompt_carries_the_configured_structure_and_ce
     assert system.count(render_protected_section_names(_CUSTOM_SECTIONS)) >= 2
 
 
-async def test_first_draft_counts_no_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_first_draft_is_version_one(monkeypatch: pytest.MonkeyPatch) -> None:
     llm = _RecordingReportLLM("the report")
     node = _report_node(llm, monkeypatch)
 
     result = await node(_state())
 
-    assert "revisions_used" not in result
+    assert result["report_version"] == 1
 
 
 async def test_a_revision_is_written_whenever_a_draft_exists(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The branch is `state["report"]`, not `revisions_used` — still 0 for the first revision."""
     previous = "one two three four five six seven"
     llm = _RecordingReportLLM("the revised report")
     node = _report_node(llm, monkeypatch)
@@ -176,7 +175,7 @@ async def test_a_revision_is_written_whenever_a_draft_exists(
         _state(
             report=previous,
             report_revision_instruction="- Restore the References section.",
-            revisions_used=0,
+            report_version=1,
         )
     )
 
@@ -187,7 +186,7 @@ async def test_a_revision_is_written_whenever_a_draft_exists(
     assert previous in revision_request
     assert f"{count_words(previous)} words" in revision_request
     assert "2750" in revision_request
-    assert result == {"report": "the revised report", "revisions_used": 1}
+    assert result == {"report": "the revised report", "report_version": 2}
 
 
 async def test_a_revision_keeps_the_first_draft_message_prefix(
@@ -206,7 +205,7 @@ async def test_a_revision_keeps_the_first_draft_message_prefix(
     assert len(revision_messages) == 4
 
 
-async def test_each_revision_increments_the_recorded_count(
+async def test_each_draft_records_the_next_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     llm = _RecordingReportLLM("the second revision")
@@ -214,11 +213,11 @@ async def test_each_revision_increments_the_recorded_count(
 
     result = await node(
         _state(
-            report="the first revision", report_revision_instruction="- Again.", revisions_used=1
+            report="the first revision", report_revision_instruction="- Again.", report_version=2
         )
     )
 
-    assert result["revisions_used"] == 2
+    assert result["report_version"] == 3
 
 
 async def test_a_failed_revision_keeps_the_previous_draft(
@@ -286,7 +285,6 @@ def _review_node(
     *,
     sections: list[ReportSection] | None = None,
     max_words: int = 2750,
-    max_revisions: int = 2,
 ) -> tuple[Any, list[ReportReviewOutcome]]:
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: llm)
     stages: list[ReportReviewOutcome] = []
@@ -294,7 +292,6 @@ def _review_node(
         today_date=_TODAY,
         sections=sections if sections is not None else DEFAULT_REPORT_STRUCTURE,
         max_words=max_words,
-        max_revisions=max_revisions,
         emit_stage=stages.append,
     )
     return node, stages
@@ -306,7 +303,7 @@ async def test_an_approved_draft_within_the_ceiling_is_delivered(
     llm = _FakeReviewLLM(_parsed(ReportReview(findings=[])))
     node, stages = _review_node(llm, monkeypatch)
 
-    result = await node(_state(report="a short draft"))
+    result = await node(_state(report="a short draft", report_version=1))
 
     assert result == {"report_revision_instruction": None}
     [outcome] = stages
@@ -417,10 +414,10 @@ async def test_the_stage_reports_the_draft_being_reviewed(
     llm = _FakeReviewLLM(_parsed(ReportReview(findings=[])))
     node, stages = _review_node(llm, monkeypatch, max_words=1200)
 
-    await node(_state(report="a short draft", revisions_used=1))
+    await node(_state(report="a short draft", report_version=2))
 
     [outcome] = stages
-    # One revision written, so this is the second draft.
+    # The stage reports the state's version index as-is: this is the second draft.
     assert outcome.draft_number == 2
     assert outcome.max_words == 1200
 

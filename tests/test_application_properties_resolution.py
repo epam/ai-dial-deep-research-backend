@@ -128,7 +128,7 @@ def test_schema_endpoint_serves_unwrapped_schema(client: TestClient) -> None:
         "max_research_graph_steps",
         "default_report_structure",
         "max_report_words",
-        "max_report_revisions",
+        "max_report_versions",
         "prompts",
         "mcp_servers",
     }

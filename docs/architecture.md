@@ -115,9 +115,9 @@ never a model decision:
 
 > `START → research-agent → research-review → (research-agent when research-review returns a
 > non-empty next plan and the iteration cap is not yet reached, else report) → (END when this call
-> was a revision whose own model call failed, else report-review when the revision budget is
-> non-zero, else END) → (report when the draft's measured word count exceeds the ceiling or
-> report-review asks for a revision, and the revision budget allows, else END)`
+> was a revision whose own model call failed, or when the draft is the last version the budget
+> permits — it is delivered without review — else report-review) → (report when the draft's
+> measured word count exceeds the ceiling or report-review asks for a revision, else END)`
 
 ```mermaid
 flowchart TD
@@ -139,9 +139,9 @@ flowchart TD
     route -->|no| report["report node<br/>LLM call over the whole findings<br/>transcript → the first draft, or a<br/>revision when a draft already exists"]
     report --> afterreport{"deliver now,<br/>or review the draft?"}
     afterreport -->|"this call was a revision whose<br/>own model call failed —<br/>the previous draft stands"| finaldone(["END"])
-    afterreport -->|"the revision budget is zero —<br/>no review is made"| finaldone
+    afterreport -->|"the last version the budget<br/>permits — delivered without review,<br/>announced by a closing stage"| finaldone
     afterreport -->|"otherwise"| report_review["report-review node<br/>structured LLM call over the draft, the<br/>configured sections and the counts<br/>→ findings + verdict, and one DIAL stage"]
-    report_review --> reroute{"over the word ceiling, or a<br/>revision asked for — and<br/>revisions still left?"}
+    report_review --> reroute{"over the word ceiling,<br/>or a revision asked for?"}
     reroute -->|yes| report
     reroute -->|no| finaldone
 ```
@@ -187,22 +187,25 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   rewriting, never by truncation: no token cap is placed on the report call, and a shortening
   revision rewrites to fit instead of cutting, so the report ends at a clean boundary. A draft over
   the ceiling forces a revision deterministically, even when report-review approved it.
-- **Revision budget**: `max_report_revisions` (default 2) — at most that many revisions, so at most
-  three report calls. When it runs out the latest draft is delivered as it stands; a failed
-  report-review call or a failed revision is absorbed rather than failing the turn. `0` skips
+- **Version budget**: `max_report_versions` (default 3) — at most that many report versions, the
+  first draft included, so at most three report calls. The last permitted version is delivered as
+  it stands, without another review call: its verdict could not be acted on. A failed
+  report-review call or a failed revision is absorbed rather than failing the turn. `1` skips
   report-review entirely.
 - **Report-review stage**: each report-review call emits one DIAL stage carrying the draft number,
   the measured word count with the ceiling, and the findings as a list. The matching INFO record
   carries the same numbers and only the *count* of findings — findings are LLM response text, which
-  the logging content allowlist keeps out of log records at any level. Research review emits no
-  stage.
+  the logging content allowlist keeps out of log records at any level. A delivery whose draft the
+  budget left unreviewed gets a closing stage and INFO record of its own, rendered without any
+  model call, so "review approved the draft" and "the budget ran out, findings may remain" stay
+  distinguishable. Research review emits no stage.
 - **Step budget**: `max_research_graph_steps` (an application property, default 500) is passed as
   LangGraph's `recursion_limit` — the most node executions one graph run may make, counted afresh
   for each nested run. The research-agent node is a compiled graph, so every iteration gets its own
   budget, and that loop is what the budget really limits: the outer graph's length is already fixed
-  by its own caps, at `2 × max_research_iterations + 2 × (max_report_revisions + 1)` super-steps —
-  26 at the default caps, and `2 × max_research_iterations + 1` (21) when the revision budget is
-  zero and no review runs. A research-agent that never calls `finish_iteration` exhausts the budget
+  by its own caps, at `2 × max_research_iterations + 2 × max_report_versions − 1` super-steps —
+  25 at the default caps; the same formula gives 21 for a version budget of one, where the single
+  report call is never reviewed. A research-agent that never calls `finish_iteration` exhausts the budget
   and the turn fails through the DIAL error protocol rather than returning a half-finished answer. A
   tool *error* does not end an iteration — it comes back as an error `ToolMessage` research-agent
   may retry from.

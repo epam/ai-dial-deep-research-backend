@@ -41,8 +41,8 @@ criterion is deferred, the reason is in design.md — Non-Goals.
   `reviewer` → `research-review` — so each name says which stage it belongs to and neither
   review step can be mistaken for the other. Word counts are computed in Python (whitespace-separated tokens) and stated in
   both prompts as numbers — "current 3,910 words, ceiling 2,750" — so the model never has to
-  count. Bounded by a new `max_report_revisions` property; on exhaustion the latest draft is
-  delivered as-is.
+  count. Bounded by a new `max_report_versions` property; the last permitted version is
+  delivered as-is, without another review.
 - **No hard truncation.** No `max_tokens` cap is set on the report call, and a revision that
   shortens must rewrite to fit rather than cut — the report always ends at a clean boundary.
 - **Report is the whole answer.** The report node stops streaming tokens into the DIAL choice
@@ -107,7 +107,7 @@ criterion is deferred, the reason is in design.md — Non-Goals.
   produces no further text for that turn. Gate-rejected calls are unaffected: the agent still
   relays the failure to the user.
 - `application-config-schema`: **Application properties model** gains
-  `default_report_structure`, `max_report_words`, and `max_report_revisions`, plus the nested
+  `default_report_structure`, `max_report_words`, and `max_report_versions`, plus the nested
   `ReportSection` model.
 - `dial-agent-with-mcp`: **Streaming response path** currently requires *all* assistant text to
   stream token-by-token via the `messages` stream mode; it is rescoped to preparation text, with

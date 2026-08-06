@@ -247,15 +247,17 @@ class ApplicationProperties(BaseModel):
         ge=1,
         description="The report's word ceiling, counted as whitespace-separated tokens of the"
         " report's Markdown. Enforced by reviewing the finished report and revising it, never by"
-        " cutting text off: a report over the ceiling is rewritten to fit while the revision budget"
+        " cutting text off: a report over the ceiling is rewritten to fit while the version budget"
         " allows, and always ends at a complete sentence.",
     )
-    max_report_revisions: int = Field(
-        default=2,
-        ge=0,
-        description="How many revisions the report review loop may write before the latest draft is"
-        " delivered as-is. Each revision costs one report call plus one review call. 0 disables the"
-        " review entirely: the first draft is delivered unreviewed.",
+    max_report_versions: int = Field(
+        default=3,
+        ge=1,
+        description="How many report versions may be written in one turn. Version 1 is the first"
+        " draft; each later version is a rewrite the review demanded, costing one report call plus"
+        " one review call. The last permitted version is delivered without another review — its"
+        " verdict could not be acted on. 1 means the first draft is delivered unreviewed, with no"
+        " review at all.",
     )
     mcp_servers: list[MCPClientSettings] = Field(
         min_length=1,

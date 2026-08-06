@@ -167,8 +167,15 @@ review only; research review SHALL NOT emit one (out of scope here, and it MAY b
 
 A review that produced no findings SHALL still emit a stage, recording that the draft was approved. A
 review whose **call failed** SHALL emit one too, recording the failure in place of findings — the same
-principle as a tool error stage: the user sees that a step ran and what came of it. A revision budget
-of zero makes no review call, so no stage SHALL be emitted.
+principle as a tool error stage: the user sees that a step ran and what came of it.
+
+A draft delivered because the version budget ran out gets no review call (see the loop requirement
+below), and that delivery SHALL still emit one stage and one INFO record, so "review approved the
+draft" and "the budget ran out, so the previous review's findings may remain" stay distinguishable.
+Both are rendered from the state alone, with no model call. The stage SHALL carry the draft number,
+the measured word count with the ceiling, and that the draft is delivered unreviewed, with the budget
+stated; the log record SHALL carry the same numbers. A version budget of one makes no review call
+and exhausts nothing — review is off by configuration — so no stage SHALL be emitted at all.
 
 **The log record** SHALL carry the draft number, the measured word count, the configured ceiling, and
 the **number** of findings — counts and identifiers only.
@@ -209,10 +216,18 @@ it judges.
   including DEBUG
 - **THEN** no log record SHALL contain any of that text; only the count of findings SHALL be logged
 
+#### Scenario: A budget-exhausted delivery is visible as such
+
+- **WHEN** every review demanded a rewrite and the last permitted version has been written
+- **THEN** the delivered draft SHALL emit a stage recording that it is delivered without review,
+  and an INFO record with the draft number, the measured count and the ceiling — with no review
+  call made for it
+
 #### Scenario: No review, no stage
 
-- **WHEN** an instance configures a revision budget of zero
-- **THEN** no report-review stage SHALL be emitted, because no review call is made
+- **WHEN** an instance configures a version budget of one
+- **THEN** no report-review stage SHALL be emitted — not the unreviewed-delivery one either —
+  because no review call is made and nothing is exhausted
 
 ### Requirement: Reports respect a configured word ceiling without abrupt truncation
 
@@ -240,7 +255,7 @@ expanded or padded to approach it. A draft whose measured count equals the ceili
 treated as within it.
 
 **Exceeding the ceiling SHALL force a revision deterministically, in Python, not on the review
-model's opinion.** While the revision budget allows, a draft whose measured count is above the
+model's opinion.** While the version budget allows, a draft whose measured count is above the
 ceiling SHALL be revised regardless of the review step's verdict — including when that verdict
 approves the draft, and including when the review call failed and produced no verdict at all. The
 count is app-owned and needs no model, so a model that approves an over-long draft SHALL NOT be
@@ -279,7 +294,7 @@ together as one instruction.
 #### Scenario: An approving verdict cannot pass an over-long draft
 
 - **WHEN** the review step approves a draft measuring 3,100 words against a ceiling of 2,750 and
-  the revision budget is not exhausted
+  the version budget is not exhausted
 - **THEN** a revision SHALL still be written, on the measured count alone
 
 #### Scenario: A draft exactly at the ceiling is within it
@@ -345,13 +360,14 @@ report already exists, and discarding a finished multi-minute run over a formatt
 worse outcome.
 
 A failed review leaves the app with no verdict, so the two rules compose in one order, which SHALL
-be: the measured count still applies. While the revision budget allows, an over-ceiling draft whose
-review failed SHALL be revised on the app-rendered length instruction alone; otherwise — the draft
-within the ceiling, or the budget exhausted — the current draft SHALL be delivered as the answer.
+be: the measured count still applies. An over-ceiling draft whose review failed SHALL be revised on
+the app-rendered length instruction alone; a draft within the ceiling SHALL be delivered as the
+answer. A reviewed draft always has a rewrite in budget — the review is gated on the budget below —
+so a failed review never has to reason about an exhausted budget.
 
 **A swallowed revision failure ends the loop, overriding the count gate.** It is the third delivery
 case beside "within the ceiling" and "budget exhausted": an over-ceiling draft MAY therefore ship with
-revision budget still remaining, and that unresolved length SHALL be recorded in the logs exactly as
+version budget still remaining, and that unresolved length SHALL be recorded in the logs exactly as
 an exhausted budget is. The count gate above applies while revisions are still being written
 successfully, not after one has failed.
 
@@ -364,11 +380,15 @@ written once and a failure had nothing to discard; adding revisions must not tur
 into a failed turn.
 
 When the review returns revision instructions, the report SHALL be rewritten against them and
-judged again. The loop SHALL be bounded by a configured revision budget
-(`max_report_revisions`, default 2): when the budget is exhausted with the review still
-unsatisfied, the latest draft SHALL be delivered as the answer — an imperfect report is
-delivered, the turn is never failed and the work is never discarded over a formatting verdict.
-A budget of zero SHALL mean the first draft is delivered with no review at all.
+judged again. The loop SHALL be bounded by a configured version budget (`max_report_versions`,
+default 3, counting the first draft and every rewrite as one version each): a draft SHALL be
+reviewed only while another version may still be written, so the last permitted version is
+delivered as the answer without a further review call. That final review is deliberately not run
+because its verdict would be non-actionable — no rewrite may follow it — so the call would spend
+a review's time and cost only to log problems the loop can no longer fix. An imperfect report is
+delivered, the turn is never failed and the work is never discarded over a formatting verdict,
+and the unreviewed delivery SHALL be announced (see the stage requirement above). A budget of one
+SHALL mean the first draft is delivered with no review at all.
 
 The review step SHALL judge the report as written. It SHALL NOT re-open evidence coverage or
 request further research — that judgement belongs to research-review — and it SHALL NOT be able to
@@ -382,8 +402,8 @@ route control back to research-agent.
 
 #### Scenario: Rejected draft is revised and judged again
 
-- **WHEN** the review step returns revision instructions for the first draft and the revision
-  budget is 2
+- **WHEN** the review step returns revision instructions for the first draft and the version
+  budget is 3
 - **THEN** a revision SHALL be written against those instructions and SHALL itself be judged by
   the review step before delivery
 
@@ -396,10 +416,9 @@ route control back to research-agent.
 
 #### Scenario: Exhausted budget delivers the latest draft
 
-- **WHEN** the review step still returns revision instructions after the configured number of
-  revisions has been written
-- **THEN** the latest draft SHALL be delivered as the answer, the turn SHALL complete
-  successfully, and the unresolved verdict SHALL be recorded in the logs
+- **WHEN** every review demanded a rewrite and the last permitted version has been written
+- **THEN** the latest draft SHALL be delivered as the answer without a further review call, the
+  turn SHALL complete successfully, and the unreviewed delivery SHALL be recorded in the logs
 
 #### Scenario: A failed review call delivers a draft that is within the ceiling
 
@@ -411,7 +430,7 @@ route control back to research-agent.
 #### Scenario: A failed review call still shortens an over-long draft
 
 - **WHEN** the review call fails on a draft measuring 3,900 words against a ceiling of 2,750 and the
-  revision budget is not exhausted
+  version budget is not exhausted
 - **THEN** a revision SHALL be written against the app-rendered length instruction alone, and the
   failure SHALL be logged as a warning
 
@@ -424,7 +443,7 @@ route control back to research-agent.
 
 #### Scenario: An over-long draft ships when the budget runs out
 
-- **WHEN** the revision budget is exhausted and the latest draft still measures above the ceiling
+- **WHEN** the version budget is exhausted and the latest draft still measures above the ceiling
 - **THEN** that draft SHALL be delivered as the answer, the turn SHALL complete successfully, and the
   unresolved length SHALL be recorded in the logs
 
@@ -434,9 +453,9 @@ route control back to research-agent.
 - **THEN** the report node SHALL receive the previous draft, its measured count, the ceiling, and a
   direction to shorten by rewriting, and SHALL NOT be invoked as if writing a first draft
 
-#### Scenario: Review budget of zero skips the review
+#### Scenario: Version budget of one skips the review
 
-- **WHEN** an instance configures a revision budget of zero
+- **WHEN** an instance configures a version budget of one
 - **THEN** the first draft SHALL be delivered as the answer and no review call SHALL be made
 
 #### Scenario: Review cannot reopen research

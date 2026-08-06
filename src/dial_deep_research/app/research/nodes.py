@@ -197,7 +197,6 @@ class ReportAction(StrEnum):
     DELIVER = "deliver"
     REVISE = "revise"
     REVISE_OVER_CEILING = "revise_over_ceiling"
-    BUDGET_EXHAUSTED = "budget_exhausted"
 
 
 class ReportVerdict(StrEnum):
@@ -228,13 +227,21 @@ class ReportReviewOutcome(BaseModel):
 ReportReviewStageEmitter = Callable[[ReportReviewOutcome], None]
 
 
+def review_budget_exhausted(*, report_version: int, max_versions: int) -> bool:
+    """True iff the current draft is the last permitted version, so no rewrite may follow it.
+
+    Both numbers count report versions, 1-based, which keeps the comparison plain. Shared by
+    the router (which skips the review when it holds) and the runner (which then announces the
+    unreviewed delivery), so the two cannot disagree.
+    """
+    return report_version >= max_versions
+
+
 def decide_report_action(
     *,
     word_count: int,
     max_words: int,
     findings: list[str],
-    revisions_used: int,
-    max_revisions: int,
 ) -> tuple[ReportAction, str | None]:
     """Decide what happens to a reviewed draft, and the instruction a revision gets.
 
@@ -242,15 +249,15 @@ def decide_report_action(
     report-review node logs the same value, so the log can never describe a different
     outcome than the one the graph took.
 
-    Exceeding the ceiling forces a revision even when the review found nothing — the count is
-    the app's, not the model's opinion. A failed review call reaches here with no findings, so
-    it revises on length alone or delivers.
+    Runs only for drafts with a rewrite still in budget — `route_after_report` gates the
+    review on the budget — so a requested revision is always permitted. Exceeding the ceiling
+    forces a revision even when the review found nothing: the count is the app's, not the
+    model's opinion. A failed review call reaches here with no findings, so it revises on
+    length alone or delivers.
     """
     over_ceiling = word_count > max_words
     if not findings and not over_ceiling:
         return ReportAction.DELIVER, None
-    if revisions_used >= max_revisions:
-        return ReportAction.BUDGET_EXHAUSTED, None
 
     length_instruction = (
         LENGTH_REVISION_INSTRUCTION.format(word_count=word_count, max_words=max_words)
@@ -276,8 +283,6 @@ def make_report_node(
         plans_text = "\n\n".join(
             f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
         )
-        # Branch on whether a draft exists, NOT on `revisions_used`: the counter is still 0
-        # while the first revision is being written, so it would misroute that call.
         previous_draft = state.get("report")
         report_messages: list[BaseMessage] = [
             SystemMessage(
@@ -306,7 +311,7 @@ def make_report_node(
                     )
                 )
             )
-        draft_number = state.get("revisions_used", 0) + (1 if previous_draft is None else 2)
+        draft_number = state.get("report_version", 0) + 1
         try:
             text, usage = await _stream_report(llm, report_messages)
         except Exception as exc:
@@ -334,10 +339,7 @@ def make_report_node(
         # No `AIMessage` into `messages`: drafts stay out of the transcript, so a rejected one
         # is never re-sent to a model nor persisted. The runner builds the assistant message
         # for the delivered report from the graph's final state.
-        update: dict[str, Any] = {"report": text}
-        if previous_draft is not None:
-            update["revisions_used"] = state.get("revisions_used", 0) + 1
-        return update
+        return {"report": text, "report_version": draft_number}
 
     return report
 
@@ -378,7 +380,6 @@ def make_report_review_node(
     today_date: str,
     sections: Sequence[ReportSection],
     max_words: int,
-    max_revisions: int,
     emit_stage: ReportReviewStageEmitter,
 ) -> ReportReviewNode:
     """Build the report-review node: judge the draft, emit its stage, decide the next step.
@@ -392,7 +393,7 @@ def make_report_review_node(
         start = time.monotonic()
         draft = state["report"] or ""
         word_count = count_words(draft)
-        draft_number = state.get("revisions_used", 0) + 1
+        draft_number = state.get("report_version", 0)
 
         findings: list[str] = []
         verdict = ReportVerdict.FAILED
@@ -440,8 +441,6 @@ def make_report_review_node(
             word_count=word_count,
             max_words=max_words,
             findings=findings,
-            revisions_used=state.get("revisions_used", 0),
-            max_revisions=max_revisions,
         )
         duration = time.monotonic() - start
         emit_stage(
@@ -491,20 +490,25 @@ def route_after_research_review(max_iterations: int) -> Callable[[ResearchState]
     return route
 
 
-def route_after_report(max_revisions: int) -> Callable[[ResearchState], str]:
+def route_after_report(max_versions: int) -> Callable[[ResearchState], str]:
     """Decide the edge out of the report node.
 
     Three exits. A revision whose own call failed leaves the loop immediately with the previous
     draft: returning to review would re-judge an unchanged draft and route straight back to a
     call that fails again, and since a failed revision writes nothing, no counter would bound
-    that cycle. A zero revision budget skips the review entirely rather than calling it and
-    ignoring the verdict. Otherwise the draft is reviewed.
+    that cycle. The last permitted version is delivered without a review call — a verdict that
+    cannot be acted on is not worth one; the runner announces the unreviewed delivery. A budget
+    of one is the same gate failing already for the first draft. Otherwise the draft is
+    reviewed.
     """
 
     def route(state: ResearchState) -> str:
         if state.get("revision_failed"):
             return "end"
-        return "report-review" if max_revisions > 0 else "end"
+        exhausted = review_budget_exhausted(
+            report_version=state.get("report_version", 0), max_versions=max_versions
+        )
+        return "end" if exhausted else "report-review"
 
     return route
 
@@ -513,7 +517,7 @@ def route_after_report_review() -> Callable[[ResearchState], str]:
     """Decide the edge out of the report-review node.
 
     Revise iff the review left an instruction. `decide_report_action` already folded in the
-    measured count and the revision budget, so this reads one field rather than re-deciding.
+    measured count, so this reads one field rather than re-deciding.
     """
 
     def route(state: ResearchState) -> str:

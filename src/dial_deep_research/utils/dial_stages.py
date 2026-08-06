@@ -9,6 +9,7 @@ from pydantic import BaseModel
 _PREFIX = "[TOOL]"
 _RESULT_EMOJI = "✅"
 _ERROR_EMOJI = "❌"
+_WARNING_EMOJI = "⚠️"
 
 
 class PendingToolCall(BaseModel):
@@ -50,7 +51,8 @@ def timed_stage_title(base_name: str, start: datetime, end: datetime) -> str:
 
 
 class DialStageReportReviewFormatter:
-    """Renders one report review as a DIAL stage.
+    """Renders one report review as a DIAL stage, and the closing stage of a draft the
+    revision budget left unreviewed.
 
     Its own title shape rather than the tool-call one: a review is not a tool call, and the
     `[TOOL] "<name>"` form would read as one. The body carries the review's findings, which is
@@ -95,6 +97,27 @@ class DialStageReportReviewFormatter:
         else:
             lines.append("**Findings** none — the draft satisfies every check.")
         return "\n".join(lines)
+
+    @classmethod
+    def format_unreviewed_title(cls, *, draft_number: int) -> str:
+        # No duration: no call was made — the delivery decision is pure Python over the state.
+        return f"{cls._PREFIX} draft {draft_number} - delivered without review {_WARNING_EMOJI}"
+
+    @classmethod
+    def format_unreviewed_body(
+        cls, *, draft_number: int, word_count: int, max_words: int, max_versions: int
+    ) -> str:
+        return "\n".join(
+            [
+                f"**Draft** {draft_number}",
+                "",
+                f"**Length** {word_count} words (ceiling {max_words})",
+                "",
+                f"**Verdict** none — the version budget ({max_versions}) is exhausted, so this"
+                " draft is delivered without review. The previous review's findings may remain"
+                " if the rewrite missed them.",
+            ]
+        )
 
 
 class DialStageToolCallFormatter:

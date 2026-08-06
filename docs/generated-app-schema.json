@@ -90,7 +90,7 @@
     },
     "max_report_words": {
       "default": 2750,
-      "description": "The report's word ceiling, counted as whitespace-separated tokens of the report's Markdown. Enforced by reviewing the finished report and revising it, never by cutting text off: a report over the ceiling is rewritten to fit while the revision budget allows, and always ends at a complete sentence.",
+      "description": "The report's word ceiling, counted as whitespace-separated tokens of the report's Markdown. Enforced by reviewing the finished report and revising it, never by cutting text off: a report over the ceiling is rewritten to fit while the version budget allows, and always ends at a complete sentence.",
       "minimum": 1,
       "title": "Max Report Words",
       "type": "integer",
@@ -99,11 +99,11 @@
         "dial:propertyOrder": 4
       }
     },
-    "max_report_revisions": {
-      "default": 2,
-      "description": "How many revisions the report review loop may write before the latest draft is delivered as-is. Each revision costs one report call plus one review call. 0 disables the review entirely: the first draft is delivered unreviewed.",
-      "minimum": 0,
-      "title": "Max Report Revisions",
+    "max_report_versions": {
+      "default": 3,
+      "description": "How many report versions may be written in one turn. Version 1 is the first draft; each later version is a rewrite the review demanded, costing one report call plus one review call. The last permitted version is delivered without another review — its verdict could not be acted on. 1 means the first draft is delivered unreviewed, with no review at all.",
+      "minimum": 1,
+      "title": "Max Report Versions",
       "type": "integer",
       "dial:meta": {
         "dial:propertyKind": "server",

@@ -5,12 +5,12 @@ Three edges and the one helper that decides for two of them:
 - `route_after_research_review` (research-review → research-agent | report) loops back only when
   research-review recorded a plan for a not-yet-run iteration (`len(plans) > iteration`) and the
   iteration cap is not yet reached.
-- `decide_report_action` is the report loop's decision table: the measured word count, the review's
-  findings and the revision budget in, the action and the revision instruction out. The router maps
-  its action to an edge and the report-review node logs the same action, so neither can disagree
-  with it.
-- `route_after_report` (report → report-review | END) and `route_after_report_review`
-  (report-review → report | END).
+- `decide_report_action` is the report loop's decision table: the measured word count and the
+  review's findings in, the action and the revision instruction out. The router maps its action
+  to an edge and the report-review node logs the same action, so neither can disagree with it.
+- `route_after_report` (report → report-review | END) gates the review on the version budget:
+  the last permitted version is delivered without a review call. And
+  `route_after_report_review` (report-review → report | END).
 """
 
 from __future__ import annotations
@@ -59,13 +59,11 @@ def test_cap_forces_report_even_with_new_plan() -> None:
 
 
 def _decide(**overrides: Any) -> tuple[ReportAction, str | None]:
-    """The decision for a first draft within the ceiling, with the given fields overridden."""
+    """The decision for a draft within the ceiling, with the given fields overridden."""
     inputs: dict[str, Any] = {
         "word_count": 900,
         "max_words": 2750,
         "findings": [],
-        "revisions_used": 0,
-        "max_revisions": 2,
     }
     return decide_report_action(**{**inputs, **overrides})
 
@@ -106,28 +104,6 @@ def test_draft_exactly_at_the_ceiling_is_within_it() -> None:
     assert _decide(word_count=2750) == (ReportAction.DELIVER, None)
 
 
-def test_exhausted_budget_delivers_the_draft_despite_findings() -> None:
-    # No instruction: an exhausted budget must not leave one behind, or the loop would run on.
-    assert _decide(findings=["The conclusion is missing."], revisions_used=2, max_revisions=2) == (
-        ReportAction.BUDGET_EXHAUSTED,
-        None,
-    )
-
-
-def test_exhausted_budget_delivers_an_over_long_draft() -> None:
-    assert _decide(word_count=3910, revisions_used=2, max_revisions=2) == (
-        ReportAction.BUDGET_EXHAUSTED,
-        None,
-    )
-
-
-def test_zero_budget_exhausts_on_the_first_draft() -> None:
-    assert _decide(word_count=3910, findings=["x"], revisions_used=0, max_revisions=0) == (
-        ReportAction.BUDGET_EXHAUSTED,
-        None,
-    )
-
-
 # --- the report loop's two edges ----------------------------------------------------------------
 
 
@@ -139,25 +115,35 @@ def _report_state(**overrides: Any) -> ResearchState:
         "iteration": 1,
         "report": "the draft",
         "report_revision_instruction": None,
-        "revisions_used": 0,
+        "report_version": 1,
         "revision_failed": False,
     }
     return ResearchState(**{**state, **overrides})  # type: ignore[typeddict-item]
 
 
 def test_report_routes_to_review_when_the_budget_allows() -> None:
-    assert route_after_report(max_revisions=2)(_report_state()) == "report-review"
+    assert route_after_report(max_versions=3)(_report_state()) == "report-review"
+
+
+def test_the_next_to_last_version_is_still_reviewed() -> None:
+    # Version 2 with a budget of 3: one more version may be written, so a verdict is actionable.
+    assert route_after_report(max_versions=3)(_report_state(report_version=2)) == "report-review"
+
+
+def test_the_last_permitted_version_delivers_without_a_review_call() -> None:
+    # Version 3 with a budget of 3: no version may follow, so a verdict could not be acted on.
+    assert route_after_report(max_versions=3)(_report_state(report_version=3)) == "end"
 
 
 def test_failed_revision_ends_the_loop_even_with_budget_left() -> None:
     # Re-reviewing the unchanged draft would route straight back into a call that fails again,
     # and a failed revision increments no counter, so nothing would bound the cycle.
-    route = route_after_report(max_revisions=2)
+    route = route_after_report(max_versions=3)
     assert route(_report_state(revision_failed=True)) == "end"
 
 
-def test_zero_budget_skips_the_review_entirely() -> None:
-    assert route_after_report(max_revisions=0)(_report_state()) == "end"
+def test_budget_of_one_skips_the_review_entirely() -> None:
+    assert route_after_report(max_versions=1)(_report_state()) == "end"
 
 
 def test_recorded_instruction_routes_back_to_report() -> None:

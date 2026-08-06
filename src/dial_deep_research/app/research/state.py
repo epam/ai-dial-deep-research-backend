@@ -40,8 +40,9 @@ class ResearchState(TypedDict):
     report_revision_instruction: str | None
     """What a revision must change, set by report-review. `None` means the draft is deliverable."""
 
-    revisions_used: int
-    """Report revisions written so far — 0 after the first draft. Bounds the report loop."""
+    report_version: int
+    """1-based version index of `report` — 1 for the first draft, 0 while no draft exists.
+    Bounds the report loop against `max_report_versions`."""
 
     revision_failed: bool
     """Set when a revision's own model call failed, so the loop exits with the previous draft."""
@@ -68,6 +69,6 @@ def build_initial_state(prep_state: PrepState) -> ResearchState:
         iteration=0,
         report=None,
         report_revision_instruction=None,
-        revisions_used=0,
+        report_version=0,
         revision_failed=False,
     )

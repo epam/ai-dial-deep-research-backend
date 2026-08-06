@@ -2,7 +2,8 @@
 
 Drives the compiled graph with one `astream(subgraphs=True)` and routes its output:
 research-agent tool calls become timed DIAL stages, each report review becomes a stage of its
-own, and the report the review loop settles on is appended once as the assistant content.
+own — as does a delivery the version budget left unreviewed — and the report the review loop
+settles on is appended once as the assistant content.
 
 Nothing is streamed token-by-token here. A report draft may still be revised and DIAL content is
 append-only, so no draft may reach the choice while the loop runs — the report is appended after
@@ -31,6 +32,7 @@ from langgraph.types import StreamPart
 from dial_deep_research.app.history import PrepState
 from dial_deep_research.app.mcp_tools import load_mcp_tools
 from dial_deep_research.app_properties import ApplicationProperties
+from dial_deep_research.utils.content import count_words
 from dial_deep_research.utils.dial_stages import (
     DialStageReportReviewFormatter,
     DialStageToolCallFormatter,
@@ -39,7 +41,7 @@ from dial_deep_research.utils.dial_stages import (
 )
 
 from .graph import build_research_graph
-from .nodes import ReportReviewOutcome
+from .nodes import ReportReviewOutcome, review_budget_exhausted
 from .state import build_initial_state
 from .tools import build_finish_iteration_tool
 
@@ -61,6 +63,7 @@ class ResearchRunner:
         self._messages: list[BaseMessage] = []
         self._seen_ids: set[str] = set()
         self._report: str | None = None
+        self._report_version = 0
         # Only separate the report from preparation text that actually reached the choice. With
         # the silent hand-off there usually is none, and then the report starts the message.
         self._content_already_streamed = content_already_streamed
@@ -82,7 +85,7 @@ class ResearchRunner:
             client_name=properties.prompts.client_name,
             report_structure=properties.default_report_structure,
             max_report_words=properties.max_report_words,
-            max_report_revisions=properties.max_report_revisions,
+            max_report_versions=properties.max_report_versions,
             emit_report_review_stage=self._emit_report_review_stage,
         )
         # LangGraph applies this to each graph run separately, so the same value bounds the
@@ -100,6 +103,7 @@ class ResearchRunner:
         ):
             self._handle_part(part)
 
+        self._emit_unreviewed_delivery_stage(properties)
         self._deliver_report()
         return self._messages
 
@@ -139,6 +143,7 @@ class ResearchRunner:
         elif part["type"] == "values" and not part["ns"]:
             self._messages = part["data"]["messages"]
             self._report = part["data"].get("report")
+            self._report_version = part["data"].get("report_version", 0)
 
     def _handle_updates(self, data: dict[str, Any]) -> None:
         for node_update in data.values():
@@ -202,6 +207,40 @@ class ResearchRunner:
         )
         with self._choice.create_stage(title) as result_stage:
             result_stage.append_content(body)
+
+    def _emit_unreviewed_delivery_stage(self, properties: ApplicationProperties) -> None:
+        """Announce a delivery whose draft the version budget left unreviewed.
+
+        Distinguishes "review approved the draft" from "the budget ran out, so the previous
+        review's findings may remain". Deterministic — no model call: the last permitted version
+        exists only because the previous review demanded a rewrite. A budget of one emits
+        nothing — review is off by configuration, not exhausted.
+        """
+        max_versions = properties.max_report_versions
+        if not self._report or max_versions <= 1:
+            return
+        if not review_budget_exhausted(
+            report_version=self._report_version, max_versions=max_versions
+        ):
+            return
+        word_count = count_words(self._report)
+        logger.info(
+            "Report delivered without review: draft=%d max_versions=%d words=%d",
+            self._report_version,
+            max_versions,
+            word_count,
+        )
+        title = DialStageReportReviewFormatter.format_unreviewed_title(
+            draft_number=self._report_version
+        )
+        body = DialStageReportReviewFormatter.format_unreviewed_body(
+            draft_number=self._report_version,
+            word_count=word_count,
+            max_words=properties.max_report_words,
+            max_versions=max_versions,
+        )
+        with self._choice.create_stage(title) as stage:
+            stage.append_content(body)
 
     def _emit_report_review_stage(self, outcome: ReportReviewOutcome) -> None:
         """Render one report review as a DIAL stage.
