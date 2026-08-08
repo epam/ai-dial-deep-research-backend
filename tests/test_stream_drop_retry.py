@@ -1,15 +1,14 @@
 """Unit tests for the in-app retry of transient LLM stream drops.
 
-Covers the shared retry helpers in `utils/llm.py` and the report node's hand-rolled
-retry loop (streaming, which `with_retry` does not cover).
+Covers the shared retry helpers in `utils/llm.py` and the report node, which retries its
+one long call through `with_stream_drop_retry`.
 """
 
-from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
 import pytest
-from langchain_core.messages import AIMessageChunk, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.runnables import RunnableLambda
 
 from dial_deep_research.app.research import nodes
@@ -84,7 +83,7 @@ def test_middleware_reraises_on_exhaustion_and_uses_shared_budget() -> None:
     assert middleware.on_failure == "error"
 
 
-# --- report node retry loop ---------------------------------------------------------------------
+# --- report node ---------------------------------------------------------------------------------
 
 
 def _report_state(**overrides: Any) -> dict[str, Any]:
@@ -106,53 +105,41 @@ def _make_report_node() -> Any:
 
 
 class _FlakyReportLLM:
-    """Streams a partial answer and drops on the first attempt; completes on the second."""
+    """Drops the connection on the first attempt; returns the report on every attempt after."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, always_drops: bool = False) -> None:
         self.attempts = 0
+        self._always_drops = always_drops
 
-    async def astream(self, messages: list[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+    async def __call__(self, messages: list[BaseMessage]) -> AIMessage:
         self.attempts += 1
-        if self.attempts == 1:
-            yield AIMessageChunk(content="partial ")
+        if self._always_drops or self.attempts == 1:
             raise httpx.RemoteProtocolError("peer closed connection")
-        yield AIMessageChunk(content="full ")
-        yield AIMessageChunk(content="report")
+        return AIMessage(content="full report")
 
 
-async def test_report_node_retries_and_keeps_only_the_successful_attempt(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _patch_report_llm(monkeypatch: pytest.MonkeyPatch, llm: _FlakyReportLLM) -> None:
+    monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: RunnableLambda(llm))
+
+
+async def test_report_node_retries_a_dropped_call(monkeypatch: pytest.MonkeyPatch) -> None:
     llm = _FlakyReportLLM()
-    monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: llm)
-    monkeypatch.setattr(nodes, "stream_drop_retry_delay", lambda retry_number: 0.0)
+    _patch_report_llm(monkeypatch, llm)
 
     report = _make_report_node()
     result = await report(_report_state())  # type: ignore[arg-type]
 
     assert llm.attempts == 2
-    # The failed attempt's partial text is neither persisted nor ever shown: nothing streams.
     assert result["report"] == "full report"
     # Drafts stay out of the transcript; the runner builds the assistant message.
     assert "messages" not in result
 
 
-class _AlwaysDroppingReportLLM:
-    def __init__(self) -> None:
-        self.attempts = 0
-
-    async def astream(self, messages: list[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
-        self.attempts += 1
-        raise httpx.RemoteProtocolError("peer closed connection")
-        yield  # pragma: no cover - makes this an async generator
-
-
 async def test_report_node_reraises_after_budget_exhausted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    llm = _AlwaysDroppingReportLLM()
-    monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: llm)
-    monkeypatch.setattr(nodes, "stream_drop_retry_delay", lambda retry_number: 0.0)
+    llm = _FlakyReportLLM(always_drops=True)
+    _patch_report_llm(monkeypatch, llm)
 
     report = _make_report_node()
     with pytest.raises(httpx.RemoteProtocolError):

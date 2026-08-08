@@ -1,6 +1,5 @@
 import logging
 import os
-import random
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
@@ -50,15 +49,6 @@ def with_stream_drop_retry[I, O](runnable: Runnable[I, O]) -> Runnable[I, O]:
         stop_after_attempt=STREAM_DROP_MAX_ATTEMPTS,
         exponential_jitter_params={"initial": _STREAM_DROP_INITIAL_DELAY},
     )
-
-
-def stream_drop_retry_delay(retry_number: int) -> float:
-    """Seconds to wait before retry ``retry_number`` (0-based): exponential with jitter.
-
-    For hand-rolled retry loops (streaming calls, which ``with_retry`` does not cover);
-    mirrors the middleware's backoff.
-    """
-    return _STREAM_DROP_INITIAL_DELAY * (2**retry_number) + random.uniform(0.0, 0.5)
 
 
 def format_token_usage(usage: Mapping[str, Any] | None) -> str:

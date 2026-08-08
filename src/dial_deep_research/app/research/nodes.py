@@ -17,7 +17,6 @@ turns its result into an edge and the review node logs the same value.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -46,12 +45,9 @@ from dial_deep_research.utils.content import (
     extract_text_from_content,
 )
 from dial_deep_research.utils.llm import (
-    STREAM_DROP_MAX_ATTEMPTS,
-    TRANSIENT_STREAM_DROP_ERRORS,
     LLMModelConfig,
     format_token_usage,
     get_chat_model,
-    stream_drop_retry_delay,
     stream_drop_retry_middleware,
     with_stream_drop_retry,
 )
@@ -295,7 +291,7 @@ def make_report_node(
 
     async def report(state: ResearchState) -> dict[str, Any]:
         start = time.monotonic()
-        llm = get_chat_model(LLMModelConfig())
+        llm = with_stream_drop_retry(get_chat_model(LLMModelConfig()))
         plans_text = "\n\n".join(
             f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
         )
@@ -329,7 +325,7 @@ def make_report_node(
             )
         draft_number = state.get("report_version", 0) + 1
         try:
-            text, usage = await _stream_report(llm, report_messages)
+            response = await llm.ainvoke(report_messages)
         except Exception as exc:
             # Once a draft exists, no later failure may discard it: deliver the previous draft
             # and leave the loop. The first draft has nothing to fall back to, so it propagates.
@@ -344,13 +340,14 @@ def make_report_node(
             )
             return {"report_revision_failed": True}
 
+        text = extract_text_from_content(response.content)
         logger.info(
             "Report generated: draft=%d duration=%.1fs length=%d words=%d tokens=%s",
             draft_number,
             time.monotonic() - start,
             len(text),
             count_words(text),
-            format_token_usage(usage),
+            format_token_usage(response.usage_metadata),
         )
         # No `AIMessage` into `messages`: drafts stay out of the transcript, so a rejected one
         # is never re-sent to a model nor persisted. The runner builds the assistant message
@@ -358,38 +355,6 @@ def make_report_node(
         return {"report": text, "report_version": draft_number}
 
     return report
-
-
-async def _stream_report(llm: Any, messages: list[BaseMessage]) -> tuple[str, UsageMetadata | None]:
-    """Stream one report call to completion, retrying transient mid-stream drops.
-
-    `with_retry` does not cover streaming, so the retry is a loop here. The accumulated chunks
-    reset each attempt, so the returned report is one attempt's full text. Nothing is forwarded
-    to the user while streaming — the report reaches the choice only once the review loop
-    settles — so a retry cannot duplicate visible text.
-    """
-    for attempt in range(STREAM_DROP_MAX_ATTEMPTS):
-        chunks: list[str] = []
-        usage: UsageMetadata | None = None
-        try:
-            async for chunk in llm.astream(messages):
-                text = extract_text_from_content(chunk.content)
-                if text:
-                    chunks.append(text)
-                # Usage arrives on the final chunk when stream_usage is on; keep the last.
-                if chunk_usage := chunk.usage_metadata:
-                    usage = chunk_usage
-            return "".join(chunks), usage
-        except TRANSIENT_STREAM_DROP_ERRORS:
-            if attempt + 1 >= STREAM_DROP_MAX_ATTEMPTS:
-                raise
-            logger.warning(
-                "Report stream dropped mid-response, retrying (attempt %d of %d)",
-                attempt + 2,
-                STREAM_DROP_MAX_ATTEMPTS,
-            )
-            await asyncio.sleep(stream_drop_retry_delay(attempt))
-    raise AssertionError("unreachable: the retry loop either returns or raises")
 
 
 def make_report_review_node(

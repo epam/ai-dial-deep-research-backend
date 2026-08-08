@@ -58,7 +58,7 @@
 - [x] 6.6 On a revision, append **one** `HumanMessage` carrying the previous draft, the revision instruction and the measured count with the ceiling **after** the unchanged `[system, *state["messages"], REPORT_REQUEST]` list — never inserted before the transcript, or the cached prefix is lost for every later call in the run
 - [x] 6.7 Wire the edge out of `report`: END when this call was a revision whose own call failed, or when the draft is the last version the budget permits, else `report-review`. **Land 6.7 and 6.8 together with 7.1 and 7.2**: the runner forwards report tokens until 7.1 drops the `messages` stream mode, so a revision loop landing first appends draft 1 *and* draft 2 to the same assistant message — the opposite of the contracted "no draft reaches the choice"
 - [x] 6.8 Wire `route_after_report_review`: back to `report` when the measured count exceeds the ceiling **or** the review asked for a revision, and the budget allows; else END. An approving verdict must not pass an over-ceiling draft
-- [x] 6.9 Keep the report node non-streaming internally via `astream` (preserving the existing drop-retry loop) but forward no tokens
+- [x] 6.9 Write the report with one `ainvoke` call wrapped in `with_stream_drop_retry`, not `astream`: nothing is forwarded to the user, so the node has no use for chunks and the shared retry wrapper replaces the hand-rolled loop over them
 
 ## 7. Runner, DIAL output, and the review stage
 
@@ -95,7 +95,7 @@
 - [x] 10.7 Report delivery: no draft token reaches the choice; the delivered report is appended once; no leading blank line when preparation streamed nothing
 - [x] 10.8 The review stage: emitted per review with the counts and findings; emitted on approval and on failure; absent at a version budget of one
 - [x] 10.9 Silent hand-off: a passing `start_research` produces no further model call; a gate-rejected one still answers the user
-- [x] 10.10 Update `tests/test_stream_drop_retry.py` for the report node's new signature and state, keeping the "partial text is not persisted" assertion (now also "never visible")
+- [x] 10.10 Update `tests/test_stream_drop_retry.py` for the report node's new signature and state, and for the non-streaming call: a dropped attempt is retried and the delivered draft is the retried attempt's, with no partial text to assert about because a failed attempt produces none
 - [x] 10.11 The persisted slice: given a final graph state carrying only `report` text and no report `AIMessage`, the slice the runner returns still ends with an `AIMessage` holding the delivered report. This is the assertion that makes the 6.3/7.3 pairing verifiable — today's `test_persisted_slice_comes_from_the_last_root_values` hand-builds that message, so it cannot catch its absence
 - [x] 10.12 report-review's inputs: no `ToolMessage`, no transcript message and no image block reach the call; it receives `plans[0]` only; the draft and its measured count are the last content in the user message
 

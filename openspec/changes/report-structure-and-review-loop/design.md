@@ -256,12 +256,19 @@ and pages; tokens would need translating for whoever configures the property.
 
 ### No streaming of the report; the delivered text is appended once
 
-The report node keeps `astream` internally — it preserves the existing transient stream-drop
-retry semantics (`STREAM_DROP_MAX_ATTEMPTS`) and avoids one long idle request — but its chunks
-no longer reach the DIAL choice. `ResearchRunner` drops the `"messages"` stream mode and its
+The report node does not stream at all: it makes one `ainvoke` call and reads the text off the
+returned message. `ResearchRunner` drops the `"messages"` stream mode and its
 `_handle_message_chunk` handler, takes the settled report from the graph's final `values`
 state, and appends it in one call. Tool stages continue to appear throughout research, and the
 SDK keep-alive (`HEARTBEAT_INTERVAL`, default 5s) covers the report loop's quiet stretch.
+
+Dropping `astream` costs nothing the node needs. Retry on a transient drop comes from
+`with_stream_drop_retry` — the same wrapper the review calls use, with the same budget — instead
+of a hand-rolled loop over chunks. The one thing streaming did buy is a read-timeout window that
+resets on every chunk, where a single `ainvoke` must finish inside one window; the OpenAI client's
+default is 600s (`openai/_constants.py`: `httpx.Timeout(timeout=600, connect=5.0)`, not overridden
+in `get_chat_model`), which a call capped at `max_report_words` cannot approach. Not verified: what
+timeout DIAL Core applies to a non-streamed completion of this size.
 
 The `"\n\n"` separator becomes conditional: `completion.py` tells `ResearchRunner` whether the
 preparation stage appended any content this turn. With the silent hand-off below it normally

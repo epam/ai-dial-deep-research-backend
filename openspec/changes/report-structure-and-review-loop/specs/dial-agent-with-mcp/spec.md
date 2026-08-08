@@ -40,8 +40,8 @@ to the user are not retracted, so a retried call MAY render duplicated partial t
 losing a long research turn). Where that happens, the retry is a distinct assistant message, so a
 `"\n\n"` separates the abandoned fragment from the full answer per **Assistant message content
 contains only model text** — the duplicate reads as its own paragraph rather than running into the
-text that replaces it. The report does not stream to the user, so a retried report call cannot
-duplicate visible text at all.
+text that replaces it. The report-writing call is not streamed at all, so a retried report call
+cannot duplicate visible text.
 
 When the budget is exhausted, the last exception SHALL propagate unchanged to the top-level
 handler and deliver through the DIAL error protocol per **Failures delivered as DIAL protocol
@@ -70,9 +70,9 @@ keep their existing handling.
 - **WHEN** the report-review call, or a report revision written after a first draft, fails on every attempt in the budget
 - **THEN** the app SHALL NOT deliver a protocol error; the report loop SHALL absorb the failure, deliver the current or previous draft, and log a warning
 
-#### Scenario: Report stream drops mid-content
-- **WHEN** the report-writing stream drops mid-content and a retry succeeds
-- **THEN** the turn SHALL complete with the retried report, and the delivered and persisted report SHALL be the retried attempt's full text only; no partial text SHALL be visible to the user, since a report reaches the choice only once the review loop settles
+#### Scenario: The report call drops mid-response
+- **WHEN** the report-writing call's connection drops while its response is being read and a retry succeeds
+- **THEN** the turn SHALL complete with the retried report, and the delivered and persisted report SHALL be the retried attempt's text only; a failed attempt SHALL leave no text anywhere, since the call is not streamed and its response is read only after it completes
 
 #### Scenario: Non-transient failures are not retried in-app
 - **WHEN** an LLM call fails with an HTTP status error (e.g. 400) or a timeout
@@ -126,7 +126,8 @@ error body (for non-streaming requests, or failures before the choice opens) or 
 `{"error": ...}` chunk terminating the open 200 stream (for streaming requests, i.e. any failure
 after the choice opens). Any content already appended to the choice SHALL remain visible with the
 error rendered beneath it — preparation text, which streams. A report cannot contribute partial
-content, because it is appended only once the review loop settles. The app SHALL NOT append the
+content: its call is not streamed, and a completed draft reaches the choice only once the review
+loop settles. The app SHALL NOT append the
 error as ordinary assistant `content`, and SHALL NOT persist state on a turn that aborts.
 
 **Outgoing-status policy.** The app SHALL NOT emit a status DIAL Core's balancer treats as

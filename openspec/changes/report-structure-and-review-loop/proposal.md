@@ -195,5 +195,6 @@ criterion is deferred, the reason is in design.md — Non-Goals.
   rendering, section-name uniqueness, and the silent handoff.
 - `tests/test_agent_logging.py` — asserts `agent=researcher`, which the rename changes.
 - `tests/test_stream_drop_retry.py` — builds the report node directly (`make_report_node`) over a
-  state with no report or revision fields, so it moves to the new signature; its "partial text is
-  not persisted" assertion now also covers "partial text is never visible".
+  state with no report or revision fields, so it moves to the new signature; its fakes return a
+  message instead of chunks, and its "partial text is not persisted" assertion goes away with the
+  partial text itself — a failed attempt on a non-streamed call produces none.

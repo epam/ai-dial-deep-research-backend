@@ -18,13 +18,11 @@ Routing itself lives in `test_research_routing.py`; the stage's rendering in `te
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 from langchain_core.messages import (
     AIMessage,
-    AIMessageChunk,
     BaseMessage,
     HumanMessage,
     SystemMessage,
@@ -85,9 +83,9 @@ class _RecordingReportLLM:
         self._drafts = list(drafts)
         self.calls: list[list[BaseMessage]] = []
 
-    async def astream(self, messages: list[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+    async def __call__(self, messages: list[BaseMessage]) -> AIMessage:
         self.calls.append(list(messages))
-        yield AIMessageChunk(content=self._drafts[len(self.calls) - 1])
+        return AIMessage(content=self._drafts[len(self.calls) - 1])
 
 
 class _FailingReportLLM:
@@ -96,10 +94,9 @@ class _FailingReportLLM:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def astream(self, messages: list[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+    async def __call__(self, messages: list[BaseMessage]) -> AIMessage:
         self.calls += 1
         raise ValueError("maximum context length exceeded")
-        yield  # pragma: no cover - makes this an async generator
 
 
 def _report_node(
@@ -109,7 +106,7 @@ def _report_node(
     sections: list[ReportSection] | None = None,
     max_words: int = 2750,
 ) -> Any:
-    monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: llm)
+    monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: RunnableLambda(llm))
     return nodes.make_report_node(
         today_date=_TODAY,
         sections=sections if sections is not None else DEFAULT_REPORT_STRUCTURE,

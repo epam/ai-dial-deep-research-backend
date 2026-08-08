@@ -10,11 +10,10 @@ Research is stubbed out (one iteration, no next steps) so each test drives the r
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage
 
 from dial_deep_research.app.history import Plan, PrepState
 from dial_deep_research.app.research import graph as graph_module
@@ -28,7 +27,11 @@ pytestmark = pytest.mark.asyncio
 
 
 class _FakeChatModel:
-    """Serves the report node (`astream`) and the report-review node (structured `ainvoke`)."""
+    """Serves the report node (plain `ainvoke`) and the report-review node (structured one).
+
+    Both nodes wrap the model in `with_stream_drop_retry`, hence `with_retry` on each object;
+    `with_structured_output` hands back a separate object so the two `ainvoke` calls stay apart.
+    """
 
     def __init__(self, drafts: list[str | Exception], reviews: list[ReportReview]) -> None:
         self._drafts = list(drafts)
@@ -37,25 +40,36 @@ class _FakeChatModel:
         self.review_calls = 0
         self.report_messages: list[list[BaseMessage]] = []
 
-    # --- report node ---
-    async def astream(self, messages: list[BaseMessage]) -> AsyncIterator[AIMessageChunk]:
+    # --- report node: with_retry(...).ainvoke(...) ---
+    def with_retry(self, **kwargs: Any) -> _FakeChatModel:
+        return self
+
+    async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:
         self.report_calls += 1
         self.report_messages.append(list(messages))
         draft = self._drafts.pop(0) if self._drafts else "a draft"
         if isinstance(draft, Exception):
             raise draft
-        yield AIMessageChunk(content=draft)
+        return AIMessage(content=draft)
 
     # --- report-review node: with_structured_output(...).with_retry(...).ainvoke(...) ---
-    def with_structured_output(self, schema: Any, include_raw: bool = False) -> _FakeChatModel:
-        return self
+    def with_structured_output(self, schema: Any, include_raw: bool = False) -> _FakeReviewModel:
+        return _FakeReviewModel(self)
 
-    def with_retry(self, **kwargs: Any) -> _FakeChatModel:
+    def next_review(self) -> ReportReview:
+        self.review_calls += 1
+        return self._reviews.pop(0) if self._reviews else ReportReview(findings=[])
+
+
+class _FakeReviewModel:
+    def __init__(self, model: _FakeChatModel) -> None:
+        self._model = model
+
+    def with_retry(self, **kwargs: Any) -> _FakeReviewModel:
         return self
 
     async def ainvoke(self, messages: list[BaseMessage]) -> dict[str, Any]:
-        self.review_calls += 1
-        review = self._reviews.pop(0) if self._reviews else ReportReview(findings=[])
+        review = self._model.next_review()
         return {"parsed": review, "raw": AIMessage(content=""), "parsing_error": None}
 
 
