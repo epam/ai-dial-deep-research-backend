@@ -8,7 +8,7 @@
 - [x] 1.6 Fix the `max_research_iterations` description: it reads "researcher → reviewer loops", which is deployment-visible through the generated schema
 - [x] 1.7 Run `make format` to regenerate `docs/generated-app-schema.json`; confirm `default_report_structure`'s `items` inlines the `ReportSection` fields with no `$ref` left, and that `make lint` passes the drift check
 - [x] 1.8 Add the new properties to the **research** instance in `dial_conf/core/applications-template.json` only — the playground instance carries neither existing research property, since it runs no research graph and no report node
-- [x] 1.9 Thread the three new properties from `ResearchRunner.run` through `build_research_graph` into the node factories. Its signature is `(tools, today_date, max_iterations, client_name)` today and must also carry the configured structure, the word ceiling and the version budget — every group below reads them, so this plumbing exists first
+- [x] 1.9 Thread the three new properties from `ResearchRunner.run` through `build_research_graph` into the node factories. Its signature is `(tools, today_date, max_research_iterations, client_name)` and must also carry the configured structure, the word ceiling and the version budget — every group below reads them, so this plumbing exists first
 - [x] 1.10 Decide and act on the README: its core-config snippet elides `applicationProperties`, so either add prose for `default_report_structure` beside the `mcp_servers` paragraph or record that the template plus the generated schema suffice. No env vars are added, so the env table is unaffected
 
 ## 2. Node rename sweep (do before the new code, so it lands on final names)

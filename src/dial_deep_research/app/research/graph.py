@@ -34,7 +34,7 @@ from .state import ResearchState
 def build_research_graph(
     tools: list[BaseTool],
     today_date: str,
-    max_iterations: int,
+    max_research_iterations: int,
     client_name: str,
     report_structure: Sequence[ReportSection],
     max_report_words: int,
@@ -83,7 +83,7 @@ def build_research_graph(
     builder.add_edge(start_key=START, end_key="research-agent")
     builder.add_conditional_edges(
         source="research-agent",
-        path=route_after_research_agent(max_iterations=max_iterations),
+        path=route_after_research_agent(max_research_iterations=max_research_iterations),
         path_map={"research-review": "research-review", "report": "report"},
     )
     builder.add_conditional_edges(

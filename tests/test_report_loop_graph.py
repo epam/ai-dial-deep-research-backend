@@ -102,7 +102,7 @@ def _build(
     compiled = build_research_graph(
         tools=[],
         today_date="2026-07-31",
-        max_iterations=10,
+        max_research_iterations=10,
         client_name="ACME",
         report_structure=DEFAULT_REPORT_STRUCTURE,
         max_report_words=max_report_words,

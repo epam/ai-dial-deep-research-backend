@@ -81,7 +81,7 @@ class ResearchRunner:
         graph = build_research_graph(
             tools=tools,
             today_date=datetime.now().date().isoformat(),
-            max_iterations=properties.max_research_iterations,
+            max_research_iterations=properties.max_research_iterations,
             client_name=properties.prompts.client_name,
             report_structure=properties.default_report_structure,
             max_report_words=properties.max_report_words,

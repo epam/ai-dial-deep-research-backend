@@ -126,14 +126,14 @@ def _should_continue_research(*, plans_count: int, research_iteration: int) -> b
     return plans_count > research_iteration
 
 
-def research_budget_exhausted(*, research_iteration: int, max_iterations: int) -> bool:
+def research_budget_exhausted(*, research_iteration: int, max_research_iterations: int) -> bool:
     """True iff the just-finished iteration is the last permitted one, so no further one may run.
 
     Both numbers count iterations, 1-based — the research loop's mirror of
     `review_budget_exhausted`: a "continue" verdict on the last permitted iteration could not
     be acted on, so the router skips the review call when this holds.
     """
-    return research_iteration >= max_iterations
+    return research_iteration >= max_research_iterations
 
 
 def make_research_review_node(today_date: str) -> ResearchReviewNode:
@@ -452,7 +452,7 @@ def make_report_review_node(
     return report_review
 
 
-def route_after_research_agent(max_iterations: int) -> Callable[[ResearchState], str]:
+def route_after_research_agent(max_research_iterations: int) -> Callable[[ResearchState], str]:
     """Decide the edge out of the research-agent node.
 
     An iteration is reviewed only while another iteration may still run: a "continue" verdict
@@ -463,7 +463,7 @@ def route_after_research_agent(max_iterations: int) -> Callable[[ResearchState],
     def route(state: ResearchState) -> str:
         research_iteration = state["research_iteration"]
         if research_budget_exhausted(
-            research_iteration=research_iteration, max_iterations=max_iterations
+            research_iteration=research_iteration, max_research_iterations=max_research_iterations
         ):
             logger.info(
                 "Research iteration budget exhausted: research_iteration=%d", research_iteration

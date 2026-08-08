@@ -42,18 +42,18 @@ def _state(plans: list[list[str]], research_iteration: int) -> ResearchState:
 
 def test_iteration_with_budget_left_is_reviewed() -> None:
     # Iteration 1 just finished (research-agent counted itself) and the budget allows a second.
-    route = route_after_research_agent(max_iterations=10)
+    route = route_after_research_agent(max_research_iterations=10)
     assert route(_state(plans=[["a"]], research_iteration=1)) == "research-review"
 
 
 def test_last_permitted_iteration_hands_straight_to_report() -> None:
     # Iteration 2 just finished with a budget of 2: a "continue" verdict could not be acted on.
-    route = route_after_research_agent(max_iterations=2)
+    route = route_after_research_agent(max_research_iterations=2)
     assert route(_state(plans=[["a"], ["b"]], research_iteration=2)) == "report"
 
 
 def test_budget_of_one_iteration_skips_the_review_entirely() -> None:
-    route = route_after_research_agent(max_iterations=1)
+    route = route_after_research_agent(max_research_iterations=1)
     assert route(_state(plans=[["a"]], research_iteration=1)) == "report"
 
 
