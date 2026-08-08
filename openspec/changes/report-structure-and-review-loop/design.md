@@ -262,13 +262,28 @@ returned message. `ResearchRunner` drops the `"messages"` stream mode and its
 state, and appends it in one call. Tool stages continue to appear throughout research, and the
 SDK keep-alive (`HEARTBEAT_INTERVAL`, default 5s) covers the report loop's quiet stretch.
 
-Dropping `astream` costs nothing the node needs. Retry on a transient drop comes from
-`with_stream_drop_retry` — the same wrapper the review calls use, with the same budget — instead
-of a hand-rolled loop over chunks. The one thing streaming did buy is a read-timeout window that
-resets on every chunk, where a single `ainvoke` must finish inside one window; the OpenAI client's
-default is 600s (`openai/_constants.py`: `httpx.Timeout(timeout=600, connect=5.0)`, not overridden
-in `get_chat_model`), which a call capped at `max_report_words` cannot approach. Not verified: what
-timeout DIAL Core applies to a non-streamed completion of this size.
+The one thing streaming did buy is a stall guard, and it is given up here. `langchain-openai`
+wraps async **streaming** responses in a per-chunk timeout (`stream_chunk_timeout`, default 120s,
+env `LANGCHAIN_OPENAI_STREAM_CHUNK_TIMEOUT_S`) that fires on content silence; the non-streaming
+path (`_agenerate`) has no equivalent, and no request timeout stands behind it. The app sets none,
+and `langchain-openai` passes that unset value on explicitly — to the OpenAI client, whose
+600s default applies only when the argument is *omitted*, and to the httpx client it builds,
+whose own 5s default is bypassed the same way. Measured on a constructed model: the request httpx
+would send carries `extensions["timeout"] == {"connect": None, "read": None, "write": None,
+"pool": None}`, and a call against a socket that accepts and never answers was still pending after
+45 seconds.
+
+What does bound a hang is at the TCP layer, and only for a peer that has actually gone away:
+`langchain-openai` injects keepalive (60s idle, 10s interval, 3 probes) plus `TCP_USER_TIMEOUT`
+(120s) into its transport by default, so a silently lost connection surfaces as a
+`TRANSIENT_STREAM_DROP_ERRORS` shape within roughly two minutes on Linux. A peer that is alive and
+merely stuck answers keepalives, so nothing bounds it — which is the shape a wedged LLM call takes.
+
+The other research-graph calls are already in that position: the graph is streamed with
+`["updates", "values"]` and LangGraph attaches its streaming callback only for the `"messages"`
+mode (`langgraph/pregel/main.py`), so research-agent, research-review and report-review all take
+the non-streaming path too. Bounding every LLM call with an explicit timeout is worth its own
+change; it is not something streaming the report would have fixed.
 
 The `"\n\n"` separator becomes conditional: `completion.py` tells `ResearchRunner` whether the
 preparation stage appended any content this turn. With the silent hand-off below it normally
@@ -307,7 +322,7 @@ path:
 1. `ResearchRunner.run` already holds `self._choice` and already builds the graph per turn
    (`runner.py:76`), so it passes its own bound method — say `self._emit_report_review_stage` — into
    `build_research_graph(...)`, alongside the per-turn values that function already takes (`tools`,
-   `today_date`, `client_name`, `max_iterations`).
+   `today_date`, `client_name`, `max_research_iterations`).
 2. `build_research_graph` forwards it to `make_report_review_node(...)`, which closes over it exactly as
    the other node factories close over `today_date`.
 3. After its review call the node invokes the callback with one structured value — a small pydantic
