@@ -113,9 +113,10 @@ Code: `app/research/`.
 A deterministic LangGraph with four nodes, where every phase transition is Python over the state,
 never a model decision:
 
-> `START → research-agent → research-review → (research-agent when research-review returns a
-> non-empty next plan and the iteration cap is not yet reached, else report) → (END when this call
-> was a revision whose own model call failed, or when the draft is the last version the budget
+> `START → research-agent → (research-review when another iteration may still run, else report —
+> the last permitted iteration's findings are not reviewed) → (research-agent when
+> research-review returns a non-empty next plan, else report) → (END when this call was a
+> revision whose own model call failed, or when the draft is the last version the budget
 > permits — it is delivered without review — else report-review) → (report when the draft's
 > measured word count exceeds the ceiling or report-review asks for a revision, else END)`
 
@@ -132,8 +133,10 @@ flowchart TD
         which -.->|"a message with no tool call —<br/>the loop's other exit"| blocked["unreachable:<br/>tool_choice = any forbids it"]
     end
 
-    fin -->|"the only way a research-agent<br/>iteration can end"| research_review["research-review node<br/>independent structured LLM call<br/>→ assessment + next_steps"]
-    research_review --> route{"next_steps non-empty<br/>and iteration &lt; cap?"}
+    fin -->|"the only way a research-agent<br/>iteration can end"| itgate{"another iteration<br/>permitted by the cap?"}
+    itgate -->|yes| research_review["research-review node<br/>independent structured LLM call<br/>→ assessment + next_steps"]
+    itgate -->|"no — a 'continue' verdict could<br/>not be acted on, so the last<br/>iteration is not reviewed"| report
+    research_review --> route{"next_steps non-empty?"}
     route -->|yes| nextplan["Record the plan and inject it as<br/>the next iteration's instruction"]
     nextplan --> model
     route -->|no| report["report node<br/>LLM call over the whole findings<br/>transcript → the first draft, or a<br/>revision when a draft already exists"]
@@ -166,9 +169,11 @@ The spec sentence that owns the rule:
 The rest of the loop, in brief — each item is specified in the linked specs:
 
 - **Research-review**: an independent structured LLM call judging coverage; an empty next plan means
-  research is complete. It cannot be skipped — review always precedes the report.
-- **Iteration cap**: `max_research_iterations` (an application property). Reaching it routes to the
-  report regardless of research-review's verdict, so a turn always ends with a report.
+  research is complete. It runs after every iteration except the last one the cap permits — a
+  "continue" verdict there could not be acted on, so that call is not made.
+- **Iteration cap**: `max_research_iterations` (an application property). The last permitted
+  iteration hands its findings straight to the report, unreviewed, so a turn always ends with a
+  report; the hand-off is logged.
 - **Report node**: the only node whose text becomes assistant content, and it is **appended once**,
   after the review loop settles on the draft to deliver. Nothing is streamed: a draft may still be
   revised and DIAL content is append-only, so no rejected draft ever reaches the user. The same node
@@ -203,8 +208,8 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   LangGraph's `recursion_limit` — the most node executions one graph run may make, counted afresh
   for each nested run. The research-agent node is a compiled graph, so every iteration gets its own
   budget, and that loop is what the budget really limits: the outer graph's length is already fixed
-  by its own caps, at `2 × max_research_iterations + 2 × max_report_versions − 1` super-steps —
-  25 at the default caps; the same formula gives 21 for a version budget of one, where the single
+  by its own caps, at `2 × max_research_iterations + 2 × max_report_versions − 2` super-steps —
+  24 at the default caps; the same formula gives 20 for a version budget of one, where the single
   report call is never reviewed. A research-agent that never calls `finish_iteration` exhausts the budget
   and the turn fails through the DIAL error protocol rather than returning a half-finished answer. A
   tool *error* does not end an iteration — it comes back as an error `ToolMessage` research-agent

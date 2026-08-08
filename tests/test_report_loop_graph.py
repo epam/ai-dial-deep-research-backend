@@ -63,10 +63,11 @@ def _stub_research(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace research with one no-op iteration that hands straight to the report node."""
 
     async def research_agent(state: dict[str, Any]) -> dict[str, Any]:
-        return {}
+        # The real research-agent counts its own iterations (IterationCounterMiddleware).
+        return {"research_iteration": state["research_iteration"] + 1}
 
     async def research_review(state: dict[str, Any]) -> dict[str, Any]:
-        return {"iteration": state["iteration"] + 1}
+        return {}
 
     monkeypatch.setattr(graph_module, "build_research_agent", lambda *a, **kw: research_agent)
     monkeypatch.setattr(graph_module, "make_research_review_node", lambda *a, **kw: research_review)
@@ -210,7 +211,7 @@ async def test_failed_revision_delivers_the_previous_draft(
     assert final["report"] == "the first draft"
     # The failed write recorded no version, so the state still names the delivered draft.
     assert final["report_version"] == 1
-    assert final["revision_failed"] is True
+    assert final["report_revision_failed"] is True
 
 
 async def test_failed_first_draft_fails_the_turn(monkeypatch: pytest.MonkeyPatch) -> None:

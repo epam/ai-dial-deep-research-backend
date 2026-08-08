@@ -31,8 +31,10 @@ class ResearchState(TypedDict):
     plans: list[list[str]]
     """Iteration plans in order: [approved prep plan, research-review plan 1, …]; current = plans[-1]."""
 
-    iteration: int
-    """Number of research-agent iterations completed (guards the iteration cap)."""
+    research_iteration: int
+    """Research-agent iterations completed. The research-agent node counts itself
+    (`IterationCounterMiddleware`), so the last permitted iteration — which goes to the
+    report unreviewed — is counted too."""
 
     report: str | None
     """The latest report draft, set by the report node; the delivered report once the loop ends."""
@@ -44,7 +46,7 @@ class ResearchState(TypedDict):
     """1-based version index of `report` — 1 for the first draft, 0 while no draft exists.
     Bounds the report loop against `max_report_versions`."""
 
-    revision_failed: bool
+    report_revision_failed: bool
     """Set when a revision's own model call failed, so the loop exits with the previous draft."""
 
 
@@ -66,9 +68,9 @@ def build_initial_state(prep_state: PrepState) -> ResearchState:
         ],
         original_query=prep_state.current_query,
         plans=[first_plan],
-        iteration=0,
+        research_iteration=0,
         report=None,
         report_revision_instruction=None,
         report_version=0,
-        revision_failed=False,
+        report_revision_failed=False,
     )

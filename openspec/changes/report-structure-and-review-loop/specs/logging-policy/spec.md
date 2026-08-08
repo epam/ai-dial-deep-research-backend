@@ -14,9 +14,11 @@ choke point that creates the DIAL stage; (5) query clarity checked — duration,
 question count, token usage when available including the cached-input-token count, owned by the
 `update_query` preparation tool; (6) plan approval checked — duration, approval outcome, token
 usage when available including the cached-input-token count, owned by the `approve_plan`
-preparation tool; (7) iteration reviewed — iteration number, duration, verdict
+preparation tool; (7) research iteration reviewed — iteration number, duration, verdict
 (`continue`/`report`), next-plan step count, token usage when available including the
-cached-input-token count, owned by the research-review node; (8) report generated — draft ordinal
+cached-input-token count, owned by the research-review node; (7a) research iteration budget
+exhausted — iteration count, owned by the research router: the last permitted iteration gets no
+review call, so no research-iteration-reviewed event can carry the hand-off; (8) report generated — draft ordinal
 (1 for the first draft, incrementing per revision), duration, report length in characters and in
 measured words, token usage when available including the cached-input-token count, owned by the
 report node; (8a) report reviewed — draft ordinal, duration, the review model's
@@ -56,7 +58,7 @@ allowlist.
 - **WHEN** a turn runs preparation, hands off to research, and delivers a report on an instance
   whose version budget is above one, with all log levels at INFO
 - **THEN** the log contains the request-received, preparation-completed, model-call, tool-call,
-  iteration-reviewed, report-generated, report-reviewed, and request-completed events, none
+  research-iteration-reviewed, report-generated, report-reviewed, and request-completed events, none
   carrying message bodies or tool arguments
 
 #### Scenario: Tool failure is visible in the skeleton
@@ -80,7 +82,7 @@ allowlist.
 - **WHEN** a model response reports cached input tokens (LangChain
   `usage_metadata.input_token_details["cache_read"]`)
 - **THEN** the corresponding model-call, query-clarity-checked, plan-approval-checked,
-  iteration-reviewed, report-generated, or report-reviewed event's token-usage field includes the
+  research-iteration-reviewed, report-generated, or report-reviewed event's token-usage field includes the
   cached count (counts only — no payload content)
 
 #### Scenario: Usage absent stays graceful

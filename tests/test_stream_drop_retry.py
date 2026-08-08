@@ -92,11 +92,11 @@ def _report_state(**overrides: Any) -> dict[str, Any]:
         "plans": [["step one"]],
         "messages": [],
         "original_query": "q",
-        "iteration": 1,
+        "research_iteration": 1,
         "report": None,
         "report_revision_instruction": None,
         "report_version": 0,
-        "revision_failed": False,
+        "report_revision_failed": False,
     }
     return {**state, **overrides}
 

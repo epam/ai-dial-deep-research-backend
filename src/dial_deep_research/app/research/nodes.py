@@ -56,7 +56,7 @@ from dial_deep_research.utils.llm import (
     with_stream_drop_retry,
 )
 
-from .middleware import ForceToolChoiceMiddleware
+from .middleware import ForceToolChoiceMiddleware, IterationCounterMiddleware
 from .prompts import (
     LENGTH_REVISION_INSTRUCTION,
     REPORT_REQUEST,
@@ -96,6 +96,7 @@ def build_research_agent(tools: list[BaseTool], today_date: str, client_name: st
             stream_drop_retry_middleware(),
             ForceToolChoiceMiddleware(),
             ImageBudgetMiddleware(limit=settings.max_context_images),
+            IterationCounterMiddleware(),
         ],
     )
 
@@ -122,13 +123,25 @@ def _render_findings(messages: list[BaseMessage]) -> str:
     return "\n\n".join(lines)
 
 
-def _should_continue(*, plans_count: int, iteration: int, max_iterations: int) -> bool:
-    """One more research-agent iteration iff a not-yet-run plan exists and the cap allows it."""
-    return plans_count > iteration and iteration < max_iterations
+def _should_continue_research(*, plans_count: int, research_iteration: int) -> bool:
+    """One more research-agent iteration iff research-review recorded a plan for a not-yet-run
+    iteration. The iteration cap needs no check here: it is enforced before the review runs
+    (`route_after_research_agent`), so a recorded plan may always run."""
+    return plans_count > research_iteration
 
 
-def make_research_review_node(today_date: str, max_iterations: int) -> ResearchReviewNode:
-    """Build the research-review node over the given date and iteration cap."""
+def research_budget_exhausted(*, research_iteration: int, max_iterations: int) -> bool:
+    """True iff the just-finished iteration is the last permitted one, so no further one may run.
+
+    Both numbers count iterations, 1-based — the research loop's mirror of
+    `review_budget_exhausted`: a "continue" verdict on the last permitted iteration could not
+    be acted on, so the router skips the review call when this holds.
+    """
+    return research_iteration >= max_iterations
+
+
+def make_research_review_node(today_date: str) -> ResearchReviewNode:
+    """Build the research-review node over the given date."""
 
     async def research_review(state: ResearchState) -> dict[str, Any]:
         start = time.monotonic()
@@ -165,7 +178,10 @@ def make_research_review_node(today_date: str, max_iterations: int) -> ResearchR
         review: ResearchReview = result["parsed"]
         usage = result["raw"].usage_metadata
 
-        update: dict[str, Any] = {"iteration": state["iteration"] + 1}
+        # `research_iteration` is already the just-reviewed iteration's number: the
+        # research-agent node counts itself (`IterationCounterMiddleware`), so this node only
+        # records the plan.
+        update: dict[str, Any] = {}
         plans = state["plans"]
         if review.next_steps:
             plans = [*plans, review.next_steps]
@@ -174,13 +190,13 @@ def make_research_review_node(today_date: str, max_iterations: int) -> ResearchR
 
         # Verdict mirrors `route_after_research_review` over the post-update state, so the
         # skeleton event never disagrees with the actual routing.
-        will_continue = _should_continue(
-            plans_count=len(plans), iteration=update["iteration"], max_iterations=max_iterations
+        will_continue = _should_continue_research(
+            plans_count=len(plans), research_iteration=state["research_iteration"]
         )
         logger.info(
-            "Iteration reviewed: iteration=%d duration=%.1fs verdict=%s next_plan_steps=%d "
-            "tokens=%s",
-            update["iteration"],
+            "Research iteration reviewed: research_iteration=%d duration=%.1fs verdict=%s "
+            "next_plan_steps=%d tokens=%s",
+            state["research_iteration"],
             time.monotonic() - start,
             "continue" if will_continue else "report",
             len(review.next_steps or []),
@@ -326,7 +342,7 @@ def make_report_node(
                 draft_number - 1,
                 type(exc).__name__,
             )
-            return {"revision_failed": True}
+            return {"report_revision_failed": True}
 
         logger.info(
             "Report generated: draft=%d duration=%.1fs length=%d words=%d tokens=%s",
@@ -471,18 +487,38 @@ def make_report_review_node(
     return report_review
 
 
-def route_after_research_review(max_iterations: int) -> Callable[[ResearchState], str]:
-    """Decide the edge out of the research-review node.
+def route_after_research_agent(max_iterations: int) -> Callable[[ResearchState], str]:
+    """Decide the edge out of the research-agent node.
 
-    Continue researching when research-review recorded a plan for a not-yet-run iteration
-    (`len(plans) > iteration`) and the iteration cap is not yet reached; otherwise report.
+    An iteration is reviewed only while another iteration may still run: a "continue" verdict
+    on the last permitted iteration could not be acted on, so the call is not made and the
+    findings go straight to the report. Logged here — no node sits on that path.
     """
 
     def route(state: ResearchState) -> str:
-        if _should_continue(
-            plans_count=len(state["plans"]),
-            iteration=state["iteration"],
-            max_iterations=max_iterations,
+        research_iteration = state["research_iteration"]
+        if research_budget_exhausted(
+            research_iteration=research_iteration, max_iterations=max_iterations
+        ):
+            logger.info(
+                "Research iteration budget exhausted: research_iteration=%d", research_iteration
+            )
+            return "report"
+        return "research-review"
+
+    return route
+
+
+def route_after_research_review() -> Callable[[ResearchState], str]:
+    """Decide the edge out of the research-review node.
+
+    Continue researching when research-review recorded a plan for a not-yet-run iteration
+    (`len(plans) > iteration`); otherwise report.
+    """
+
+    def route(state: ResearchState) -> str:
+        if _should_continue_research(
+            plans_count=len(state["plans"]), research_iteration=state["research_iteration"]
         ):
             return "research-agent"
         return "report"
@@ -503,7 +539,7 @@ def route_after_report(max_versions: int) -> Callable[[ResearchState], str]:
     """
 
     def route(state: ResearchState) -> str:
-        if state.get("revision_failed"):
+        if state.get("report_revision_failed"):
             return "end"
         exhausted = review_budget_exhausted(
             report_version=state.get("report_version", 0), max_versions=max_versions

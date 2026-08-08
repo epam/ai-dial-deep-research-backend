@@ -1,10 +1,12 @@
 """Every loop/termination decision of the research graph, decided in Python over the state.
 
-Three edges and the one helper that decides for two of them:
+Four edges and the helpers that decide them:
 
+- `route_after_research_agent` (research-agent → research-review | report) gates the review on
+  the iteration budget: the last permitted iteration hands straight to the report without a
+  review call.
 - `route_after_research_review` (research-review → research-agent | report) loops back only when
-  research-review recorded a plan for a not-yet-run iteration (`len(plans) > iteration`) and the
-  iteration cap is not yet reached.
+  research-review recorded a plan for a not-yet-run iteration (`len(plans) > iteration`).
 - `decide_report_action` is the report loop's decision table: the measured word count and the
   review's findings in, the action and the revision instruction out. The router maps its action
   to an edge and the report-review node logs the same action, so neither can disagree with it.
@@ -22,37 +24,50 @@ from dial_deep_research.app.research.nodes import (
     decide_report_action,
     route_after_report,
     route_after_report_review,
+    route_after_research_agent,
     route_after_research_review,
 )
 from dial_deep_research.app.research.state import ResearchState
 
 
-def _state(plans: list[list[str]], iteration: int) -> ResearchState:
+def _state(plans: list[list[str]], research_iteration: int) -> ResearchState:
     return ResearchState(
         messages=[],
         original_query="q",
         plans=plans,
-        iteration=iteration,
+        research_iteration=research_iteration,
         report=None,
     )
 
 
+def test_iteration_with_budget_left_is_reviewed() -> None:
+    # Iteration 1 just finished (research-agent counted itself) and the budget allows a second.
+    route = route_after_research_agent(max_iterations=10)
+    assert route(_state(plans=[["a"]], research_iteration=1)) == "research-review"
+
+
+def test_last_permitted_iteration_hands_straight_to_report() -> None:
+    # Iteration 2 just finished with a budget of 2: a "continue" verdict could not be acted on.
+    route = route_after_research_agent(max_iterations=2)
+    assert route(_state(plans=[["a"], ["b"]], research_iteration=2)) == "report"
+
+
+def test_budget_of_one_iteration_skips_the_review_entirely() -> None:
+    route = route_after_research_agent(max_iterations=1)
+    assert route(_state(plans=[["a"]], research_iteration=1)) == "report"
+
+
 def test_empty_review_routes_to_report() -> None:
     # research-review returned no new plan after iteration 1: len(plans) == iteration.
-    route = route_after_research_review(max_iterations=10)
-    assert route(_state(plans=[["a"]], iteration=1)) == "report"
+    route = route_after_research_review()
+    assert route(_state(plans=[["a"]], research_iteration=1)) == "report"
 
 
-def test_new_plan_under_cap_routes_to_research_agent() -> None:
-    # research-review added a plan for iteration 2: len(plans) > iteration, under cap.
-    route = route_after_research_review(max_iterations=10)
-    assert route(_state(plans=[["a"], ["b"]], iteration=1)) == "research-agent"
-
-
-def test_cap_forces_report_even_with_new_plan() -> None:
-    route = route_after_research_review(max_iterations=2)
-    # iteration reached the cap; even though a plan was recorded, force the report.
-    assert route(_state(plans=[["a"], ["b"], ["c"]], iteration=2)) == "report"
+def test_new_plan_routes_to_research_agent() -> None:
+    # research-review added a plan for iteration 2: len(plans) > iteration. The iteration cap
+    # needs no check here — the review only ran because another iteration was permitted.
+    route = route_after_research_review()
+    assert route(_state(plans=[["a"], ["b"]], research_iteration=1)) == "research-agent"
 
 
 # --- decide_report_action -----------------------------------------------------------------------
@@ -112,11 +127,11 @@ def _report_state(**overrides: Any) -> ResearchState:
         "messages": [],
         "original_query": "q",
         "plans": [["a"]],
-        "iteration": 1,
+        "research_iteration": 1,
         "report": "the draft",
         "report_revision_instruction": None,
         "report_version": 1,
-        "revision_failed": False,
+        "report_revision_failed": False,
     }
     return ResearchState(**{**state, **overrides})  # type: ignore[typeddict-item]
 
@@ -139,7 +154,7 @@ def test_failed_revision_ends_the_loop_even_with_budget_left() -> None:
     # Re-reviewing the unchanged draft would route straight back into a call that fails again,
     # and a failed revision increments no counter, so nothing would bound the cycle.
     route = route_after_report(max_versions=3)
-    assert route(_report_state(revision_failed=True)) == "end"
+    assert route(_report_state(report_revision_failed=True)) == "end"
 
 
 def test_budget_of_one_skips_the_review_entirely() -> None:

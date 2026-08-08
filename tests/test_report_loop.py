@@ -66,11 +66,11 @@ def _state(**overrides: Any) -> Any:
         "messages": [HumanMessage(content="Research question:\nq\n\n1. step one")],
         "original_query": "what happened to inflation?",
         "plans": [["step one"]],
-        "iteration": 1,
+        "research_iteration": 1,
         "report": None,
         "report_revision_instruction": None,
         "report_version": 0,
-        "revision_failed": False,
+        "report_revision_failed": False,
     }
     return {**state, **overrides}
 
@@ -229,7 +229,7 @@ async def test_a_failed_revision_keeps_the_previous_draft(
     result = await node(_state(report="draft one", report_revision_instruction="- Shorten it."))
 
     # Nothing overwrites `report`, so the previous draft stays the one that is delivered.
-    assert result == {"revision_failed": True}
+    assert result == {"report_revision_failed": True}
     assert llm.calls == 1
 
 

@@ -93,11 +93,13 @@ preparation agent approves a plan (its `start_research` tool fires, setting
 `research_started`), in the **same** chat-completion turn, seeded with the approved query and
 plan. The graph SHALL have no checkpointer and SHALL NOT use `interrupt()`. Phase transitions
 SHALL be graph edges decided by Python over the graph state, never by the model:
-`START → research-agent → research-review → (research-agent when research-review returns a
-non-empty next plan and the iteration cap is not yet reached, else report) → (END when this call
-was a revision whose own model call failed, or when the draft is the last version the budget
-permits — it is delivered without review — else report-review) → (report when the draft's
-measured word count exceeds the ceiling or report-review asks for a revision, else END)`.
+`START → research-agent → (research-review when another iteration may still run, else report —
+the last permitted iteration's findings go to the report without a review call) →
+(research-agent when research-review returns a non-empty next plan, else report) → (END when
+this call was a revision whose own model call failed, or when the draft is the last version the
+budget permits — it is delivered without review — else report-review) → (report when the
+draft's measured word count exceeds the ceiling or report-review asks for a revision, else
+END)`.
 
 The first of those exits is what makes the failed-revision rule terminate: a swallowed revision
 failure leaves the previous draft in place unchanged, so returning to report-review would re-judge it
@@ -131,10 +133,15 @@ SHALL stop at the preparation stage as before.
 - **WHEN** a turn ends with clarifying questions or an unapproved plan (no `start_research`)
 - **THEN** the research graph SHALL NOT run, and the turn SHALL produce only the preparation output
 
-#### Scenario: Review always precedes the report
+#### Scenario: Review precedes every further iteration
 
-- **WHEN** research-agent finishes an iteration
-- **THEN** control SHALL pass to research-review before any report is produced, and the report node SHALL run only after research-review returns an empty next plan (or the iteration cap is reached)
+- **WHEN** research-agent finishes an iteration with the iteration budget not yet exhausted
+- **THEN** control SHALL pass to research-review before anything else runs, and another iteration SHALL start only on research-review's non-empty next plan
+
+#### Scenario: The last permitted iteration is not reviewed
+
+- **WHEN** research-agent finishes the last iteration the cap permits
+- **THEN** the graph SHALL route straight to the report node with no research-review call — a "continue" verdict could not be acted on — and the hand-off SHALL be logged
 
 #### Scenario: Report review always precedes delivery
 
@@ -267,11 +274,11 @@ compiled graph, so one research-agent iteration gets its own budget.
 The budget therefore constrains research-agent's own loop, whose length nothing else
 bounds, while the outer graph's length is already fixed by its own caps —
 `max_research_iterations` for the research loop and `max_report_versions` for the report loop.
-Each node execution is one super-step, research-agent and research-review run once per iteration,
-and every version but the last permitted one is followed by a review, so the outer graph is
-bounded at `2 × max_research_iterations + 2 × max_report_versions − 1` super-steps — 25 at the
-default caps, and the same formula gives 21 for a version budget of one, where the single draft
-is never reviewed. Both are far below the default budget. Tool
+Each node execution is one super-step, and in both loops the last permitted unit of work is not
+followed by a review, so the outer graph is bounded at
+`2 × max_research_iterations + 2 × max_report_versions − 2` super-steps — 24 at the default
+caps, and the same formula gives 20 for a version budget of one, where the single draft is
+never reviewed. Both are far below the default budget. Tool
 calls research-agent requests together execute in a single super-step (they are fanned out
 with `Send`, and dispatches made in one tick share that tick), so the budget limits the
 research-agent's model calls rather than the number of tool calls it may issue.
@@ -313,14 +320,14 @@ The research loop SHALL be bounded by a configurable hard cap on the number of
 research iterations (the `max_research_iterations` application property, default 10, minimum 1;
 see the **application-config-schema** capability). It is not an environment setting — no
 `MAX_RESEARCH_ITERATIONS` env var exists.
-When the cap is reached, the graph SHALL route to the report node regardless of
-research-review's verdict, so the turn always ends with a report rather than looping
-indefinitely.
+When the cap is reached, the graph SHALL route to the report node without another
+research-review call — its verdict could not be acted on — so the turn always ends with a
+report rather than looping indefinitely.
 
 #### Scenario: Cap forces the report
 
-- **WHEN** the number of completed research iterations reaches `max_research_iterations` and research-review still returns a non-empty next plan
-- **THEN** the graph SHALL route to the report node instead of looping back, and the turn SHALL still produce a report
+- **WHEN** every research-review demands another iteration and the number of completed research iterations reaches `max_research_iterations`
+- **THEN** the graph SHALL route to the report node instead of reviewing again, and the turn SHALL still produce a report
 
 #### Scenario: Cap default and override
 

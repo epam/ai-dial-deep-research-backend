@@ -152,6 +152,14 @@ the verdict on the draft that actually ships is a signal for tuning the budget d
 review prompt, but it costs one LLM call per capped turn and the loop can act on none of it; the
 announcement covers the user-facing need.
 
+The research loop applies the same rule (`route_after_research_agent`): the last iteration the
+cap permits hands its findings to the report without a research-review call, and the hand-off is
+logged. Besides saving the call, this keeps a plan that would never run — and the instruction
+message the review would inject for it — out of the transcript the report node reads. As in the
+report loop, the node that does the work records the count: research-agent is the `create_agent`
+graph used directly as a subgraph node, so `IterationCounterMiddleware` shares the parent's
+`research_iteration` channel with it and increments it once per run.
+
 Two budgets, never shared: `max_research_iterations` bounds research-agent ↔ research-review, and
 `max_report_versions` bounds report ↔ report-review. They are separate properties because the loops
 cost different amounts and are tuned independently.

@@ -1,10 +1,10 @@
 """Assembles the deterministic research graph.
 
-`START → research-agent → research-review → (research-agent | report) → (report-review | END)
-→ (report | END)`. No checkpointer, no `interrupt()` — research runs autonomously within one
-turn. Every loop/termination decision is pure Python over the graph state: the research loop's is
-`route_after_research_review`, the report loop's are `route_after_report` and
-`route_after_report_review`.
+`START → research-agent → (research-review | report) → (research-agent | report) →
+(report-review | END) → (report | END)`. No checkpointer, no `interrupt()` — research runs
+autonomously within one turn. Every loop/termination decision is pure Python over the graph
+state: the research loop's are `route_after_research_agent` and `route_after_research_review`,
+the report loop's are `route_after_report` and `route_after_report_review`.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ from .nodes import (
     make_research_review_node,
     route_after_report,
     route_after_report_review,
+    route_after_research_agent,
     route_after_research_review,
 )
 from .state import ResearchState
@@ -59,7 +60,6 @@ def build_research_graph(
         node="research-review",
         action=make_research_review_node(  # type: ignore[call-overload]
             today_date=today_date,
-            max_iterations=max_iterations,
         ),
     )
     builder.add_node(
@@ -81,10 +81,14 @@ def build_research_graph(
     )
 
     builder.add_edge(start_key=START, end_key="research-agent")
-    builder.add_edge(start_key="research-agent", end_key="research-review")
+    builder.add_conditional_edges(
+        source="research-agent",
+        path=route_after_research_agent(max_iterations=max_iterations),
+        path_map={"research-review": "research-review", "report": "report"},
+    )
     builder.add_conditional_edges(
         source="research-review",
-        path=route_after_research_review(max_iterations=max_iterations),
+        path=route_after_research_review(),
         path_map={"research-agent": "research-agent", "report": "report"},
     )
     builder.add_conditional_edges(
