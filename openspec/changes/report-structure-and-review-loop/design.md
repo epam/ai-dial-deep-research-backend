@@ -121,18 +121,24 @@ where only one of them says what it reviews.
 The graph becomes `… → report → (report-review | END) → (report | END)`. The `report` node branches
 on **whether a previous draft exists** — `state["report"]` is set. With no previous
 draft the node writes the first one; with one, it rewrites it. `report-review` is a structured LLM
-call whose only output is the findings list; there is no separate approval field, so an empty
+call whose only output is the violations list; there is no separate approval field, so an empty
 list is the approval. That closes off "approved, but here's a minor note" as a shape the schema
-can express — a finding always forces a revision, whatever the model would have called it.
+can express — a violation always forces a revision, whatever the model would have called it.
 
-The branch is deliberately **not** "are there revision instructions", because a revision can be
-forced with none: when the review model approves a draft that the measured count says is over the
-ceiling, Python overrides the verdict (see the ceiling decision below) and there are no model
-findings to rewrite against. In that case the app renders the instruction itself — the previous
-draft, its measured count, the ceiling, and "shorten to fit by rewriting, not cutting". When both
-apply, the model's findings and the app's length instruction are merged into one instruction. So a
-revision always arrives with something concrete to act on; a `report` call that saw only an
-unchanged prompt would reproduce the same over-long draft and spend a revision doing it.
+The model judges the content rules only; length is the app's. After the call, Python compares the
+measured count with the ceiling and **prepends its own length violation to the list** when the
+draft is over (see the ceiling decision below) — unconditionally, a failed call included, so an
+approving review cannot pass an over-long draft, a failed one still shortens it, and the stage
+that shows the list also shows why the revision happens. The review's outcome is two fields:
+`violations` (that merged list) and `error` (the exception kind of a failed call, or None). The
+decision reads the list alone: non-empty, it becomes the numbered revision instruction; empty,
+the draft is delivered — `error` is reporting, not routing. So a revision always arrives with
+something concrete to act on; a `report` call that saw only an unchanged prompt would reproduce
+the same over-long draft and spend a revision doing it.
+
+The branch is deliberately **not** "are there revision instructions": the first draft has no
+instruction either, and a previous draft's existence is what distinguishes writing from
+rewriting.
 
 Counter semantics: `report_version` is the **1-based version index of the draft in state** — 1
 after the first draft, 0 while none exists — recorded by the report node on every successful
@@ -147,7 +153,7 @@ that is 3 drafts and 2 reviews. Its verdict would be non-actionable — no rewri
 the call would spend a review's time and cost only to log problems the loop can no longer fix;
 the runner announces the unreviewed delivery instead, with a deterministic closing stage and INFO
 record built from the state alone, keeping "approved" and "budget ran out, the previous review's
-findings may remain" distinguishable. Alternative rejected: **review the last version anyway** —
+violations may remain" distinguishable. Alternative rejected: **review the last version anyway** —
 the verdict on the draft that actually ships is a signal for tuning the budget default and the
 review prompt, but it costs one LLM call per capped turn and the loop can act on none of it; the
 announcement covers the user-facing need.
@@ -175,30 +181,31 @@ Alternatives rejected:
 - **A LangGraph subgraph for the report loop.** The recursion limit is applied per graph run
   (`max_research_graph_steps`), so a subgraph would get its own budget — extra indirection for
   no gain, since the outer graph's length is already bounded by the version budget.
-- **A separate `approved: bool` field alongside `findings`.** Lets the model approve a draft
+- **A separate `approved: bool` field alongside the violations.** Lets the model approve a draft
   while still leaving a note. Rejected: a model that hedges this way is common, not an edge case,
   and the field only widens the disagreement the app already has to arbitrate (the ceiling
-  override shows the app overrides the model's opinion regardless). One field, findings-empty-is-
-  approval, means there is nothing to disagree with.
+  override shows the app overrides the model's opinion regardless). One field, empty-is-approval,
+  means there is nothing to disagree with.
 
 ### Report-review reads the report, the config and the query; the reviser also reads the findings
 
-`report-review` receives the draft text, the configured structure, the protected sections, the
-measured word count and the ceiling, and the research question and plan — and **not** the
-research transcript. Every issue #32 criterion (sections present and ordered, length, prohibited
-annotations, citation format, protected sections intact) is decidable from those, so sending the
-transcript would multiply the cost of the cheapest node in the loop for nothing. This is also
-what keeps the spec's "review cannot reopen research" rule honest: a judge that cannot see the
-findings cannot form an opinion about coverage.
+`report-review` receives the draft text, the configured structure, the protected sections, and
+the research question and plan — and **not** the research transcript, nor the measured word
+count and the ceiling: length is not the model's to judge, so it is not told the numbers. Every
+content criterion (sections present and ordered, prohibited annotations, citation format,
+protected sections intact) is decidable from those inputs, so sending the transcript would
+multiply the cost of the cheapest node in the loop for nothing. This is also what keeps the
+spec's "review cannot reopen research" rule honest: a judge that cannot see the findings cannot
+form an opinion about coverage.
 
 The query and plan are in there for one reason: they are where a user's formatting instruction
 lives today, so without them the step cannot distinguish a draft that followed a legitimate
 request from one that overrode a protected rule. They are two short strings — the transcript they
 came from is what stays out.
 
-Its user message is ordered **stable content first, draft and measured count last**, for the same
-reason research-review's is: those two are the only parts that differ between the review calls of one
-run, so putting them last leaves everything before them as a shared byte prefix. The
+Its user message is ordered **stable content first, the draft last**, for the same reason
+research-review's is: the draft is the only part that differs between the review calls of one
+run, so putting it last leaves everything before it as a shared byte prefix. The
 **prompt-caching** requirement this change adds covers both the report revision and report-review.
 
 The `report` node keeps the full transcript on a revision, because a revision may need to
@@ -239,8 +246,8 @@ signal.
 
 ### Word count is `len(text.split())`, computed in Python and stated as a number
 
-Whitespace-separated tokens over the report Markdown: one definition, used in the review
-prompt, in the revision instruction, and in the log event, so the three never disagree. It counts
+Whitespace-separated tokens over the report Markdown: one definition, used in the length
+violation the app renders, in the stage body, and in the log event, so the three never disagree. It counts
 Markdown syntax as part of the text — every table pipe, heading hash, and bullet dash scores as a
 word — so it overstates prose length, by an amount nobody has measured and which grows with how
 many tables a report carries. Accepted anyway: the alternative (stripping Markdown before counting)
@@ -305,7 +312,7 @@ through a **stage-emitting callback** passed into `make_report_review_node`, not
 per turn inside `ResearchRunner.run`, so passing it in costs nothing new.
 
 Why the node and not the runner: the node already owns this event's log record (see
-**logging-policy**), and it already has the duration, the counts, the findings and the verdict in hand.
+**logging-policy**), and it already has the duration, the counts and the violations in hand.
 Splitting one observability concern — same numbers, same moment — across the node (log) and the runner
 (stage) means deriving those numbers twice, in two files, free to disagree later.
 
@@ -326,8 +333,8 @@ path:
 2. `build_research_graph` forwards it to `make_report_review_node(...)`, which closes over it exactly as
    the other node factories close over `today_date`.
 3. After its review call the node invokes the callback with one structured value — a small pydantic
-   model carrying the draft number, the measured word count, the ceiling, the findings, the outcome and
-   the duration — rather than a dict, per the repo's convention.
+   model carrying the draft number, the measured word count, the ceiling, the violations, the error
+   of a failed call and the duration — rather than a dict, per the repo's convention.
 4. The runner's method formats the title and body and writes the stage:
    `with self._choice.create_stage(title) as stage: stage.append_content(body)`. Both are sync
    (`aidial_sdk/chat_completion/choice.py:183`, `stage.py:62`), so the callback is a plain sync
@@ -510,7 +517,8 @@ versions would mean no report at all.
 - **Report-review becomes a second author.** A judge with an opinion about wording will keep
   finding something to change, spending the whole budget on every run. → Its prompt is scoped
   to the checkable criteria and instructed to approve anything that satisfies them; the
-  logged verdicts show whether it is behaving, and the budget caps the damage either way.
+  logged outcomes and violation counts show whether it is behaving, and the budget caps the
+  damage either way.
 - **A revision can make the report worse** — condensing to fit the ceiling loses detail, and a
   rewrite can drop a citation. → The spec keeps the citation-format check in the review step,
   so a revision that breaks citations is caught by the next pass; with an exhausted budget the
@@ -556,6 +564,6 @@ versions would mean no report at all.
   the answer changes one string in one place and touches neither the specs nor the loop. Until it
   arrives, the shipped default carries the current Sources/Datasets tables (columns `doc id`,
   `title`, `publication date`; `dataset id`, `title`) as a placeholder.
-- **Is the version budget's default of 3 right?** Answerable from the logged verdicts and word
+- **Is the version budget's default of 3 right?** Answerable from the logged outcomes and word
   counts of real runs (how often the first draft is approved, how often the budget is
   exhausted). It is one property default, so changing it touches no design.

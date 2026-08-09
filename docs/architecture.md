@@ -143,7 +143,7 @@ flowchart TD
     report --> afterreport{"deliver now,<br/>or review the draft?"}
     afterreport -->|"this call was a revision whose<br/>own model call failed —<br/>the previous draft stands"| finaldone(["END"])
     afterreport -->|"the last version the budget<br/>permits — delivered without review,<br/>announced by a closing stage"| finaldone
-    afterreport -->|"otherwise"| report_review["report-review node<br/>structured LLM call over the draft, the<br/>configured sections and the counts<br/>→ findings + verdict, and one DIAL stage"]
+    afterreport -->|"otherwise"| report_review["report-review node<br/>structured LLM call over the draft and<br/>the configured sections → violations<br/>(the app adds the length one itself),<br/>and one DIAL stage"]
     report_review --> reroute{"over the word ceiling,<br/>or a revision asked for?"}
     reroute -->|yes| report
     reroute -->|no| finaldone
@@ -188,7 +188,8 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   must be protected.
 - **Word ceiling**: `max_report_words` (default 2750). A length is the number of
   whitespace-separated tokens in the report Markdown, counted in Python and given to the report
-  node and to report-review as a number, so neither has to count. It is enforced by reviewing and
+  node as a number, so no model has to count; report-review never sees the count — the app itself
+  prepends the length violation when the count exceeds the ceiling. The ceiling is enforced by
   rewriting, never by truncation: no token cap is placed on the report call, and a shortening
   revision rewrites to fit instead of cutting, so the report ends at a clean boundary. A draft over
   the ceiling forces a revision deterministically, even when report-review approved it.
@@ -198,12 +199,13 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   report-review call or a failed revision is absorbed rather than failing the turn. `1` skips
   report-review entirely.
 - **Report-review stage**: each report-review call emits one DIAL stage carrying the draft number,
-  the measured word count with the ceiling, and the findings as a list. The matching INFO record
-  carries the same numbers and only the *count* of findings — findings are LLM response text, which
-  the logging content allowlist keeps out of log records at any level. A delivery whose draft the
-  budget left unreviewed gets a closing stage and INFO record of its own, rendered without any
-  model call, so "review approved the draft" and "the budget ran out, findings may remain" stay
-  distinguishable. Research review emits no stage.
+  the measured word count with the ceiling, and the violations as a list — the review model's
+  violations, with the app-measured length violation prepended when the draft exceeds the ceiling.
+  The matching INFO record carries the same numbers and only the *count* of violations — their
+  text is LLM response content, which the logging content allowlist keeps out of log records at
+  any level. A delivery whose draft the budget left unreviewed gets a closing stage and INFO
+  record of its own, rendered without any model call, so "review approved the draft" and "the
+  budget ran out, violations may remain" stay distinguishable. Research review emits no stage.
 - **Step budget**: `max_research_graph_steps` (an application property, default 500) is passed as
   LangGraph's `recursion_limit` — the most node executions one graph run may make, counted afresh
   for each nested run. The research-agent node is a compiled graph, so every iteration gets its own

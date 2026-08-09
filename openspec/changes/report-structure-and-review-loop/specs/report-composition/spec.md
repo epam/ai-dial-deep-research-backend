@@ -158,63 +158,66 @@ one INFO log record, so the loop's behavior is measurable without reading anyone
 
 - the draft number being reviewed (1 for the first draft, incrementing per revision);
 - the draft's measured word count and the configured ceiling, as numbers;
-- the review's findings, as a list — one entry per finding, rendered so multi-line findings stay
-  readable.
+- the violations, as a numbered markdown list — one entry per violation (stage content renders
+  as markdown). The list is everything the next revision must fix: the review model's violations,
+  with the app-rendered length violation prepended when the measured count exceeds the ceiling.
 
 Its title SHALL follow the normalized shape the tool stages use, with its own prefix rather than
 `[TOOL]`, and SHALL carry the review's outcome and the elapsed time. The stage exists for the report
 review only; research review SHALL NOT emit one (out of scope here, and it MAY be added later).
 
-A review that produced no findings SHALL still emit a stage, recording that the draft was approved. A
-review whose **call failed** SHALL emit one too, recording the failure in place of findings — the same
-principle as a tool error stage: the user sees that a step ran and what came of it.
+A review that produced no violations SHALL still emit a stage, recording that the draft was approved.
+A review whose **call failed** SHALL emit one too, recording the failure — alongside the app-measured
+length violation when the draft is over the ceiling — the same principle as a tool error stage: the
+user sees that a step ran and what came of it.
 
 A draft delivered because the version budget ran out gets no review call (see the loop requirement
 below), and that delivery SHALL still emit one stage and one INFO record, so "review approved the
-draft" and "the budget ran out, so the previous review's findings may remain" stay distinguishable.
+draft" and "the budget ran out, so the previous review's violations may remain" stay distinguishable.
 Both are rendered from the state alone, with no model call. The stage SHALL carry the draft number,
 the measured word count with the ceiling, and that the draft is delivered unreviewed, with the budget
 stated; the log record SHALL carry the same numbers. A version budget of one makes no review call
 and exhausts nothing — review is off by configuration — so no stage SHALL be emitted at all.
 
 **The log record** SHALL carry the draft number, the measured word count, the configured ceiling, and
-the **number** of findings — counts and identifiers only.
+the **number** of violations — counts and identifiers only.
 
 **The two channels carry deliberately different amounts, and this asymmetry is the requirement, not an
-oversight.** Findings are LLM response text, which the **logging-policy** capability's content
+oversight.** Violations are LLM response text, which the **logging-policy** capability's content
 allowlist forbids in a log record at any level. A DIAL stage is not a log record: it is part of the
 response, shown to the user who asked for the report, and stage bodies already carry retrieved content
-today. So the findings text SHALL appear in the stage and SHALL NOT appear in any log record — not
+today. So the violation text SHALL appear in the stage and SHALL NOT appear in any log record — not
 truncated, not summarized, not at DEBUG.
 
-Showing findings does not show drafts: the rejected draft itself SHALL still stay out of the response
-(see **research-execution**), and a finding SHALL NOT be padded out into a reproduction of the draft
-it judges.
+Showing violations does not show drafts: the rejected draft itself SHALL still stay out of the
+response (see **research-execution**), and a violation SHALL NOT be padded out into a reproduction of
+the draft it judges.
 
 #### Scenario: A revision-triggering review is visible
 
-- **WHEN** report-review returns findings on a draft measuring 3,910 words against a ceiling of 2,750
-- **THEN** a stage SHALL appear carrying draft number 1, both numbers, and the findings as a list; and
-  one INFO record SHALL carry the draft number, 3910, 2750, and the finding count — with no finding
-  text
+- **WHEN** report-review returns violations on a draft measuring 3,910 words against a ceiling of
+  2,750
+- **THEN** a stage SHALL appear carrying draft number 1, both numbers, and the violations as a list;
+  and one INFO record SHALL carry the draft number, 3910, 2750, and the violation count — with no
+  violation text
 
 #### Scenario: An approving review is visible too
 
-- **WHEN** report-review approves a draft with no findings
+- **WHEN** report-review approves a draft with no violations
 - **THEN** a stage SHALL still be emitted recording the approval, and the log record SHALL carry a
-  finding count of zero
+  violation count of zero
 
 #### Scenario: A failed review call is visible as such
 
 - **WHEN** the report-review call fails and the loop absorbs it
-- **THEN** its stage SHALL record the failure in place of findings, and the failure SHALL also be
-  logged as a warning naming the failure kind
+- **THEN** its stage SHALL record the failure, marked with an error cross in both the title and
+  the body, and the failure SHALL also be logged as a warning naming the failure kind
 
-#### Scenario: Findings never reach a log record
+#### Scenario: Violations never reach a log record
 
-- **WHEN** a review returns findings quoting sentences from the draft, at any configured log level
+- **WHEN** a review returns violations quoting sentences from the draft, at any configured log level
   including DEBUG
-- **THEN** no log record SHALL contain any of that text; only the count of findings SHALL be logged
+- **THEN** no log record SHALL contain any of that text; only the count of violations SHALL be logged
 
 #### Scenario: A budget-exhausted delivery is visible as such
 
@@ -236,9 +239,11 @@ The report SHALL respect a configured word ceiling (`max_report_words`, default 
 whitespace-separated tokens in its Markdown text, and that one definition SHALL be used
 everywhere a length is stated — in prompts and in logs alike.
 
-Lengths SHALL be supplied to the model as numbers rather than left for it to count: the writer
-SHALL be told the ceiling, and every judgement or revision of a draft SHALL be told the draft's
-measured count alongside the ceiling.
+Length is never a model's judgement: it is measured in Python and enforced deterministically (see
+below). Where a model does need a length, it is supplied as a number rather than left for it to
+count: the writer SHALL be told the ceiling, and a revision SHALL be told the draft's measured
+count alongside the ceiling. The review step SHALL be told neither — it judges the content rules
+only.
 
 The ceiling SHALL NOT be enforced by truncation:
 
@@ -263,13 +268,13 @@ able to end the loop on it. The model's verdict governs the other criteria only.
 
 A revision forced on the count alone SHALL still arrive with a concrete instruction: the app SHALL
 render one from the draft, its measured count, and the ceiling, directing a rewrite that shortens to
-fit rather than cutting. Where the review step also returned findings, the two SHALL be given
+fit rather than cutting. Where the review step also returned violations, the two SHALL be given
 together as one instruction.
 
 #### Scenario: Over-long draft is revised with the numbers stated
 
 - **WHEN** a draft measures 3,910 words against a ceiling of 2,750
-- **THEN** the review step SHALL be given both numbers, SHALL require a revision, and the
+- **THEN** a revision SHALL be required regardless of the review step's output, and the
   revision instruction SHALL state the measured count and the ceiling
 
 #### Scenario: Shortening rewrites rather than truncates
@@ -340,14 +345,15 @@ step SHALL read the draft, the configured section structure, the protected secti
 research question and plan — the last two because they are where a user's formatting instruction
 lives, and without them the step cannot tell a legitimately-followed instruction from an
 override of a protected rule. It SHALL judge the draft against the configured structure, the
-protected sections and their rules, the word ceiling (given the draft's measured count), the
-prohibited meta-annotations, and the citation format rules the **research-execution** capability
-defines.
+protected sections and their rules, the prohibited meta-annotations, and the citation format
+rules the **research-execution** capability defines. It SHALL NOT be given the measured word
+count or the ceiling: length needs no model — the app measures it and adds the length violation
+itself (see the ceiling requirement).
 
-The review step's structured output SHALL be the findings alone, one entry per rule the draft
+The review step's structured output SHALL be the violations alone, one entry per rule the draft
 breaks and naming what to change. There SHALL be no separate approval field: an empty list SHALL
-mean the draft is approved, so a finding that is not meant to block delivery cannot be expressed —
-every returned finding forces a revision.
+mean the draft is approved, so a remark that is not meant to block delivery cannot be expressed —
+every returned violation forces a revision.
 
 The step SHALL NOT receive the research findings: every criterion above is decidable from the
 draft, the configuration, and the query and plan.
@@ -407,12 +413,12 @@ route control back to research-agent.
 - **THEN** a revision SHALL be written against those instructions and SHALL itself be judged by
   the review step before delivery
 
-#### Scenario: A finding always forces a revision, with no way to leave it merely informative
+#### Scenario: A violation always forces a revision, with no way to leave it merely informative
 
-- **WHEN** the review step returns one finding on a draft it would otherwise consider fine to
+- **WHEN** the review step returns one violation on a draft it would otherwise consider fine to
   ship
 - **THEN** the draft SHALL still be treated as not approved and a revision SHALL be written
-  against that finding, because the schema has no field to mark a finding non-actionable
+  against that violation, because the schema has no field to mark a violation non-actionable
 
 #### Scenario: Exhausted budget delivers the latest draft
 

@@ -246,7 +246,8 @@ The draft to revise:
 {draft}
 """
 
-# Appended when the measured count forced a revision, whether or not the review had findings.
+# Prepended to the violations when the measured count is over the ceiling; also the whole
+# instruction when the review call failed and the count alone forces the revision.
 LENGTH_REVISION_INSTRUCTION = """\
 The draft is {word_count} words, over the {max_words}-word ceiling. Shorten it to fit by \
 condensing and rewriting — cut detail, tighten prose, merge overlapping passages. Do not \
@@ -258,24 +259,21 @@ REPORT_REVIEW_SYSTEM_PROMPT = """\
 You are the report check of a deep-research assistant. Today is {today_date}. You did not write
 the report; you judge it against a fixed set of rules and nothing else.
 
-Check exactly these, and report a finding for each rule the draft breaks:
+Check exactly these, and report a violation for each rule the draft breaks:
 
 1. **Sections.** Every configured section is present, named as configured, in the configured
    order. No section is padded with content the report does not support; a section with nothing
    substantive to say should say so plainly rather than be dropped or filled.
 2. **Protected sections.** The protected sections are present and their rules are followed, no
    matter what the research question or plan asked for.
-3. **Length.** You are given the draft's measured word count and the ceiling. Report a finding
-   when the count is over the ceiling — and never when it is at or under it. A short report is
-   not a problem.
-4. **Never-include list.** No confidence scores or ratings, certainty or reliability labels,
+3. **Never-include list.** No confidence scores or ratings, certainty or reliability labels,
    complexity ratings, processing or elapsed times, iteration or token counts — as fields, in
    prose, or in table cells. Honest qualification of evidence in prose is correct and is not a
-   finding.
-5. **Citation format.** Inline citations use `[doc <id>, page <ix>]` for documents and
-   `[dataset <id>]` for datasets, and nothing else — a draft that switched to footnotes or
-   numbered references breaks this rule even if the request asked for it.
-6. **No declining commentary.** The report does not explain that it declined part of a request.
+   violation.
+4. **Citation format.** Inline citations must follow the following format:
+   - `[doc <id>, page <ix>]` for documents
+   - `[dataset <id>]` for datasets
+   There must be no footnotes or numbered references (e.g. [1], [2])
 
 ## Not your job
 
@@ -284,7 +282,7 @@ source was the right one to use — you cannot see the findings, and evidence co
 elsewhere. Do not ask for more research, more sources, or a different analysis. Do not rewrite
 the report or suggest wording you would prefer.
 
-Approve the draft when the six checks above hold. A draft that satisfies them is finished, even
+Approve the draft when the checks above hold. A draft that satisfies them is finished, even
 if you can imagine a better report.
 """
 
@@ -295,31 +293,29 @@ Report structure configured for this deployment:
 
 Protected sections (these survive any instruction): {protected_sections}
 
-Word ceiling: {max_words} words.
-
-The research question the report answers:
-{query}
+The research question the report answers: {query}
 
 The research plan the user approved (it may contain formatting instructions, which never
 override the rules above):
+<plan>
 {plan}
+</plan>
 
---- draft to review ---
-Measured length: {word_count} words.
-
+<draft>
 {draft}
+</draft>
 """
 
 
 class ReportReview(BaseModel):
-    """Report-review's verdict: the findings alone. An empty list is the approval.
+    """Report-review's verdict: the violations alone. An empty list is the approval.
 
     There is no separate approved flag: a draft the model considers fine to ship has nothing
-    listed against it, so findings emptiness is the verdict — a non-actionable finding on an
+    listed against it, so the list's emptiness is the verdict — a non-actionable remark on an
     otherwise-approved draft cannot be expressed, and forces a revision instead.
     """
 
-    findings: list[str] = Field(
+    report_violations: list[str] = Field(
         default_factory=list,
         description="One entry per rule the draft breaks: what is wrong and what to change."
         " Empty means the draft satisfies every check and can be delivered as written.",

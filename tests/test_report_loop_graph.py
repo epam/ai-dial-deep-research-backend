@@ -58,7 +58,7 @@ class _FakeChatModel:
 
     def next_review(self) -> ReportReview:
         self.review_calls += 1
-        return self._reviews.pop(0) if self._reviews else ReportReview(findings=[])
+        return self._reviews.pop(0) if self._reviews else ReportReview(report_violations=[])
 
 
 class _FakeReviewModel:
@@ -123,7 +123,7 @@ async def _run(compiled: Any) -> dict[str, Any]:
 
 async def test_approved_first_draft_ends_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     compiled, llm, stages = _build(
-        monkeypatch, drafts=["short draft"], reviews=[ReportReview(findings=[])]
+        monkeypatch, drafts=["short draft"], reviews=[ReportReview(report_violations=[])]
     )
     final = await _run(compiled)
 
@@ -131,16 +131,16 @@ async def test_approved_first_draft_ends_the_loop(monkeypatch: pytest.MonkeyPatc
     assert final["report"] == "short draft"
     assert final["report_version"] == 1
     assert len(stages) == 1
-    assert stages[0].action == nodes.ReportAction.DELIVER
+    assert stages[0].revision_instruction is None
 
 
-async def test_findings_drive_a_revision_then_approval(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_violations_drive_a_revision_then_approval(monkeypatch: pytest.MonkeyPatch) -> None:
     compiled, llm, stages = _build(
         monkeypatch,
         drafts=["first draft", "second draft"],
         reviews=[
-            ReportReview(findings=["Conclusion section missing"]),
-            ReportReview(findings=[]),
+            ReportReview(report_violations=["Conclusion section missing"]),
+            ReportReview(report_violations=[]),
         ],
     )
     final = await _run(compiled)
@@ -148,10 +148,7 @@ async def test_findings_drive_a_revision_then_approval(monkeypatch: pytest.Monke
     assert (llm.report_calls, llm.review_calls) == (2, 2)
     assert final["report"] == "second draft"
     assert final["report_version"] == 2
-    assert [stage.action for stage in stages] == [
-        nodes.ReportAction.REVISE,
-        nodes.ReportAction.DELIVER,
-    ]
+    assert [stage.revision_instruction is not None for stage in stages] == [True, False]
     # The revision extends the first draft's prompt rather than replacing any of it.
     first, revision = llm.report_messages
     assert [m.content for m in revision[: len(first)]] == [m.content for m in first]
@@ -166,7 +163,7 @@ async def test_budget_caps_report_calls_at_the_version_count(
     compiled, llm, stages = _build(
         monkeypatch,
         drafts=["draft one", "draft two", "draft three"],
-        reviews=[ReportReview(findings=["still wrong"])] * 3,
+        reviews=[ReportReview(report_violations=["still wrong"])] * 3,
         max_report_versions=3,
     )
     final = await _run(compiled)
@@ -174,7 +171,7 @@ async def test_budget_caps_report_calls_at_the_version_count(
     assert (llm.report_calls, llm.review_calls) == (3, 2)
     assert final["report"] == "draft three"
     assert final["report_version"] == 3
-    assert [stage.action for stage in stages] == [nodes.ReportAction.REVISE] * 2
+    assert all(stage.revision_instruction is not None for stage in stages)
 
 
 async def test_budget_of_one_skips_the_review_entirely(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -198,16 +195,17 @@ async def test_over_ceiling_draft_is_revised_despite_approval(
     compiled, llm, stages = _build(
         monkeypatch,
         drafts=["one two three four five", "two words"],
-        reviews=[ReportReview(findings=[])] * 2,
+        reviews=[ReportReview(report_violations=[])] * 2,
         max_report_words=3,
     )
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.review_calls) == (2, 2)
     assert final["report"] == "two words"
-    assert stages[0].action == nodes.ReportAction.REVISE_OVER_CEILING
-    assert stages[0].verdict == nodes.ReportVerdict.APPROVED
-    assert stages[1].action == nodes.ReportAction.DELIVER
+    # The approving review's empty list gained the app-measured length violation.
+    assert len(stages[0].violations) == 1
+    assert stages[0].revision_instruction is not None
+    assert stages[1].revision_instruction is None
 
 
 async def test_failed_revision_delivers_the_previous_draft(
@@ -217,7 +215,7 @@ async def test_failed_revision_delivers_the_previous_draft(
     compiled, llm, stages = _build(
         monkeypatch,
         drafts=["the first draft", RuntimeError("context length exceeded")],
-        reviews=[ReportReview(findings=["too long"])],
+        reviews=[ReportReview(report_violations=["too long"])],
     )
     final = await _run(compiled)
 

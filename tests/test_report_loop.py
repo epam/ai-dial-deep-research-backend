@@ -31,11 +31,7 @@ from langchain_core.messages import (
 from langchain_core.runnables import Runnable, RunnableLambda
 
 from dial_deep_research.app.research import nodes
-from dial_deep_research.app.research.nodes import (
-    ReportAction,
-    ReportReviewOutcome,
-    ReportVerdict,
-)
+from dial_deep_research.app.research.nodes import ReportReviewOutcome
 from dial_deep_research.app.research.prompts import (
     REPORT_SYSTEM_PROMPT,
     ReportReview,
@@ -297,50 +293,51 @@ def _review_node(
 async def test_an_approved_draft_within_the_ceiling_is_delivered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    llm = _FakeReviewLLM(_parsed(ReportReview(findings=[])))
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, stages = _review_node(llm, monkeypatch)
 
     result = await node(_state(report="a short draft", report_version=1))
 
     assert result == {"report_revision_instruction": None}
     [outcome] = stages
-    assert outcome.verdict is ReportVerdict.APPROVED
-    assert outcome.action is ReportAction.DELIVER
-    assert outcome.findings == []
+    assert outcome.violations == []
+    assert outcome.error is None
     assert outcome.draft_number == 1
     assert outcome.word_count == 3
 
 
-async def test_findings_become_the_revision_instruction_and_reach_the_stage(
+async def test_violations_become_the_revision_instruction_and_reach_the_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    finding = "The References section was dropped; restore it with the source tables."
-    llm = _FakeReviewLLM(_parsed(ReportReview(findings=[finding])))
+    violation = "The References section was dropped; restore it with the source tables."
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[violation])))
     node, stages = _review_node(llm, monkeypatch)
 
     result = await node(_state(report="a short draft"))
 
     assert result["report_revision_instruction"] is not None
-    assert finding in result["report_revision_instruction"]
+    assert violation in result["report_revision_instruction"]
     [outcome] = stages
-    assert outcome.verdict is ReportVerdict.REVISE
-    assert outcome.action is ReportAction.REVISE
-    assert outcome.findings == [finding]
+    assert outcome.violations == [violation]
+    assert outcome.error is None
 
 
-async def test_an_approving_verdict_cannot_pass_an_over_ceiling_draft(
+async def test_an_approving_review_cannot_pass_an_over_ceiling_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    llm = _FakeReviewLLM(_parsed(ReportReview(findings=[])))
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, stages = _review_node(llm, monkeypatch, max_words=3)
 
     result = await node(_state(report="one two three four five"))
 
     assert result["report_revision_instruction"] is not None
     [outcome] = stages
-    # The model's verdict is reported as it came; the app's action overrides it on the count.
-    assert outcome.verdict is ReportVerdict.APPROVED
-    assert outcome.action is ReportAction.REVISE_OVER_CEILING
+    # The count is the app's: the length violation joins the list even though the model
+    # reported none, so the stage shows why the revision happens.
+    [length_violation] = outcome.violations
+    assert "5 words" in length_violation
+    assert "3-word ceiling" in length_violation
+    assert outcome.error is None
 
 
 async def test_a_failed_review_call_still_shortens_an_over_long_draft(
@@ -353,8 +350,10 @@ async def test_a_failed_review_call_still_shortens_an_over_long_draft(
 
     assert result["report_revision_instruction"] is not None
     [outcome] = stages
-    assert outcome.verdict is ReportVerdict.FAILED
-    assert outcome.action is ReportAction.REVISE_OVER_CEILING
+    # The failure and the length violation are separate facts, and both stay visible.
+    assert outcome.error == "RuntimeError"
+    [length_violation] = outcome.violations
+    assert "5 words" in length_violation
 
 
 async def test_a_failed_review_call_delivers_a_draft_within_the_ceiling(
@@ -366,11 +365,10 @@ async def test_a_failed_review_call_delivers_a_draft_within_the_ceiling(
     result = await node(_state(report="a short draft"))
 
     assert result == {"report_revision_instruction": None}
-    # The failure is visible as a stage of its own, in place of findings.
+    # The failure is visible as a stage of its own, with nothing to revise against.
     [outcome] = stages
-    assert outcome.verdict is ReportVerdict.FAILED
-    assert outcome.action is ReportAction.DELIVER
-    assert outcome.findings == []
+    assert outcome.error == "RuntimeError"
+    assert outcome.violations == []
 
 
 async def test_an_unparseable_verdict_is_absorbed_like_a_failed_call(
@@ -383,24 +381,25 @@ async def test_an_unparseable_verdict_is_absorbed_like_a_failed_call(
 
     assert result == {"report_revision_instruction": None}
     [outcome] = stages
-    assert outcome.verdict is ReportVerdict.FAILED
+    assert outcome.error == "ValueError"
+    assert outcome.violations == []
 
 
-async def test_findings_reach_the_stage_but_never_a_log_record(
+async def test_violations_reach_the_stage_but_never_a_log_record(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """The asymmetry is the requirement: the stage shows the findings, the log counts them."""
-    finding = "The draft ends with 'Confidence: High (3 sources)'; remove it."
-    llm = _FakeReviewLLM(_parsed(ReportReview(findings=[finding])))
+    """The asymmetry is the requirement: the stage shows the violations, the log counts them."""
+    violation = "The draft ends with 'Confidence: High (3 sources)'; remove it."
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[violation])))
     node, stages = _review_node(llm, monkeypatch)
     caplog.set_level(logging.DEBUG, logger=nodes.__name__)
 
     await node(_state(report="a short draft"))
 
-    assert stages[0].findings == [finding]
+    assert stages[0].violations == [violation]
     records = [record.getMessage() for record in caplog.records]
-    assert any("findings=1" in record for record in records)
-    assert not any(finding in record for record in records)
+    assert any("violations=1" in record for record in records)
+    assert not any(violation in record for record in records)
     # Nor does the draft it judges.
     assert not any("a short draft" in record for record in records)
 
@@ -408,7 +407,7 @@ async def test_findings_reach_the_stage_but_never_a_log_record(
 async def test_the_stage_reports_the_draft_being_reviewed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    llm = _FakeReviewLLM(_parsed(ReportReview(findings=[])))
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, stages = _review_node(llm, monkeypatch, max_words=1200)
 
     await node(_state(report="a short draft", report_version=2))
@@ -423,7 +422,7 @@ async def test_the_review_request_carries_neither_findings_nor_a_research_review
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     draft = "one two three four five six seven eight nine"
-    llm = _FakeReviewLLM(_parsed(ReportReview(findings=[])))
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, _ = _review_node(llm, monkeypatch, sections=_CUSTOM_SECTIONS)
 
     await node(
@@ -460,10 +459,12 @@ async def test_the_review_request_carries_neither_findings_nor_a_research_review
     # carry a user instruction.
     assert "the approved plan step" in request
     assert "a step research-review authored" not in request
-    # Stable content first, the draft and its measured count last, for prefix stability.
-    assert request.rstrip().endswith(draft)
-    assert request.index(f"{count_words(draft)} words") < request.index(draft)
+    # Stable content first, the draft last, for prefix stability.
+    assert request.rstrip().endswith(f"<draft>\n{draft}\n</draft>")
     assert request.index("Summary") < request.index(draft)
+    # Length is judged in Python, not by the review model: neither number reaches the request.
+    assert f"{count_words(draft)}" not in request
+    assert "2750" not in request
 
 
 # --- prompt rendering ---------------------------------------------------------------------------

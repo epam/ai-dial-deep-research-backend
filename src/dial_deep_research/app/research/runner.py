@@ -245,21 +245,22 @@ class ResearchRunner:
     def _emit_report_review_stage(self, outcome: ReportReviewOutcome) -> None:
         """Render one report review as a DIAL stage.
 
-        The node decided what to report; this decides how it looks. The findings text belongs
+        The node decided what to report; this decides how it looks. The violation text belongs
         here and nowhere else — the logging-policy content allowlist keeps LLM response text out
         of log records, so the logs carry only the count.
         """
         title = DialStageReportReviewFormatter.format_title(
             draft_number=outcome.draft_number,
-            action=outcome.action.value,
+            revising=outcome.revision_instruction is not None,
+            review_failed=outcome.error is not None,
             duration_seconds=outcome.duration_seconds,
         )
         body = DialStageReportReviewFormatter.format_body(
             draft_number=outcome.draft_number,
             word_count=outcome.word_count,
             max_words=outcome.max_words,
-            verdict=outcome.verdict.value,
-            findings=outcome.findings,
+            violations=outcome.violations,
+            error=outcome.error,
         )
         with self._choice.create_stage(title) as stage:
             stage.append_content(body)

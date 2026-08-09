@@ -11,8 +11,8 @@
   that judges the draft against the report rules, emits its DIAL stage through the runner-supplied
   callback, and records the instruction a revision would act on.
 
-`decide_report_action` is the single source for what happens to a reviewed draft: the router
-turns its result into an edge and the review node logs the same value.
+`ReportReviewOutcome.revision_instruction` is the single source for what happens to a reviewed
+draft: the router turns its presence into an edge and the review node logs the same value.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
-from enum import StrEnum
 from typing import Any
 
 from langchain.agents import create_agent
@@ -203,37 +202,37 @@ def make_research_review_node(today_date: str) -> ResearchReviewNode:
     return research_review
 
 
-class ReportAction(StrEnum):
-    """What the app does with a reviewed draft. Distinct from the review model's verdict."""
-
-    DELIVER = "deliver"
-    REVISE = "revise"
-    REVISE_OVER_CEILING = "revise_over_ceiling"
-
-
-class ReportVerdict(StrEnum):
-    """What the review model said, or that its call never produced a verdict."""
-
-    APPROVED = "approved"
-    REVISE = "revise"
-    FAILED = "failed"
-
-
 class ReportReviewOutcome(BaseModel):
     """One report review's result, handed to the runner so it can render a DIAL stage.
 
     Carries no DIAL types: the node decides what to report, the runner decides how it is
-    rendered. `findings` is the review's text and belongs in the stage only — never in a log
-    record, per the logging-policy content allowlist.
+    rendered. `violations` is everything the next revision must fix — the review model's
+    violations, with the app-measured length violation prepended when the draft exceeds the
+    ceiling. `error` records a failed review call (the exception kind); the length violation
+    joins the list regardless, so a failed call still carries it. The violation text belongs
+    in the stage only — never in a log record, per the logging-policy content allowlist.
     """
 
     draft_number: int
     word_count: int
     max_words: int
-    findings: list[str]
-    verdict: ReportVerdict
-    action: ReportAction
+    violations: list[str]
+    error: str | None
     duration_seconds: float
+
+    @property
+    def revision_instruction(self) -> str | None:
+        """The instruction the next revision acts on; None delivers the draft as it stands.
+
+        The single source for that decision: the review node stores it in the state, where its
+        presence routes the loop back to the report node, and the stage title reflects the same
+        value, so the two cannot disagree.
+        """
+        if not self.violations:
+            return None
+        return "\n".join(
+            f"{i}. {violation}" for i, violation in enumerate(self.violations, start=1)
+        )
 
 
 ReportReviewStageEmitter = Callable[[ReportReviewOutcome], None]
@@ -247,41 +246,6 @@ def review_budget_exhausted(*, report_version: int, max_versions: int) -> bool:
     unreviewed delivery), so the two cannot disagree.
     """
     return report_version >= max_versions
-
-
-def decide_report_action(
-    *,
-    word_count: int,
-    max_words: int,
-    findings: list[str],
-) -> tuple[ReportAction, str | None]:
-    """Decide what happens to a reviewed draft, and the instruction a revision gets.
-
-    The single source for that decision: the router turns the action into an edge and the
-    report-review node logs the same value, so the log can never describe a different
-    outcome than the one the graph took.
-
-    Runs only for drafts with a rewrite still in budget — `route_after_report` gates the
-    review on the budget — so a requested revision is always permitted. Exceeding the ceiling
-    forces a revision even when the review found nothing: the count is the app's, not the
-    model's opinion. A failed review call reaches here with no findings, so it revises on
-    length alone or delivers.
-    """
-    over_ceiling = word_count > max_words
-    if not findings and not over_ceiling:
-        return ReportAction.DELIVER, None
-
-    length_instruction = (
-        LENGTH_REVISION_INSTRUCTION.format(word_count=word_count, max_words=max_words)
-        if over_ceiling
-        else None
-    )
-    if not findings:
-        return ReportAction.REVISE_OVER_CEILING, length_instruction
-    parts = [f"- {finding}" for finding in findings]
-    if length_instruction:
-        parts.append(f"- {length_instruction}")
-    return ReportAction.REVISE, "\n".join(parts)
 
 
 def make_report_node(
@@ -365,9 +329,9 @@ def make_report_review_node(
 ) -> ReportReviewNode:
     """Build the report-review node: judge the draft, emit its stage, decide the next step.
 
-    It sees the draft, the configuration and the query and plan — never the findings, which is
-    why it cannot reopen evidence coverage. A failing call never fails the turn: the loop falls
-    back to the measured count alone.
+    It sees the draft, the configuration and the query and plan — never the research findings,
+    which is why it cannot reopen evidence coverage. A failing call never fails the turn: the
+    loop falls back to the measured count alone.
     """
 
     async def report_review(state: ResearchState) -> dict[str, Any]:
@@ -376,8 +340,8 @@ def make_report_review_node(
         word_count = count_words(draft)
         draft_number = state.get("report_version", 0)
 
-        findings: list[str] = []
-        verdict = ReportVerdict.FAILED
+        violations: list[str] = []
+        error: str | None = None
         usage: UsageMetadata | None = None
         try:
             llm = with_stream_drop_retry(
@@ -394,10 +358,8 @@ def make_report_review_node(
                         content=REPORT_REVIEW_REQUEST.format(
                             report_structure=render_report_structure(sections),
                             protected_sections=render_protected_section_names(sections),
-                            max_words=max_words,
                             query=state["original_query"],
                             plan=render_plan(state["plans"][0]) if state["plans"] else "(none)",
-                            word_count=word_count,
                             draft=draft,
                         )
                     ),
@@ -407,47 +369,48 @@ def make_report_review_node(
                 raise result["parsing_error"]
             review: ReportReview = result["parsed"]
             usage = result["raw"].usage_metadata
-            findings = list(review.findings)
-            verdict = ReportVerdict.APPROVED if not findings else ReportVerdict.REVISE
+            violations = list(review.report_violations)
         except Exception as exc:
             # A failed review must not cost the report. The measured count still applies, so
             # the loop can still shorten an over-long draft on its own instruction.
+            error = type(exc).__name__
             logger.warning(
                 "Report review failed, falling back to the measured length: draft=%d error=%s",
                 draft_number,
-                type(exc).__name__,
+                error,
             )
 
-        action, instruction = decide_report_action(
+        if word_count > max_words:
+            # The count is the app's, not the model's opinion: the length violation joins the
+            # list whether the model reported one, reported none, or the call failed — so an
+            # approving review cannot pass an over-long draft, and a failed one still shortens it.
+            violations = [
+                LENGTH_REVISION_INSTRUCTION.format(word_count=word_count, max_words=max_words),
+                *violations,
+            ]
+        duration = time.monotonic() - start
+        outcome = ReportReviewOutcome(
+            draft_number=draft_number,
             word_count=word_count,
             max_words=max_words,
-            findings=findings,
+            violations=violations,
+            error=error,
+            duration_seconds=duration,
         )
-        duration = time.monotonic() - start
-        emit_stage(
-            ReportReviewOutcome(
-                draft_number=draft_number,
-                word_count=word_count,
-                max_words=max_words,
-                findings=findings,
-                verdict=verdict,
-                action=action,
-                duration_seconds=duration,
-            )
-        )
+        emit_stage(outcome)
         logger.info(
-            "Report reviewed: draft=%d duration=%.1fs verdict=%s action=%s words=%d ceiling=%d "
-            "findings=%d tokens=%s",
+            "Report reviewed: draft=%d duration=%.1fs outcome=%s error=%s words=%d "
+            "ceiling=%d violations=%d tokens=%s",
             draft_number,
             duration,
-            verdict.value,
-            action.value,
+            "revise" if outcome.revision_instruction else "deliver",
+            error,
             word_count,
             max_words,
-            len(findings),
+            len(violations),
             format_token_usage(usage),
         )
-        return {"report_revision_instruction": instruction}
+        return {"report_revision_instruction": outcome.revision_instruction}
 
     return report_review
 
@@ -517,7 +480,7 @@ def route_after_report(max_versions: int) -> Callable[[ResearchState], str]:
 def route_after_report_review() -> Callable[[ResearchState], str]:
     """Decide the edge out of the report-review node.
 
-    Revise iff the review left an instruction. `decide_report_action` already folded in the
+    Revise iff the review left an instruction. `revision_instruction` already folded in the
     measured count, so this reads one field rather than re-deciding.
     """
 

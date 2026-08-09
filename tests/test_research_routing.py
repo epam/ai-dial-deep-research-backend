@@ -7,9 +7,10 @@ Four edges and the helpers that decide them:
   review call.
 - `route_after_research_review` (research-review → research-agent | report) loops back only when
   research-review recorded a plan for a not-yet-run iteration (`len(plans) > iteration`).
-- `decide_report_action` is the report loop's decision table: the measured word count and the
-  review's findings in, the action and the revision instruction out. The router maps its action
-  to an edge and the report-review node logs the same action, so neither can disagree with it.
+- `ReportReviewOutcome.revision_instruction` decides the report loop: a non-empty violations
+  list becomes the numbered revision instruction, an empty one delivers. The router maps its
+  presence to an edge and the report-review node logs the same value, so neither can disagree
+  with it.
 - `route_after_report` (report → report-review | END) gates the review on the version budget:
   the last permitted version is delivered without a review call. And
   `route_after_report_review` (report-review → report | END).
@@ -20,8 +21,7 @@ from __future__ import annotations
 from typing import Any
 
 from dial_deep_research.app.research.nodes import (
-    ReportAction,
-    decide_report_action,
+    ReportReviewOutcome,
     route_after_report,
     route_after_report_review,
     route_after_research_agent,
@@ -70,53 +70,46 @@ def test_new_plan_routes_to_research_agent() -> None:
     assert route(_state(plans=[["a"], ["b"]], research_iteration=1)) == "research-agent"
 
 
-# --- decide_report_action -----------------------------------------------------------------------
+# --- ReportReviewOutcome.revision_instruction ----------------------------------------------------
 
 
-def _decide(**overrides: Any) -> tuple[ReportAction, str | None]:
-    """The decision for a draft within the ceiling, with the given fields overridden."""
-    inputs: dict[str, Any] = {
+def _outcome(**overrides: Any) -> ReportReviewOutcome:
+    """An outcome for a clean draft within the ceiling, with the given fields overridden."""
+    fields: dict[str, Any] = {
+        "draft_number": 1,
         "word_count": 900,
         "max_words": 2750,
-        "findings": [],
+        "violations": [],
+        "error": None,
+        "duration_seconds": 1.0,
     }
-    return decide_report_action(**{**inputs, **overrides})
+    return ReportReviewOutcome(**{**fields, **overrides})
 
 
-def test_clean_draft_under_the_ceiling_is_delivered() -> None:
-    assert _decide() == (ReportAction.DELIVER, None)
+def test_no_violations_deliver_the_draft() -> None:
+    assert _outcome().revision_instruction is None
 
 
-def test_findings_drive_a_revision_carrying_them() -> None:
-    action, instruction = _decide(
-        findings=["The references section is missing.", "Drop 'Confidence: High'."]
-    )
-    assert action is ReportAction.REVISE
+def test_violations_become_a_numbered_instruction() -> None:
+    instruction = _outcome(
+        violations=["The references section is missing.", "Drop 'Confidence: High'."]
+    ).revision_instruction
+    assert instruction == ("1. The references section is missing.\n2. Drop 'Confidence: High'.")
+
+
+def test_a_failed_review_with_no_violations_delivers() -> None:
+    # The error alone forces nothing: an instruction exists iff the list is non-empty.
+    assert _outcome(error="RuntimeError").revision_instruction is None
+
+
+def test_a_failed_review_still_revises_on_a_violation_in_the_list() -> None:
+    # The node merges the app-measured length violation into the list even when the call
+    # failed, so the instruction needs no fallback of its own.
+    instruction = _outcome(
+        error="RuntimeError", violations=["The draft is 3910 words, over the 2750-word ceiling."]
+    ).revision_instruction
     assert instruction is not None
-    assert "The references section is missing." in instruction
-    assert "Drop 'Confidence: High'." in instruction
-
-
-def test_over_the_ceiling_with_no_findings_revises_on_the_length_alone() -> None:
-    action, instruction = _decide(word_count=3910)
-    assert action is ReportAction.REVISE_OVER_CEILING
-    assert instruction is not None
-    # The instruction is app-rendered, so it states both numbers even with nothing from the model.
     assert "3910" in instruction
-    assert "2750" in instruction
-
-
-def test_over_the_ceiling_with_findings_merges_both_into_one_instruction() -> None:
-    action, instruction = _decide(word_count=3910, findings=["The citations were renumbered."])
-    assert action is ReportAction.REVISE
-    assert instruction is not None
-    assert "The citations were renumbered." in instruction
-    assert "3910" in instruction
-    assert "2750" in instruction
-
-
-def test_draft_exactly_at_the_ceiling_is_within_it() -> None:
-    assert _decide(word_count=2750) == (ReportAction.DELIVER, None)
 
 
 # --- the report loop's two edges ----------------------------------------------------------------
@@ -167,6 +160,6 @@ def test_recorded_instruction_routes_back_to_report() -> None:
 
 
 def test_no_instruction_ends_the_turn() -> None:
-    # `decide_report_action` already folded in the count and the budget, so an absent
+    # `revision_instruction` already folded in the count and the budget, so an absent
     # instruction is the whole signal to deliver.
     assert route_after_report_review()(_report_state()) == "end"

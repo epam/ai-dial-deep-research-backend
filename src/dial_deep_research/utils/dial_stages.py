@@ -55,15 +55,20 @@ class DialStageReportReviewFormatter:
     revision budget left unreviewed.
 
     Its own title shape rather than the tool-call one: a review is not a tool call, and the
-    `[TOOL] "<name>"` form would read as one. The body carries the review's findings, which is
+    `[TOOL] "<name>"` form would read as one. The body carries the review's violations, which is
     the one place they appear — the logs get counts only.
     """
 
     _PREFIX = "[REPORT REVIEW]"
 
     @classmethod
-    def format_title(cls, *, draft_number: int, action: str, duration_seconds: float) -> str:
-        emoji = _RESULT_EMOJI if action == "deliver" else _ERROR_EMOJI
+    def format_title(
+        cls, *, draft_number: int, revising: bool, review_failed: bool, duration_seconds: float
+    ) -> str:
+        action = "revise" if revising else "deliver"
+        # The cross marks a real error — the review call failed — and outranks the action in
+        # the title; a revision is the loop working as designed, so it gets a warning only.
+        emoji = _ERROR_EMOJI if review_failed else _WARNING_EMOJI if revising else _RESULT_EMOJI
         return f"{cls._PREFIX} draft {draft_number} - {action} {emoji} ({duration_seconds:.2f}s)"
 
     @classmethod
@@ -73,29 +78,30 @@ class DialStageReportReviewFormatter:
         draft_number: int,
         word_count: int,
         max_words: int,
-        verdict: str,
-        findings: Sequence[str],
+        violations: Sequence[str],
+        error: str | None,
     ) -> str:
         lines = [
             f"**Draft** {draft_number}",
             "",
             f"**Length** {word_count} words (ceiling {max_words})",
             "",
-            f"**Verdict** {verdict}",
-            "",
         ]
-        if verdict == "failed":
-            lines.append("**Findings** the review call failed, so it produced no verdict.")
-        elif findings:
-            lines.append("**Findings**")
+        if error is not None:
+            # A failed call still lists the app-measured length violation when there is one, so
+            # the two facts stay separate: what broke, and what the revision still acts on.
+            lines.append(
+                f"{_ERROR_EMOJI} **Error** the LLM review call failed ({error}), and "
+                "produced no review. The deterministic checks were still executed."
+            )
             lines.append("")
-            # Fenced so a multi-line finding stays readable — single newlines collapse in
-            # markdown, the same reason tool stages fence their payloads.
-            lines.append("```")
-            lines.extend(f"{i}. {finding}" for i, finding in enumerate(findings, start=1))
-            lines.append("```")
-        else:
-            lines.append("**Findings** none — the draft satisfies every check.")
+        if violations:
+            lines.append("**Violations**")
+            lines.append("")
+            # Stage content renders as markdown, so the numbered lines render as a list.
+            lines.extend(f"{i}. {violation}" for i, violation in enumerate(violations, start=1))
+        elif error is None:
+            lines.append("**Violations** none — the draft satisfies every check.")
         return "\n".join(lines)
 
     @classmethod
