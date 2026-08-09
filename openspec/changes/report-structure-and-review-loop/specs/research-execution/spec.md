@@ -54,7 +54,7 @@ is part of the contract, not an accident of implementation.
   not to.
 - Messages: one human message, assembled **stable content first** so successive review calls in a run
   share a byte prefix (the same rule as research-review's assembly, see **prompt-caching**): the
-  configured section structure, the protected sections, the ceiling, the aligned research question,
+  configured report structure, the protected sections, the ceiling, the aligned research question,
   and **the approved preparation plan only** — the first entry of the plan list, since later entries
   are authored by research-review rather than the user and cannot carry a user's formatting
   instruction. The draft and its measured word count come **last**, being the only parts that differ

@@ -26,7 +26,7 @@ See proposal.md — Why. What matters for the approach is the shape of the code 
 
 - The word ceiling is enforced by measurement and rewriting, not by asking a model to count or
   by cutting text off.
-- The report rules live in one place per rule: the section structure in configuration, the
+- The report rules live in one place per rule: the report structure in configuration, the
   ceiling in configuration, the enforcement in the review step's prompt.
 - The launch turn's answer is the report and nothing else, guaranteed by control flow rather
   than by prompt wording.
@@ -244,17 +244,50 @@ implementation: a "does it end on sentence-final punctuation" check is not a tru
 one capped run ended on a period and was still cut mid-scene. `finish_reason` is the reliable
 signal.
 
-### Word count is `len(text.split())`, computed in Python and stated as a number
+### Word count is `len(text.split())` over a reduced draft, computed in Python and stated as a number
 
-Whitespace-separated tokens over the report Markdown: one definition, used in the length
-violation the app renders, in the stage body, and in the log event, so the three never disagree. It counts
-Markdown syntax as part of the text — every table pipe, heading hash, and bullet dash scores as a
-word — so it overstates prose length, by an amount nobody has measured and which grows with how
-many tables a report carries. Accepted anyway: the alternative (stripping Markdown before counting)
-adds a dependency and a second definition of "the report's length", and the ceiling is an
-approximate budget, not an accounting figure. Worth measuring once on a real report before the
-default of 2,750 is tuned, since a table-heavy report reaches the count sooner than its prose
-would.
+Whitespace-separated tokens, counted after two removals: the inline citations, and the references
+section. One definition (`count_report_words`), used in the length violation the app renders, in
+the stage body, and in the log event, so the three never disagree.
+
+The two removals share one reason: the ceiling bounds what the writer chooses to say, and neither
+part is that. A citation's length follows from the source it names — `[doc 150, page 3]` scores
+four tokens, and a well-cited paragraph can carry five of them — so counting citations charges a
+report for being well-sourced. The references section is as long as the research cited; counting it
+means a run that found many sources has less room to explain them. Measured on a representative
+draft: 133 raw tokens, 61 counted — 26 tokens of citations and 46 of References.
+
+What is still counted as text is Markdown syntax: every table pipe, heading hash, and bullet dash
+scores as a word, so the count overstates prose length by an amount that grows with how many tables
+a report carries. Accepted: stripping Markdown adds a dependency and a second definition of "the
+report's length", and the ceiling is an approximate budget, not an accounting figure.
+
+### `ReportSection.references_section` says which section lists the sources
+
+The exemption needs to know which section is the sources listing, and position alone cannot say it:
+a structure ending in `Outlook` would have its closing prose silently exempted — measured, that cost
+a three-section structure 12 of its 22 words. So the structure declares it, and a validator keeps
+only the last section eligible, since a report lists its sources at the end.
+
+The name says what the section **is**, not what the app does with it. `exclude_from_size_calculation`
+would describe the consequence, and it would read as an offer: any section, on request, could be
+excluded. `references_section` states the one thing an admin knows about their own structure, and the
+app decides what follows. An admin who marks a prose section as the references section only buys
+their own deployment a longer report — visible in their own config, and harmful to no one else.
+
+This is the same *shape* as the `carries_source_tables: bool` rejected under
+`ReportSection.protected` below, and it is not the same decision: that flag was proposed to
+guarantee a sourcing section exists, which does make the app reason about what a section means.
+This one only asks the configuration which section it already has.
+
+Removal requires the declared section *and* a matching `##` heading in the draft, and drops
+everything from there to the end. A draft that renamed the section, omitted it, or wrote it at
+another level keeps every word: each is a structure violation report-review is about to report, and
+a violation must not also earn budget.
+
+**Migration:** the flag defaults to `false`, so a deployment that overrides `default_report_structure`
+in DIAL Core must add it to get the exemption. Until then its references section counts, which is
+the behavior before this change — nothing breaks, reports simply stay as short as they are today.
 
 No `count_words` tool is exposed to any model: the count is an input, not something to ask for.
 
@@ -409,10 +442,16 @@ Alternatives rejected:
 
 ### `ReportSection.protected` declares protection, with a validator as the floor
 
-`ReportSection` gains `protected: bool = False`. The shipped default marks References protected;
-a deployment may protect sections of its own (a regulatory disclaimer, a methodology note), and a
-model validator requires **at least one** protected section, so no configuration can produce a
-report whose every section a user instruction may remove.
+`ReportSection` gains `protected: bool = False`. The shipped default marks Overview and References
+protected; a deployment may protect sections of its own (a regulatory disclaimer, a methodology
+note), and a model validator requires **at least one** protected section, so no configuration can
+produce a report whose every section a user instruction may remove.
+
+Protection is told to the models as a rule of its own — the protected names, listed in the
+precedence rule — and never as a marker beside a section's name in the rendered structure. The
+prompt tells the writer to use those names as the report's headings, so a marker on a name is a
+string one instruction away from the delivered report, and "PROTECTED" beside a heading means
+nothing to the person reading the report.
 
 This replaces an earlier draft where the app appended a references section unconditionally,
 whatever the configuration said. That version cannot coexist with the single-home rule below: an

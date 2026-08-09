@@ -63,12 +63,22 @@ def test_report_defaults_resolve_without_configuration() -> None:
     properties = ApplicationProperties.model_validate(VALID_PROPERTIES)
     sections = properties.default_report_structure
     assert [section.name for section in sections] == [
+        "Overview",
         "Key Findings",
         "Detailed Analysis",
         "Conclusion",
         "References",
     ]
-    assert [section.protected for section in sections] == [False, False, False, True]
+    assert [section.protected for section in sections] == [True, False, False, False, True]
+    # Only the closing References section is the sources listing, and only it is exempt from the
+    # word ceiling.
+    assert [section.references_section for section in sections] == [
+        False,
+        False,
+        False,
+        False,
+        True,
+    ]
     assert properties.max_report_words == 2750
     assert properties.max_report_versions == 3
 
@@ -112,6 +122,40 @@ def test_structure_with_no_protected_section_is_rejected() -> None:
     message = str(excinfo.value)
     assert "default_report_structure" in message
     assert "at least one section with protected=true" in message
+
+
+def test_a_references_section_before_the_last_one_is_rejected() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "default_report_structure": [
+            {
+                "name": "Sources",
+                "description": "The cited sources.",
+                "protected": True,
+                "references_section": True,
+            },
+            {"name": "Summary", "description": "The answer."},
+        ],
+    }
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(data)
+    message = str(excinfo.value)
+    assert "only the last section may set references_section=true" in message
+    assert "Sources" in message
+
+
+def test_a_structure_with_no_references_section_is_accepted() -> None:
+    # A deployment may configure a report that lists no sources; nothing is then exempt from the
+    # word ceiling.
+    data = {
+        **VALID_PROPERTIES,
+        "default_report_structure": [
+            {"name": "Summary", "description": "The answer.", "protected": True},
+            {"name": "Outlook", "description": "What follows."},
+        ],
+    }
+    sections = ApplicationProperties.model_validate(data).default_report_structure
+    assert [section.references_section for section in sections] == [False, False]
 
 
 def test_duplicate_report_section_names_are_rejected() -> None:
@@ -196,7 +240,12 @@ def test_schema_inlines_report_section_items() -> None:
     schema = ApplicationProperties.model_json_schema()
     items = schema["properties"]["default_report_structure"]["items"]
     assert "$ref" not in items
-    assert set(items["properties"]) == {"name", "description", "protected"}
+    assert set(items["properties"]) == {
+        "name",
+        "description",
+        "protected",
+        "references_section",
+    }
 
 
 def test_at_least_one_mcp_server_required() -> None:

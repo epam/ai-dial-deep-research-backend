@@ -32,7 +32,6 @@ from langgraph.types import StreamPart
 from dial_deep_research.app.history import PrepState
 from dial_deep_research.app.mcp_tools import load_mcp_tools
 from dial_deep_research.app_properties import ApplicationProperties
-from dial_deep_research.utils.content import count_words
 from dial_deep_research.utils.dial_stages import (
     DialStageReportReviewFormatter,
     DialStageToolCallFormatter,
@@ -42,6 +41,8 @@ from dial_deep_research.utils.dial_stages import (
 
 from .graph import build_research_graph
 from .nodes import ReportReviewOutcome, review_budget_exhausted
+from .prompts import render_length_exemptions
+from .report_length import count_report_words
 from .state import build_initial_state
 from .tools import build_finish_iteration_tool
 
@@ -223,7 +224,7 @@ class ResearchRunner:
             report_version=self._report_version, max_versions=max_versions
         ):
             return
-        word_count = count_words(self._report)
+        word_count = count_report_words(self._report, properties.default_report_structure)
         logger.info(
             "Report delivered without review: draft=%d max_versions=%d words=%d",
             self._report_version,
@@ -237,6 +238,7 @@ class ResearchRunner:
             draft_number=self._report_version,
             word_count=word_count,
             max_words=properties.max_report_words,
+            length_exemptions=render_length_exemptions(properties.default_report_structure),
             max_versions=max_versions,
         )
         with self._choice.create_stage(title) as stage:
@@ -259,6 +261,7 @@ class ResearchRunner:
             draft_number=outcome.draft_number,
             word_count=outcome.word_count,
             max_words=outcome.max_words,
+            length_exemptions=outcome.length_exemptions,
             violations=outcome.violations,
             error=outcome.error,
         )

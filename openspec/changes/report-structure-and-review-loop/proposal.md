@@ -21,7 +21,7 @@ criterion is deferred, the reason is in design.md — Non-Goals.
 | # | Criterion | This change |
 |---|-----------|-------------|
 | 1 | "Response does not contain anything except the structured research report, there are no phrases like 'Research started …'." | Covered, with one stated exception (text on the same message as the `start_research` call) |
-| 2 | "Default reports follow the configured section structure (working proposal: Key Findings → Detailed Analysis → Conclusion → References)." | Covered |
+| 2 | "Default reports follow the configured section structure (working proposal: Key Findings → Detailed Analysis → Conclusion → References)." | Covered, with an Overview section added in front of Key Findings so the report opens with what was asked, what was searched, and the short answer |
 | 3 | "A user-requested format (comparison table, bullet summary, historical overview) overrides the default." | **Deferred** — issue #45. This change only bounds what such a request may do. |
 | 4 | "Reports respect the configured length ceiling (target ~2,750 words / ~5 pages). The limit must not affect readability — text is never truncated abruptly, and reports always end at a clean boundary." | Covered |
 | 5 | "No confidence scores, complexity ratings, or processing times appear in output." | Covered |
@@ -30,18 +30,23 @@ criterion is deferred, the reason is in design.md — Non-Goals.
 
 ## What Changes
 
-- **Configured section structure.** New application property `default_report_structure`: an
-  ordered list of `{name, description}` sections, defaulting to Key Findings → Detailed
-  Analysis → Conclusion → References. It is rendered into the report prompt, so a deployment
-  can change section names, order, and what belongs in each.
+- **Configured report structure.** New application property `default_report_structure`: an
+  ordered list of `{name, description, protected, references_section}` sections, defaulting to
+  Overview → Key Findings → Detailed Analysis → Conclusion → References, each written as a `##`
+  heading. It is rendered into the
+  report prompt, so a deployment can change section names, order, and what belongs in each. The
+  report opens with the Overview — what was asked, what was searched, the approach, and the short
+  answer — so a reader meets the work before the findings.
 - **Word ceiling with a review loop.** New graph nodes turn the single report step into
   `report → report-review → (report | END)`: the report node writes the first draft and later
   revisions, `report-review` judges the draft and returns either approval or concrete revision
   instructions. The existing nodes are renamed with it — `researcher` → `research-agent` and
   `reviewer` → `research-review` — so each name says which stage it belongs to and neither
-  review step can be mistaken for the other. Word counts are computed in Python (whitespace-separated tokens) and stated in
-  both prompts as numbers — "current 3,910 words, ceiling 2,750" — so the model never has to
-  count. Bounded by a new `max_report_versions` property; the last permitted version is
+  review step can be mistaken for the other. Word counts are computed in Python
+  (whitespace-separated tokens, with the inline citations and the section the structure marks
+  `references_section` removed first, so the ceiling bounds the prose rather than the sourcing) and
+  stated in both prompts as numbers — "current 3,910 words, ceiling 2,750" — so the
+  model never has to count. Bounded by a new `max_report_versions` property; the last permitted version is
   delivered as-is, without another review.
 - **No hard truncation.** No `max_tokens` cap is set on the report call, and a revision that
   shortens must rewrite to fit rather than cut — the report always ends at a clean boundary.
@@ -91,7 +96,7 @@ criterion is deferred, the reason is in design.md — Non-Goals.
 ### New Capabilities
 
 - `report-composition`: what a research report must look like and how that is enforced — the
-  configured section structure, the word ceiling and how the count is measured and fed back,
+  configured report structure, the word ceiling and how the count is measured and fed back,
   the prohibited meta-content, and the report review ↔ revise loop with its cap and its
   no-truncation rule.
 
@@ -101,7 +106,7 @@ criterion is deferred, the reason is in design.md — Non-Goals.
   in **Research runs as a deterministic graph launched after plan approval** change; and
   **Report node writes the final cited report and is the only assistant content** changes —
   the node no longer streams into the assistant content, the approved report is appended once,
-  and the section structure and word ceiling move to `report-composition`.
+  and the report structure and word ceiling move to `report-composition`.
 - `clarification-and-plan-alignment`: **start_research hard-gates and stops at readiness**
   gains the silent-handoff rule — once `start_research` succeeds, the preparation agent
   produces no further text for that turn. Gate-rejected calls are unaffected: the agent still

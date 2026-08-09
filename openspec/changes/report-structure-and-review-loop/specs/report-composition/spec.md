@@ -1,16 +1,25 @@
 ## Purpose
 
-Defines what a delivered research report looks like — the section structure it follows, the
+Defines what a delivered research report looks like — the report structure it follows, the
 word ceiling it respects, and the meta-annotations it must never carry — and the review ↔
 revise loop that enforces those rules on a finished draft before it reaches the user.
 
 ## ADDED Requirements
 
-### Requirement: Reports follow the configured section structure
+### Requirement: Reports follow the configured report structure
 
 The report SHALL be organized into the sections configured for the application instance
 (`default_report_structure`, see the **application-config-schema** capability), in the
 configured order, each rendered as a Markdown heading carrying the configured section name.
+
+**Heading levels are fixed.** Every configured section SHALL be a `##` heading carrying exactly
+its configured name — never `#`, never `###`, and never bold text standing in for a heading. A
+report SHALL carry no `#` heading at all, and sub-headings within a section SHALL be `###` or
+deeper. Both the report writer and the review step SHALL be given this rule, and the review step
+SHALL report a violation for a section written at any other level. The level is not decoration:
+the app finds the references section by its heading when measuring length, DIAL chat renders the
+report from its heading structure, and a report whose sections sit at differing levels reads as
+several documents.
 
 A section's configured **description is the single home for that section's rules**. Everything
 about what the section contains — its purpose, what to put in it, how to render it, any table
@@ -29,9 +38,15 @@ The references section's description SHALL carry the entry format for **every** 
 report may cite — publications and datasets alike — so that one description is the whole answer
 to how sources are listed.
 
-The default structure, used by an instance that configures none, SHALL be **Key Findings →
-Detailed Analysis → Conclusion → References**, with References protected and its description
-carrying the source-table rules.
+The default structure, used by an instance that configures none, SHALL be **Overview → Key
+Findings → Detailed Analysis → Conclusion → References**, with Overview and References protected
+and the References description carrying the source-table rules.
+
+The report SHALL open with the Overview, which answers "what was done, and what is the answer"
+before the findings arrive: the research question restated, the sources and topics the research
+covered and the approach taken to cover them, and the direct answer in a few sentences. It is a
+section like any other — the report-wide inline citation rule applies to it, and its own rules
+live in its description.
 
 Every configured section SHALL be present in the report. A section SHALL NOT be filled with
 text the findings do not support in order to make it appear; a section the findings leave
@@ -49,8 +64,8 @@ configured structure declares.
 #### Scenario: Default structure applies when nothing is configured
 
 - **WHEN** a research turn runs on an instance that does not configure a report structure
-- **THEN** the report SHALL carry the sections Key Findings, Detailed Analysis, Conclusion, and
-  References, as Markdown headings, in that order
+- **THEN** the report SHALL carry the sections Overview, Key Findings, Detailed Analysis,
+  Conclusion, and References, as Markdown headings, in that order
 
 #### Scenario: Configured structure replaces the default
 
@@ -73,6 +88,13 @@ configured structure declares.
 - **THEN** the references section SHALL still be present and SHALL state that no source was
   found, rather than being omitted or filled with invented entries
 
+#### Scenario: A section written at the wrong heading level is a violation
+
+- **WHEN** a draft writes a configured section as `# Conclusion` or as bold text instead of a
+  `##` heading
+- **THEN** the review step SHALL report it as a violation and a revision SHALL be required while
+  the version budget allows
+
 #### Scenario: A section the findings do not support is not padded
 
 - **WHEN** the findings leave a configured section with nothing substantive to say
@@ -89,8 +111,8 @@ content.
 A section is protected iff its configuration marks it so (`ReportSection.protected`, see the
 **application-config-schema** capability), and at least one section SHALL always be protected —
 configuration cannot yield a report whose every section a user may remove. The shipped default
-protects References. A deployment MAY protect further sections of its own, and protection then
-means the same thing for them.
+protects Overview and References. A deployment MAY protect further sections of its own, and
+protection then means the same thing for them.
 
 The inline citation format is protected report-wide rather than per section, because it applies
 to every section's body: no user instruction SHALL change it, and it is not configurable at all.
@@ -100,6 +122,12 @@ are part of its prompt, and either may carry an instruction about structure or f
 app SHALL therefore state the protection explicitly to **both** the report writer and the review
 step, alongside the configured sections and the query and plan those instructions may hide in,
 naming which sections may not be dropped or restyled.
+
+**Protection SHALL be stated as a rule of its own and SHALL NOT be rendered as a marker on a
+section's name.** The report writer is told to use the configured names as the report's headings,
+so anything attached to a name can be copied into the delivered report. Protection is a fact about
+the app's rules rather than part of what the report says, and it SHALL appear in no text a user
+sees.
 
 Precedence SHALL be: a user instruction applies to everything except the protected sections, their
 rules, and the report-wide rules of this capability — the word ceiling, the prohibited
@@ -137,6 +165,12 @@ requirement bounds what such a request can ever do, whenever it arrives.
   guaranteed by this change — following a requested format is issue #45's — but nothing about the
   brevity request may remove a protected section.
 
+#### Scenario: A reader never learns which sections are protected
+
+- **WHEN** a report is delivered from a structure whose References section is protected
+- **THEN** neither the section's heading nor any other text in the response SHALL mark it as
+  protected, and the protection SHALL be visible only in the rules the app gives its own models
+
 #### Scenario: A harmless format instruction is not treated as an override
 
 - **WHEN** a user asks for the analysis as a comparison table, touching no protected section
@@ -157,7 +191,9 @@ one INFO log record, so the loop's behavior is measurable without reading anyone
 **The stage** SHALL carry:
 
 - the draft number being reviewed (1 for the first draft, incrementing per revision);
-- the draft's measured word count and the configured ceiling, as numbers;
+- the draft's measured word count and the configured ceiling, as numbers, together with what the
+  count leaves out, named from the configured structure — a reader who counts the delivered report
+  themselves gets a larger number, and the stage SHALL say why;
 - the violations, as a numbered markdown list — one entry per violation (stage content renders
   as markdown). The list is everything the next revision must fix: the review model's violations,
   with the app-rendered length violation prepended when the measured count exceeds the ceiling.
@@ -236,8 +272,26 @@ the draft it judges.
 
 The report SHALL respect a configured word ceiling (`max_report_words`, default 2750, see the
 **application-config-schema** capability). A report's length SHALL be measured as the number of
-whitespace-separated tokens in its Markdown text, and that one definition SHALL be used
-everywhere a length is stated — in prompts and in logs alike.
+whitespace-separated tokens in its Markdown text **after removing the inline citations and the
+references section**, and that one definition SHALL be used everywhere a length is stated — in
+prompts, in the review stage and in logs alike.
+
+The ceiling bounds what the writer chooses to say. Neither removed part is that: a citation's
+length follows from the source it names, and the references section is as long as the research
+cited, so counting either would let a well-sourced report be revised for its sourcing.
+
+**The exemption follows the configuration, never the position alone.** The references section is
+the one the structure marks `references_section: true`, which only its last section may be, and a
+structure MAY declare none — a report whose closing section is prose has nothing exempt but its
+citations. The report writer SHALL be told what the count leaves out, rendered from the structure
+it was given, so a writer is never promised room the count does not give.
+
+Removing it SHALL require all of: the structure declares a references section; the draft carries a
+`##` heading — the level every section must use — whose text is that section's configured name.
+Everything from that heading to the end of the draft is then the section. A draft that renamed the
+section, omitted it, or wrote its heading at another level SHALL lose nothing from the count: each
+of those is a structure violation the review step reports, and a violation SHALL NOT also earn
+length budget.
 
 Length is never a model's judgement: it is measured in Python and enforced deterministically (see
 below). Where a model does need a length, it is supplied as a number rather than left for it to
@@ -307,6 +361,27 @@ together as one instruction.
 - **WHEN** a draft measures exactly 2,750 words against a ceiling of 2,750
 - **THEN** no revision SHALL be forced on length grounds
 
+#### Scenario: Citations and the references section do not consume the budget
+
+- **WHEN** a draft's Markdown holds 3,000 whitespace-separated tokens, of which 200 are inline
+  citations and 400 are its `## References` section, marked `references_section: true` in the
+  configured structure, against a ceiling of 2,750
+- **THEN** its measured length SHALL be 2,400 and no revision SHALL be forced on length grounds
+
+#### Scenario: A structure with no references section exempts only the citations
+
+- **WHEN** an instance configures a structure whose closing section is prose and whose every
+  section leaves `references_section` unset
+- **THEN** that closing section's words SHALL count toward the ceiling like any other, and the
+  report writer SHALL be told that only the inline citations are left out
+
+#### Scenario: A renamed or mis-levelled references section is measured with the rest
+
+- **WHEN** a draft heads its sources section `Bibliography`, or writes `# References` instead of
+  `## References`, while the configured references section is named `References`
+- **THEN** that section's words SHALL count toward the ceiling like any other, and the heading
+  SHALL be judged by the review step as a section-structure violation
+
 ### Requirement: Reports carry no meta-annotations about the research process
 
 The report SHALL NOT contain annotations about the research process or the model's own
@@ -341,7 +416,7 @@ own inference is content about the findings, not a rating of the research.
 ### Requirement: A review ↔ revise loop enforces the report rules before delivery
 
 A finished draft SHALL be judged by an independent review step before it is delivered. That
-step SHALL read the draft, the configured section structure, the protected sections, and the
+step SHALL read the draft, the configured report structure, the protected sections, and the
 research question and plan — the last two because they are where a user's formatting instruction
 lives, and without them the step cannot tell a legitimately-followed instruction from an
 override of a protected rule. It SHALL judge the draft against the configured structure, the

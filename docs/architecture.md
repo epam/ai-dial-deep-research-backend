@@ -180,15 +180,25 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   writes the first draft and every revision, branching on whether a draft already exists.
   Research-agent, research-review and report-review output never become assistant content;
   research-agent tool calls surface as timed DIAL stages.
-- **Section structure**: `default_report_structure` (an application property) — an ordered list of
-  `{name, description, protected}` sections, Key Findings → Detailed Analysis → Conclusion →
-  References by default. A section's `description` is the single home for its content rules and is
-  passed verbatim to both the report node and report-review. A protected section (References, by
-  default) may be neither dropped nor restyled by anything the user asked for; at least one section
-  must be protected.
-- **Word ceiling**: `max_report_words` (default 2750). A length is the number of
-  whitespace-separated tokens in the report Markdown, counted in Python and given to the report
-  node as a number, so no model has to count; report-review never sees the count — the app itself
+- **Report structure**: `default_report_structure` (an application property) — an ordered list of
+  `{name, description, protected, references_section}` sections, Overview → Key Findings →
+  Detailed Analysis → Conclusion → References by default. Every section is rendered as a `##`
+  heading; report-review checks the level as well as the name. A section's `description` is the
+  single home for its content rules and is passed verbatim to both the report node and
+  report-review. A protected section (Overview and References, by default) may be neither dropped
+  nor restyled by anything the user asked for; at least one section must be protected. Both models
+  are told which sections are protected as a rule of their own — the marker is never rendered next
+  to a section name, which the report node is told to use as the heading. `references_section`
+  marks the report's sources listing; only the last section may set it, and a structure may
+  declare none.
+- **Word ceiling**: `max_report_words` (default 2750). A report's length is the number of
+  whitespace-separated tokens left after dropping the inline citations and the references section,
+  so the ceiling bounds the report's prose rather than its sourcing — `count_report_words` in
+  `app/research/report_length.py` is the one definition. The references section is dropped only
+  when the structure declares one and the draft wrote it as a `##` heading under its configured
+  name; a renamed, missing, or wrongly-levelled heading is measured with the rest, so a structure
+  violation earns no length budget. The count is computed in Python and given to the report node
+  as a number, so no model has to count; report-review never sees the count — the app itself
   prepends the length violation when the count exceeds the ceiling. The ceiling is enforced by
   rewriting, never by truncation: no token cap is placed on the report call, and a shortening
   revision rewrites to fit instead of cutting, so the report ends at a clean boundary. A draft over

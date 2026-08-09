@@ -19,7 +19,7 @@
 - [x] 2.4 `research/tools.py`: `FINISH_ITERATION_RESULT` is **model-visible** and reads "handing off to the reviewer" — ambiguous with two reviewers; also its module docstring and tool docstring
 - [x] 2.5 `research/__init__.py` docstring ("researcher → reviewer → report")
 - [x] 2.6 `tests/test_agent_logging.py` (the `agent=researcher` assertions) and `tests/test_research_routing.py` (it imports `route_after_review`, so the suite fails to import until it is renamed — task 2.8's grep does not catch an import)
-- [x] 2.7 `docs/architecture.md` — **names only** in this group: the researcher/reviewer role prose and the quoted spec sentence. Its behavior claims are updated later, in 11.6. (The file is untracked in the working tree, so check for conflicting edits first)
+- [x] 2.7 `docs/architecture.md` — **names only** in this group: the researcher/reviewer role prose and the quoted spec sentence. Its behavior claims are updated later, in 12.6. (The file is untracked in the working tree, so check for conflicting edits first)
 - [x] 2.8 Grep `src`, `tests`, `docs` for surviving `researcher`/`reviewer` and confirm each remaining hit is intentional role prose, not a node id
 
 ## 3. Report content rules
@@ -99,11 +99,24 @@
 - [x] 10.11 The persisted slice: given a final graph state carrying only `report` text and no report `AIMessage`, the slice the runner returns still ends with an `AIMessage` holding the delivered report. This is the assertion that makes the 6.3/7.3 pairing verifiable — today's `test_persisted_slice_comes_from_the_last_root_values` hand-builds that message, so it cannot catch its absence
 - [x] 10.12 report-review's inputs: no `ToolMessage`, no transcript message and no image block reach the call; it receives `plans[0]` only; the draft and its measured count are the last content in the user message
 
-## 11. Verification and docs
+## 11. Overview section, and what the ceiling measures
 
-- [x] 11.1 Confirm the CLAUDE.md convention on stating each LLM call's inputs and outputs is present (already applied in the working tree)
-- [x] 11.2 `make format` and `make lint` clean, including the schema drift check
-- [x] 11.3 `make test` green
-- [ ] 11.4 Run a real turn with `scripts/send_conversation.py` and check by eye: the answer is the report alone, sections match the configuration, the references section is present, no meta-annotations, and the review stage shows the counts and findings
-- [ ] 11.5 Read the INFO log of that run against the skeleton: report-generated and report-reviewed present with their counts, and no report or finding text anywhere
-- [x] 11.6 Update `docs/architecture.md` for the behavior this change alters: four nodes instead of three, the report ↔ report-review loop and its edges, the report-review stage, the report appended once rather than streamed (two places say "streamed"), and the revised outer step-budget bound
+- [x] 11.1 Add an `Overview` section at the head of `DEFAULT_REPORT_STRUCTURE`, `protected=True`: the question restated, the sources and topics covered and the approach taken, then the direct answer in a few sentences. Cited like every other section — the report-wide citation rule is not relaxed for it
+- [x] 11.2 Add `ReportSection.references_section: bool = False` and set it on the default References section, with a validator allowing it only on the last section — a structure may declare none. Add `references_section(sections)` beside the model as the single place that looks it up
+- [x] 11.3 Add `app/research/report_length.py`: `strip_inline_citations` and `count_report_words(draft, sections)` — cut the draft at the `##` heading matching the declared references section, strip the citations, then `count_words`. A structure declaring none, a renamed heading, or a heading at another level all cut nothing, so a structure violation earns no length budget. Correct the `count_words` docstring, which claimed to be the one definition of a report's length
+- [x] 11.4 Route every stated report length through it: the revision request, report-review's ceiling gate and outcome, the unreviewed-delivery stage, both log records
+- [x] 11.5 Stop rendering `— PROTECTED` beside a section name in `render_report_structure`; protection stays stated by name in the precedence rule of both prompts. Add `render_length_exemptions`, rendered from the configured structure, so a structure with no references section is told only the citations are exempt
+- [x] 11.6 Fix the heading level in both prompts: the report writer writes every section as `##` (no `#` anywhere, sub-headings `###` or deeper), and report-review gains a check for it. Report-review is told nothing about the length exemptions — length is not its to judge, and it is given neither the count nor the ceiling
+- [x] 11.7 Carry the exemptions through `ReportReviewOutcome` into both review stage bodies, so the stage states the measure it shows instead of asserting an exemption that may not apply
+- [x] 11.8 Add `Overview` and the References `references_section` flag to `dial_conf/core/applications-template.json`; regenerate `docs/generated-app-schema.json`
+- [x] 11.9 Tests: the five defaults with their flags, the misplaced-`references_section` rejection, a structure declaring none, `tests/test_report_length.py` for the citation and references-section rules including the wrong-heading-level cases, the absence of any marker in the rendered structure, and a draft over the raw count but within the measured one. Fix the two `tests/test_dial_stages.py` assertions that were already failing at HEAD on the review-failure wording
+- [x] 11.10 Update `docs/architecture.md`: the default structure with its flags, the `##` rule, and what a counted word is
+
+## 12. Verification and docs
+
+- [x] 12.1 Confirm the CLAUDE.md convention on stating each LLM call's inputs and outputs is present (already applied in the working tree)
+- [x] 12.2 `make format` and `make lint` clean, including the schema drift check
+- [x] 12.3 `make test` green
+- [ ] 12.4 Run a real turn with `scripts/send_conversation.py` and check by eye: the answer is the report alone, sections match the configuration, the references section is present, no meta-annotations, and the review stage shows the counts and findings
+- [ ] 12.5 Read the INFO log of that run against the skeleton: report-generated and report-reviewed present with their counts, and no report or finding text anywhere
+- [x] 12.6 Update `docs/architecture.md` for the behavior this change alters: four nodes instead of three, the report ↔ report-review loop and its edges, the report-review stage, the report appended once rather than streamed (two places say "streamed"), and the revised outer step-budget bound

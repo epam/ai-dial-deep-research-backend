@@ -69,6 +69,15 @@ Override `--timeout` as needed.
 ## Conventions
 
 - **LLM prompts use triple-quoted multiline strings**, not adjacent/parenthesized string-literal concatenation. Do **not** escape newlines with trailing backslashes to join wrapped lines — let long lines wrap as real newlines (harmless inside an LLM prompt) and keep each source line within the 100-col limit. A leading `"""\` to avoid a blank first line is fine. This keeps prompt copy readable and diff-friendly. Applies to system prompts (`app/preparation/prompts.py`, `app/research/prompts.py`) and any injected/middleware prompt text.
+- **Wrap injected prompt content in XML tags.** Any value the app substitutes into a prompt that
+  is long, multi-line, or carries formatting of its own — a report draft, the rendered section
+  structure, a findings log, the user's question, a plan, a topics map — goes inside a named tag
+  (`<draft>…</draft>`, `<report_structure>…</report_structure>`). The tags mark where the value
+  begins and ends, so its headings, bullets or numbering cannot be read as part of the
+  instructions around it. Use lowercase snake_case tag names that say what the value is. Short
+  scalars — a word count, a ceiling, a comma-separated list of names — stay inline; a tag around
+  a number is noise. One exception to weigh: a tool message the agent is told to reproduce
+  verbatim to the user, where a tag can leak into the reply.
 - **No new aliases on pydantic-settings fields** — rely on the default field-name → env-var mapping (with the class's `env_prefix`). E.g. `heartbeat_interval` under `env_prefix=""` reads `HEARTBEAT_INTERVAL`.
 - **LLM structured-output schemas put the verdict last.** Order fields so a decision/verdict field comes *after* the supporting content that justifies it — the model emits fields in schema order, so reasoning-first yields better decisions. E.g. `questions` before `sufficient`; `revised_plan` (or `problems_found`) before `approved` (or `verdict`). Among the supporting fields themselves, order by logical precedence — a precondition/gating check before any check that only matters once it holds (e.g. `recorded_plan_matches` before `user_approved_a_plan`). Pydantic v2 allows a required field after defaulted ones, so the ordering is free.
 - **Logging follows the `logging-policy` spec** (`openspec/specs/logging-policy/spec.md`):

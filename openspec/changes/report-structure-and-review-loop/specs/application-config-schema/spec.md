@@ -13,7 +13,7 @@ SHALL expose:
   capability's step-budget requirement for what it counts).
 - `default_report_structure: list[ReportSection]` — the ordered sections a report follows when
   the user asks for no particular format, constrained `min_length=1`. `ReportSection` is a
-  nested model with three fields:
+  nested model with four fields:
   - `name: str` — required, non-empty (`min_length=1`); the section's heading in the report.
   - `description: str` — required, non-empty (`min_length=1`); everything the report writer and
     the review step need to know about this section's content. It is the **single home** for that
@@ -21,17 +21,24 @@ SHALL expose:
     instructions.
   - `protected: bool` — default `False`; whether user instructions may drop or restyle this
     section (see the **report-composition** capability's protected-sections requirement).
+  - `references_section: bool` — default `False`; whether this section is the report's list of
+    sources. It declares what the section *is*, not what the app does with it: the consequence —
+    that its words do not count toward `max_report_words` — is defined by the **report-composition**
+    capability's ceiling requirement, and in every other respect the section behaves like any other.
 
-  The default value SHALL be the four sections Key Findings, Detailed Analysis, Conclusion, and
-  References, each with its description; References SHALL default to `protected: true`, and its
+  The default value SHALL be the five sections Overview, Key Findings, Detailed Analysis,
+  Conclusion, and References, each with its description. Overview and References SHALL default to
+  `protected: true`, References SHALL default to `references_section: true`, and the References
   description SHALL carry the entry format for every source type a report may cite — publications
   and datasets alike — including what each entry decodes and the columns it carries.
 
   The list SHALL be constrained to contain at least one section with `protected: true`, so no
-  configuration can produce a report whose every section a user instruction may remove. Section
-  `name`s SHALL be unique across the list — as MCP `server_name`s already are — since duplicate
-  headings make "every configured section is present" and the review step's ordered-section check
-  ambiguous.
+  configuration can produce a report whose every section a user instruction may remove. **Only the
+  last section MAY set `references_section: true`**, since a report lists its sources at the end; a
+  structure MAY set it on no section at all, and then nothing is exempt from the word count.
+  Section `name`s SHALL be unique across the list — as MCP `server_name`s already are — since
+  duplicate headings make "every configured section is present" and the review step's
+  ordered-section check ambiguous.
 - `max_report_words: int` — default `2750`, constrained `ge=1`; the report's word ceiling (see
   the **report-composition** capability for how a word is counted and how the ceiling is
   enforced).
@@ -63,9 +70,10 @@ lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
 
 - **WHEN** `ApplicationProperties.model_validate` receives an object that configures no report
   properties
-- **THEN** validation SHALL succeed, `default_report_structure` SHALL be the four default
-  sections in order (Key Findings, Detailed Analysis, Conclusion, References) with References
-  carrying `protected: true` and the source-table rules in its description, `max_report_words`
+- **THEN** validation SHALL succeed, `default_report_structure` SHALL be the five default
+  sections in order (Overview, Key Findings, Detailed Analysis, Conclusion, References) with
+  Overview and References carrying `protected: true`, References alone carrying
+  `references_section: true` and the source-table rules in its description, `max_report_words`
   SHALL equal `2750`, and `max_report_versions` SHALL equal `3`
 
 #### Scenario: Empty report structure is rejected
@@ -80,6 +88,19 @@ lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
   every section leaves `protected` at its default of `False`
 - **THEN** validation SHALL raise a pydantic `ValidationError` naming
   `default_report_structure` and stating that at least one section must be protected
+
+#### Scenario: A references section before the last one is rejected
+
+- **WHEN** `ApplicationProperties.model_validate` receives a `default_report_structure` where a
+  section other than the last sets `references_section: true`
+- **THEN** validation SHALL raise a pydantic `ValidationError` stating that only the last section
+  may set it, and naming the misplaced section
+
+#### Scenario: A structure with no references section validates
+
+- **WHEN** an instance configures a structure whose every section leaves `references_section` at
+  its default of `False`
+- **THEN** validation SHALL succeed, and nothing SHALL be exempt from the word count
 
 #### Scenario: Duplicate section names are rejected
 

@@ -10,7 +10,7 @@ What is protected here:
 - The report-review node absorbs its own failures, routes on the app-measured word count whatever
   the model said, emits one stage per review, and sees neither the findings nor a plan
   research-review authored.
-- The configured section structure reaches both prompts verbatim.
+- The configured report structure reaches both prompts verbatim.
 
 Routing itself lives in `test_research_routing.py`; the stage's rendering in `test_dial_stages.py`.
 """
@@ -35,6 +35,7 @@ from dial_deep_research.app.research.nodes import ReportReviewOutcome
 from dial_deep_research.app.research.prompts import (
     REPORT_SYSTEM_PROMPT,
     ReportReview,
+    render_length_exemptions,
     render_protected_section_names,
     render_report_structure,
 )
@@ -340,6 +341,35 @@ async def test_an_approving_review_cannot_pass_an_over_ceiling_draft(
     assert outcome.error is None
 
 
+async def test_citations_and_the_sources_section_do_not_push_a_draft_over_the_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Six counted words (the heading's two included) against a ceiling of six; the citation and
+    # the closing sources section are outside the measure, so this draft is delivered as it stands.
+    draft = (
+        "## Summary\n\nThe rate rose sharply [doc 150, page 3].\n\n"
+        "## Sources\n\n| doc id | title |\n| 150 | The annual report on rates |\n"
+    )
+    sections = [
+        *_CUSTOM_SECTIONS,
+        ReportSection(
+            name="Sources",
+            description="The cited sources.",
+            protected=True,
+            references_section=True,
+        ),
+    ]
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
+    node, stages = _review_node(llm, monkeypatch, sections=sections, max_words=6)
+
+    result = await node(_state(report=draft))
+
+    assert result["report_revision_instruction"] is None
+    [outcome] = stages
+    assert outcome.word_count == 6
+    assert outcome.violations == []
+
+
 async def test_a_failed_review_call_still_shortens_an_over_long_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -481,16 +511,18 @@ def test_render_report_structure_keeps_names_and_descriptions_verbatim_in_order(
     assert "Key Findings" not in rendered
 
 
-def test_render_report_structure_marks_the_protected_sections() -> None:
+def test_render_report_structure_carries_no_marker_on_a_section_name() -> None:
+    # The prompt tells the writer to use these names as the report's headings, so a name is
+    # rendered alone; protection is stated by the prompt's own precedence rule instead.
     rendered = render_report_structure(_CUSTOM_SECTIONS)
 
-    assert "Evidence — PROTECTED" in rendered
-    assert "Summary — PROTECTED" not in rendered
+    assert "PROTECTED" not in rendered
+    assert "## Evidence\n" in rendered
 
 
 def test_render_protected_section_names_lists_only_the_protected_ones() -> None:
     assert render_protected_section_names(_CUSTOM_SECTIONS) == "Evidence"
-    assert render_protected_section_names(DEFAULT_REPORT_STRUCTURE) == "References"
+    assert render_protected_section_names(DEFAULT_REPORT_STRUCTURE) == "Overview, References"
     two_protected = [
         _CUSTOM_SECTIONS[0],
         _CUSTOM_SECTIONS[1],
@@ -499,11 +531,22 @@ def test_render_protected_section_names_lists_only_the_protected_ones() -> None:
     assert render_protected_section_names(two_protected) == "Evidence, Outlook"
 
 
+def test_render_length_exemptions_follows_the_configured_structure() -> None:
+    assert (
+        render_length_exemptions(DEFAULT_REPORT_STRUCTURE)
+        == "the inline citations and the References section"
+    )
+    # A structure that declares no references section has nothing exempt but the citations —
+    # promising its writer more would promise room the count does not give.
+    assert render_length_exemptions(_CUSTOM_SECTIONS) == "the inline citations"
+
+
 def test_report_system_prompt_states_the_ceiling_and_the_protected_names() -> None:
     prompt = REPORT_SYSTEM_PROMPT.format(
         today_date=_TODAY,
         report_structure=render_report_structure(DEFAULT_REPORT_STRUCTURE),
         max_words=2750,
+        length_exemptions=render_length_exemptions(DEFAULT_REPORT_STRUCTURE),
         protected_sections=render_protected_section_names(DEFAULT_REPORT_STRUCTURE),
     )
 

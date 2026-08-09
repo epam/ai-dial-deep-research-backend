@@ -77,13 +77,15 @@ class DialStageReportReviewFormatter:
         draft_number: int,
         word_count: int,
         max_words: int,
+        length_exemptions: str,
         violations: Sequence[str],
         error: str | None,
     ) -> str:
         lines = [
             f"**Draft** {draft_number}",
             "",
-            f"**Length** {word_count} words (ceiling {max_words})",
+            f"**Length** {word_count} words, excluding {length_exemptions}"
+            f" (ceiling {max_words})",
             "",
         ]
         if error is not None:
@@ -110,13 +112,20 @@ class DialStageReportReviewFormatter:
 
     @classmethod
     def format_unreviewed_body(
-        cls, *, draft_number: int, word_count: int, max_words: int, max_versions: int
+        cls,
+        *,
+        draft_number: int,
+        word_count: int,
+        max_words: int,
+        length_exemptions: str,
+        max_versions: int,
     ) -> str:
         return "\n".join(
             [
                 f"**Draft** {draft_number}",
                 "",
-                f"**Length** {word_count} words (ceiling {max_words})",
+                f"**Length** {word_count} words, excluding {length_exemptions}"
+                f" (ceiling {max_words})",
                 "",
                 f"**Verdict** none — the version budget ({max_versions}) is exhausted, so this"
                 " draft is delivered without review. The previous review's findings may remain"

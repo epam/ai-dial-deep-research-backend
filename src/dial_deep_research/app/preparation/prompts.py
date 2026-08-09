@@ -111,7 +111,9 @@ data sources available — nothing outside this list is reachable during researc
 Use the descriptions as a topic map — hints on where to find relevant information.
 When the user asks where data might come from, answer from this list only.
 
+<data_sources>
 {data_sources_descriptions}
+</data_sources>
 """
 
 QUERY_REVIEW_SYSTEM = """\
@@ -190,7 +192,9 @@ the user wants months or exact days, they will say so.
 
 ## Available data sources
 
+<data_sources>
 {data_sources_descriptions}
+</data_sources>
 """
 
 

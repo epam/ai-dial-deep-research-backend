@@ -11,6 +11,7 @@ artifact of the same schema, kept in sync by `scripts/dump_app_schema.py`.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Annotated, Any
 
 from pydantic import (
@@ -156,6 +157,13 @@ class ReportSection(BaseModel):
         " neither dropped nor restyled by anything the user asked for, and neither can the rules in"
         " its description. At least one section must be protected.",
     )
+    references_section: bool = Field(
+        default=False,
+        description="Whether this section is the report's list of sources. Only the last section"
+        " may be one, and a structure need not have one at all. Its length follows from how much"
+        " the research cited rather than from what the report chose to say, so its words do not"
+        " count toward max_report_words; in every other way it is a section like any other.",
+    )
 
 
 # The references section's description owns the source-entry rules for every type a report may
@@ -171,6 +179,14 @@ section itself is always written: if the research cited no source at all, say so
 rather than leaving the section out or inventing entries."""
 
 DEFAULT_REPORT_STRUCTURE: list[ReportSection] = [
+    ReportSection(
+        name="Overview",
+        description="What the report set out to answer, what was searched to answer it, and the"
+        " short answer. Restate the research question, name the sources and topics the research"
+        " covered and the approach taken to cover them, then answer the question directly in two"
+        " to four sentences. Keep it brief — the findings and the analysis follow below.",
+        protected=True,
+    ),
     ReportSection(
         name="Key Findings",
         description="A brief summary of what the research found, leading with the direct answer to"
@@ -192,8 +208,19 @@ DEFAULT_REPORT_STRUCTURE: list[ReportSection] = [
         name="References",
         description=_REFERENCES_DESCRIPTION,
         protected=True,
+        references_section=True,
     ),
 ]
+
+
+def references_section(sections: Sequence[ReportSection]) -> ReportSection | None:
+    """The structure's references section, or `None` when it declares none.
+
+    Only the last section may be one (`ApplicationProperties._validate_report_structure`), so this
+    is the single place that has to know where to look for it.
+    """
+    last = sections[-1] if sections else None
+    return last if last is not None and last.references_section else None
 
 
 class Prompts(BaseModel):
@@ -237,18 +264,21 @@ class ApplicationProperties(BaseModel):
     default_report_structure: list[ReportSection] = Field(
         default=DEFAULT_REPORT_STRUCTURE,
         min_length=1,
-        description="The ordered sections a report follows, each rendered as a Markdown heading."
-        " Section names must be unique, and at least one section must be protected. Report-wide"
-        " rules (the word ceiling, the ban on confidence scores and processing times, the inline"
-        " citation format) are not configured here — only the sections and what belongs in them.",
+        description="The ordered sections a report follows, each rendered as a Markdown `##`"
+        " heading. Section names must be unique, at least one section must be protected, and only"
+        " the last section may set references_section. Report-wide rules (the word ceiling, the"
+        " ban on confidence scores and processing times, the inline citation format) are not"
+        " configured here — only the sections and what belongs in them.",
     )
     max_report_words: int = Field(
         default=2750,
         ge=1,
         description="The report's word ceiling, counted as whitespace-separated tokens of the"
-        " report's Markdown. Enforced by reviewing the finished report and revising it, never by"
-        " cutting text off: a report over the ceiling is rewritten to fit while the version budget"
-        " allows, and always ends at a complete sentence.",
+        " report's Markdown. The count leaves out the inline citations, and the references section"
+        " where the structure declares one, so it measures the report's prose rather than its"
+        " sourcing. Enforced by reviewing the finished report and revising it, never by cutting"
+        " text off: a report over the ceiling is rewritten to fit while the version budget allows,"
+        " and always ends at a complete sentence.",
     )
     max_report_versions: int = Field(
         default=3,
@@ -276,19 +306,28 @@ class ApplicationProperties(BaseModel):
 
     @model_validator(mode="after")
     def _validate_report_structure(self) -> ApplicationProperties:
-        """Unique section names, and at least one protected section.
+        """Unique section names, at least one protected section, and the references section last.
 
         Uniqueness mirrors `_validate_unique_server_names`: duplicate headings make "every
         configured section is present" ambiguous. The protected-section floor keeps configuration
-        from producing a report whose every section a user instruction may remove.
+        from producing a report whose every section a user instruction may remove. A report lists
+        its sources at the end, so at most one section may be the references section and it must be
+        the last — a structure may also have none, and then nothing is exempt from the word count.
         """
-        names = [section.name for section in self.default_report_structure]
+        sections = self.default_report_structure
+        names = [section.name for section in sections]
         duplicates = sorted({name for name in names if names.count(name) > 1})
         if duplicates:
             raise ValueError(f"duplicate report section name(s): {duplicates}")
-        if not any(section.protected for section in self.default_report_structure):
+        if not any(section.protected for section in sections):
             raise ValueError(
                 "default_report_structure must contain at least one section with protected=true"
+            )
+        misplaced = [section.name for section in sections[:-1] if section.references_section]
+        if misplaced:
+            raise ValueError(
+                "only the last section may set references_section=true;"
+                f" misplaced section(s): {misplaced}"
             )
         return self
 

@@ -40,7 +40,6 @@ from dial_deep_research.settings import settings
 from dial_deep_research.utils.agent_logging import agent_logging_middleware
 from dial_deep_research.utils.content import (
     count_image_blocks,
-    count_words,
     extract_text_from_content,
 )
 from dial_deep_research.utils.llm import (
@@ -60,14 +59,17 @@ from .prompts import (
     REPORT_REVISION_REQUEST,
     REPORT_SYSTEM_PROMPT,
     RESEARCH_AGENT_SYSTEM_PROMPT,
+    RESEARCH_REVIEW_HUMAN_MESSAGE,
     RESEARCH_REVIEW_SYSTEM_PROMPT,
     ReportReview,
     ResearchReview,
+    render_length_exemptions,
     render_next_instruction,
     render_plan,
     render_protected_section_names,
     render_report_structure,
 )
+from .report_length import count_report_words
 from .state import ResearchState
 
 logger = logging.getLogger(__name__)
@@ -152,17 +154,14 @@ def make_research_review_node(today_date: str) -> ResearchReviewNode:
         plans_text = "\n\n".join(
             f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
         )
-        # Order sections stable → append-only so successive research-review calls in a run share a
-        # byte prefix (question, then the growing findings) that the provider's prompt cache
-        # can reuse; the small plans list, which also only grows, comes last.
         result: dict[str, Any] = await llm.ainvoke(
             [
                 SystemMessage(content=RESEARCH_REVIEW_SYSTEM_PROMPT.format(today_date=today_date)),
                 HumanMessage(
-                    content=(
-                        f"Research question:\n{state['original_query']}\n\n"
-                        f"Findings gathered:\n{_render_findings(state['messages'])}\n\n"
-                        f"Plans pursued so far:\n{plans_text}"
+                    content=RESEARCH_REVIEW_HUMAN_MESSAGE.format(
+                        query=state["original_query"],
+                        findings=_render_findings(state["messages"]),
+                        plans=plans_text,
                     )
                 ),
             ]
@@ -206,9 +205,10 @@ class ReportReviewOutcome(BaseModel):
     """One report review's result, handed to the runner so it can render a DIAL stage.
 
     Carries no DIAL types: the node decides what to report, the runner decides how it is
-    rendered. `violations` is everything the next revision must fix — the review model's
-    violations, with the app-measured length violation prepended when the draft exceeds the
-    ceiling. `error` records a failed review call (the exception kind); the length violation
+    rendered. `length_exemptions` names what `word_count` leaves out, so the stage can state the
+    measure it shows rather than let a reader count the report and find a different number.
+    `violations` is everything the next revision must fix — the review model's violations, with
+    the app-measured length violation prepended when the draft exceeds the ceiling. `error` records a failed review call (the exception kind); the length violation
     joins the list regardless, so a failed call still carries it. The violation text belongs
     in the stage only — never in a log record, per the logging-policy content allowlist.
     """
@@ -216,6 +216,7 @@ class ReportReviewOutcome(BaseModel):
     draft_number: int
     word_count: int
     max_words: int
+    length_exemptions: str
     violations: list[str]
     error: str | None
     duration_seconds: float
@@ -266,6 +267,7 @@ def make_report_node(
                     today_date=today_date,
                     report_structure=render_report_structure(sections),
                     max_words=max_words,
+                    length_exemptions=render_length_exemptions(sections),
                     protected_sections=render_protected_section_names(sections),
                 )
             ),
@@ -280,8 +282,9 @@ def make_report_node(
             report_messages.append(
                 HumanMessage(
                     content=REPORT_REVISION_REQUEST.format(
-                        word_count=count_words(previous_draft),
+                        word_count=count_report_words(previous_draft, sections),
                         max_words=max_words,
+                        length_exemptions=render_length_exemptions(sections),
                         instruction=state.get("report_revision_instruction") or "",
                         draft=previous_draft,
                     )
@@ -310,7 +313,7 @@ def make_report_node(
             draft_number,
             time.monotonic() - start,
             len(text),
-            count_words(text),
+            count_report_words(text, sections),
             format_token_usage(response.usage_metadata),
         )
         # No `AIMessage` into `messages`: drafts stay out of the transcript, so a rejected one
@@ -337,7 +340,7 @@ def make_report_review_node(
     async def report_review(state: ResearchState) -> dict[str, Any]:
         start = time.monotonic()
         draft = state["report"] or ""
-        word_count = count_words(draft)
+        word_count = count_report_words(draft, sections)
         draft_number = state.get("report_version", 0)
 
         violations: list[str] = []
@@ -385,7 +388,11 @@ def make_report_review_node(
             # list whether the model reported one, reported none, or the call failed — so an
             # approving review cannot pass an over-long draft, and a failed one still shortens it.
             violations = [
-                LENGTH_REVISION_INSTRUCTION.format(word_count=word_count, max_words=max_words),
+                LENGTH_REVISION_INSTRUCTION.format(
+                    word_count=word_count,
+                    max_words=max_words,
+                    length_exemptions=render_length_exemptions(sections),
+                ),
                 *violations,
             ]
         duration = time.monotonic() - start
@@ -393,6 +400,7 @@ def make_report_review_node(
             draft_number=draft_number,
             word_count=word_count,
             max_words=max_words,
+            length_exemptions=render_length_exemptions(sections),
             violations=violations,
             error=error,
             duration_seconds=duration,

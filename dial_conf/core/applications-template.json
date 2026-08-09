@@ -8,6 +8,11 @@
         "max_research_graph_steps": 500,
         "default_report_structure": [
           {
+            "name": "Overview",
+            "description": "What the report set out to answer, what was searched to answer it, and the short answer. Restate the research question, name the sources and topics the research covered and the approach taken to cover them, then answer the question directly in two to four sentences. Keep it brief — the findings and the analysis follow below.",
+            "protected": true
+          },
+          {
             "name": "Key Findings",
             "description": "A brief summary of what the research found, leading with the direct answer to the user's question where the findings support one. Short paragraphs or bullets, not a retelling of the analysis that follows.",
             "protected": false
@@ -25,7 +30,8 @@
           {
             "name": "References",
             "description": "Decode every source cited in the report. If any document was cited, add a Sources table decoding each `doc <id>`, with columns `doc id`, `title`, `publication date`. If any dataset was cited, add a separate Datasets table below it, with columns `dataset id`, `title`. Each table lists only the sources of its type actually cited above, so a type with nothing cited drops its own table. The section itself is always written: if the research cited no source at all, say so plainly here rather than leaving the section out or inventing entries.",
-            "protected": true
+            "protected": true,
+            "references_section": true
           }
         ],
         "max_report_words": 2750,

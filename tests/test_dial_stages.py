@@ -68,11 +68,13 @@ class TestReportReviewStage:
             draft_number=1,
             word_count=3910,
             max_words=2750,
+            length_exemptions="the inline citations and the References section",
             violations=["The draft is over the ceiling.", "Two lines:\nthe second one."],
             error=None,
         )
         assert "**Draft** 1" in body
-        assert "3910 words (ceiling 2750)" in body
+        assert "3910 words, excluding the inline citations and the References section" in body
+        assert "(ceiling 2750)" in body
         assert "1. The draft is over the ceiling." in body
         assert "2. Two lines:\nthe second one." in body
         # No fencing: stage content renders as markdown, so the list renders as a list.
@@ -80,16 +82,27 @@ class TestReportReviewStage:
 
     def test_body_records_an_approval_when_there_are_no_violations(self) -> None:
         body = DialStageReportReviewFormatter.format_body(
-            draft_number=1, word_count=900, max_words=2750, violations=[], error=None
+            draft_number=1,
+            word_count=900,
+            max_words=2750,
+            length_exemptions="the inline citations and the References section",
+            violations=[],
+            error=None,
         )
-        assert "900 words (ceiling 2750)" in body
+        assert "900 words, excluding the inline citations and the References section" in body
+        assert "(ceiling 2750)" in body
         assert "satisfies every check" in body
 
     def test_body_records_a_failed_call_without_claiming_an_approval(self) -> None:
         body = DialStageReportReviewFormatter.format_body(
-            draft_number=1, word_count=900, max_words=2750, violations=[], error="RuntimeError"
+            draft_number=1,
+            word_count=900,
+            max_words=2750,
+            length_exemptions="the inline citations and the References section",
+            violations=[],
+            error="RuntimeError",
         )
-        assert "❌ **Error** the review call failed (RuntimeError)" in body
+        assert "❌ **Error** the LLM review call failed (RuntimeError)" in body
         assert "satisfies every check" not in body
 
     def test_body_shows_both_the_failure_and_the_length_violation(self) -> None:
@@ -97,10 +110,11 @@ class TestReportReviewStage:
             draft_number=1,
             word_count=3910,
             max_words=2750,
+            length_exemptions="the inline citations and the References section",
             violations=["The draft is 3910 words, over the 2750-word ceiling."],
             error="RuntimeError",
         )
-        assert "❌ **Error** the review call failed (RuntimeError)" in body
+        assert "❌ **Error** the LLM review call failed (RuntimeError)" in body
         assert "1. The draft is 3910 words" in body
 
     def test_unreviewed_delivery_has_its_own_title_without_a_duration(self) -> None:
@@ -109,10 +123,15 @@ class TestReportReviewStage:
 
     def test_unreviewed_delivery_body_names_the_exhausted_budget(self) -> None:
         body = DialStageReportReviewFormatter.format_unreviewed_body(
-            draft_number=3, word_count=2100, max_words=2750, max_versions=3
+            draft_number=3,
+            word_count=2100,
+            max_words=2750,
+            length_exemptions="the inline citations and the References section",
+            max_versions=3,
         )
         assert "**Draft** 3" in body
-        assert "2100 words (ceiling 2750)" in body
+        assert "2100 words, excluding the inline citations and the References section" in body
+        assert "(ceiling 2750)" in body
         assert "budget (3)" in body
         assert "delivered without review" in body
 

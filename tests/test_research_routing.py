@@ -79,6 +79,7 @@ def _outcome(**overrides: Any) -> ReportReviewOutcome:
         "draft_number": 1,
         "word_count": 900,
         "max_words": 2750,
+        "length_exemptions": "the inline citations and the References section",
         "violations": [],
         "error": None,
         "duration_seconds": 1.0,
