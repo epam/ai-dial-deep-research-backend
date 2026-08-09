@@ -6,7 +6,6 @@ from typing import Any
 
 from pydantic import BaseModel
 
-_PREFIX = "[TOOL]"
 _RESULT_EMOJI = "✅"
 _ERROR_EMOJI = "❌"
 _WARNING_EMOJI = "⚠️"
@@ -127,12 +126,14 @@ class DialStageReportReviewFormatter:
 
 
 class DialStageToolCallFormatter:
+    _PREFIX = "[TOOL]"
+
     @classmethod
     def format_title(
         cls, tool_name: str, start: datetime, end: datetime, is_error: bool = False
     ) -> str:
         action = f"error {_ERROR_EMOJI}" if is_error else f"result {_RESULT_EMOJI}"
-        return timed_stage_title(f'{_PREFIX} "{tool_name}" - {action}', start, end)
+        return timed_stage_title(f'{cls._PREFIX} "{tool_name}" - {action}', start, end)
 
     @classmethod
     def format_body(cls, *, args_json: str, content: object, is_error: bool) -> str:
