@@ -1,8 +1,8 @@
 """ResearchRunner streaming-dispatch unit tests.
 
 Exercise the routing logic without a live graph: only the report node's tokens
-become content, researcher tool calls become stages (finish_iteration excluded),
-reviewer-injected plans are not shown, and messages arriving twice (from the
+become content, research-agent tool calls become stages (finish_iteration excluded),
+research-review-injected plans are not shown, and messages arriving twice (from the
 subgraph and the parent aggregate) are processed once.
 
 Persistence is a separate path — the slice comes from the root `values` parts, not
@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 from contextlib import contextmanager
 from typing import Any
 
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import ValuesStreamPart
 from pytest import MonkeyPatch
 
@@ -50,21 +50,43 @@ class _ChoiceSpy:
         yield stage
 
 
-def _make_runner() -> tuple[ResearchRunner, _ChoiceSpy]:
+def _make_runner(*, content_already_streamed: bool = False) -> tuple[ResearchRunner, _ChoiceSpy]:
     choice = _ChoiceSpy()
-    runner = ResearchRunner(choice)  # type: ignore[arg-type]
+    runner = ResearchRunner(  # type: ignore[arg-type]
+        choice, content_already_streamed=content_already_streamed
+    )
     return runner, choice
 
 
-def test_only_report_node_chunks_become_content() -> None:
+def test_settled_report_is_appended_once_with_no_separator() -> None:
+    """Nothing streams: the report reaches the choice in one append, once the loop settles."""
     runner, choice = _make_runner()
-    runner._handle_message_chunk(
-        AIMessageChunk(content="report text"), {"langgraph_node": "report"}
-    )
-    runner._handle_message_chunk(AIMessageChunk(content="reasoning"), {"langgraph_node": "model"})
-    runner._handle_message_chunk(AIMessageChunk(content="verdict"), {"langgraph_node": "reviewer"})
-    # First report chunk is prefixed with a separator (separates from preparation text).
-    assert choice.content == "\n\nreport text"
+    runner._handle_part(_values([HumanMessage(content="q")], report="draft one"))
+    runner._handle_part(_values([HumanMessage(content="q")], report="draft two"))
+    runner._deliver_report()
+
+    # Only the draft the loop settled on, and no leading blank line: preparation streamed nothing.
+    assert choice.content == "draft two"
+
+
+def test_report_is_separated_when_preparation_streamed_text() -> None:
+    runner, choice = _make_runner(content_already_streamed=True)
+    runner._handle_part(_values([HumanMessage(content="q")], report="the report"))
+    runner._deliver_report()
+
+    assert choice.content == "\n\nthe report"
+
+
+def test_delivered_report_is_appended_to_the_persisted_slice() -> None:
+    """The graph state carries no draft AIMessage, so the runner builds the assistant message."""
+    runner, _ = _make_runner()
+    transcript = [HumanMessage(content="q"), AIMessage(content="tool round")]
+    runner._handle_part(_values(transcript, report="the report"))
+    runner._deliver_report()
+
+    assert runner._messages[:-1] == transcript
+    assert isinstance(runner._messages[-1], AIMessage)
+    assert runner._messages[-1].content == "the report"
 
 
 def test_research_tool_call_emits_stage_finish_iteration_does_not() -> None:
@@ -90,7 +112,7 @@ def test_research_tool_call_emits_stage_finish_iteration_does_not() -> None:
 
 def test_injected_plan_is_not_shown() -> None:
     runner, choice = _make_runner()
-    runner._handle_updates({"reviewer": {"messages": [HumanMessage(content="next plan")]}})
+    runner._handle_updates({"research-review": {"messages": [HumanMessage(content="next plan")]}})
     assert choice.content == ""
 
 
@@ -103,7 +125,7 @@ def test_duplicate_messages_processed_once() -> None:
     # Same messages arrive from the leaf subgraph update and the parent aggregate.
     runner._handle_updates({"model": {"messages": [ai]}})
     runner._handle_updates({"tools": {"messages": [tool_msg]}})
-    runner._handle_updates({"researcher": {"messages": [ai, tool_msg]}})
+    runner._handle_updates({"research-agent": {"messages": [ai, tool_msg]}})
     assert len(choice.stage_titles) == 1
 
 
@@ -123,9 +145,19 @@ def test_substituted_result_adds_no_stage() -> None:
     assert "dropped" not in choice.stages[0].body
 
 
-def _values(messages: list[Any], ns: tuple[str, ...] = ()) -> ValuesStreamPart[Any]:
+def _values(
+    messages: list[Any],
+    ns: tuple[str, ...] = (),
+    report: str | None = None,
+    report_version: int = 0,
+) -> ValuesStreamPart[Any]:
     """A `stream_mode="values"` part as the graph emits it under `version="v2"`."""
-    return ValuesStreamPart(type="values", ns=ns, data={"messages": messages}, interrupts=())
+    return ValuesStreamPart(
+        type="values",
+        ns=ns,
+        data={"messages": messages, "report": report, "report_version": report_version},
+        interrupts=(),
+    )
 
 
 def test_persisted_slice_comes_from_the_last_root_values() -> None:
@@ -139,11 +171,11 @@ def test_persisted_slice_comes_from_the_last_root_values() -> None:
 
 
 def test_subgraph_values_do_not_overwrite_the_persisted_slice() -> None:
-    """A subgraph's state has no reviewer or report messages — only the root's counts."""
+    """A subgraph's state has no research-review or report messages — only the root's counts."""
     runner, _ = _make_runner()
     root = [HumanMessage(content="q"), AIMessage(content="the report")]
     runner._handle_part(_values(root))
-    runner._handle_part(_values([HumanMessage(content="q")], ns=("researcher:abc",)))
+    runner._handle_part(_values([HumanMessage(content="q")], ns=("research-agent:abc",)))
     assert runner._messages == root
 
 
@@ -205,6 +237,37 @@ async def test_step_budget_defaults_to_500(monkeypatch: MonkeyPatch) -> None:
     await runner.run(_approved_prep_state(), properties=_properties())
 
     assert captured["config"]["recursion_limit"] == 500
+
+
+def test_budget_exhausted_delivery_emits_the_unreviewed_stage() -> None:
+    # Version 3 with a budget of 3: the last permitted version got no review call.
+    runner, choice = _make_runner()
+    runner._handle_part(_values([HumanMessage(content="q")], report="w1 w2", report_version=3))
+    runner._emit_unreviewed_delivery_stage(_properties(max_report_versions=3))
+
+    [title] = choice.stage_titles
+    assert "draft 3" in title
+    assert "delivered without review" in title
+    assert "budget (3)" in choice.stages[0].body
+    assert "2 words" in choice.stages[0].body
+
+
+def test_reviewed_delivery_emits_no_unreviewed_stage() -> None:
+    # Version 2 within a budget of 3: the loop ended on an approving review instead.
+    runner, choice = _make_runner()
+    runner._handle_part(_values([HumanMessage(content="q")], report="fine", report_version=2))
+    runner._emit_unreviewed_delivery_stage(_properties(max_report_versions=3))
+
+    assert choice.stage_titles == []
+
+
+def test_budget_of_one_delivery_emits_no_unreviewed_stage() -> None:
+    # Review is off by configuration, not exhausted.
+    runner, choice = _make_runner()
+    runner._handle_part(_values([HumanMessage(content="q")], report="fine", report_version=1))
+    runner._emit_unreviewed_delivery_stage(_properties(max_report_versions=1))
+
+    assert choice.stage_titles == []
 
 
 def test_substituted_message_reaches_the_persisted_slice() -> None:

@@ -15,6 +15,7 @@ from dial_deep_research.utils.llm import (
     stream_drop_retry_middleware,
 )
 
+from .middleware import StopAfterResearchStartMiddleware
 from .prompts import PREP_AGENT_SYSTEM
 from .tools import PrepTools
 
@@ -23,8 +24,8 @@ def build_prep_agent(state: PrepState, today_date: str, prompts: Prompts) -> Any
     """Build a preparation agent over the given per-turn `PrepState` holder.
 
     The agent drives clarify → plan → approve → launch via the `PrepTools`; it has
-    no MCP tools and no checkpointer; its middleware is the logging pair plus the
-    transient stream-drop retry. `PrepState` is mutated only by the tools (which
+    no MCP tools and no checkpointer; its middleware is the logging pair, the transient
+    stream-drop retry, and the hook that ends the run once research has started. `PrepState` is mutated only by the tools (which
     close over `state`), never by the model. `prompts` is the instance's per-request
     prompt content.
     """
@@ -41,5 +42,9 @@ def build_prep_agent(state: PrepState, today_date: str, prompts: Prompts) -> Any
             today_date=today_date,
             data_sources_descriptions=prompts.data_sources_descriptions,
         ),
-        middleware=[*agent_logging_middleware("preparation"), stream_drop_retry_middleware()],
+        middleware=[
+            *agent_logging_middleware("preparation"),
+            stream_drop_retry_middleware(),
+            StopAfterResearchStartMiddleware(state),
+        ],
     )

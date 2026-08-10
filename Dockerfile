@@ -2,9 +2,14 @@ FROM python:3.13-alpine AS builder
 
 RUN pip install poetry==2.3.2
 
+# NO_PIP: the runtime installs nothing, so .venv is built without pip. Besides being dead
+# weight, pip carries its own vendored dependencies, and recent versions list them in a
+# CycloneDX SBOM (pip/_vendor/bom.cdx.json) that Trivy reads — an advisory against any of
+# them then fails the image scan, for code the app never imports.
 ENV POETRY_NO_INTERACTION=1 \
     POETRY_VIRTUALENVS_IN_PROJECT=1 \
-    POETRY_VIRTUALENVS_CREATE=1
+    POETRY_VIRTUALENVS_CREATE=1 \
+    POETRY_VIRTUALENVS_OPTIONS_NO_PIP=1
 
 WORKDIR /opt/app
 
@@ -17,12 +22,13 @@ RUN --mount=type=cache,target=/root/.cache/pypoetry \
 
 # Copy source, build the project wheel, and install it into the venv (--no-deps: deps are
 # already present). Installing the built wheel — not an editable install — means the runtime
-# stage only needs the venv, not the source tree.
+# stage only needs the venv, not the source tree. The venv has no pip, so the install runs
+# through the base image's pip at /usr/local, with --python pointing it at the venv.
 COPY pyproject.toml poetry.lock README.md LICENSE ./
 COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/pypoetry \
     poetry build -f wheel && \
-    .venv/bin/pip install --no-deps dist/*.whl
+    pip --python .venv/bin/python install --no-deps dist/*.whl
 
 FROM python:3.13-alpine AS runner
 

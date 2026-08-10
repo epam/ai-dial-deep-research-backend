@@ -32,8 +32,8 @@ already bounded by an enforcement point, or no image content at all), but any ch
 introduces an LLM call whose history is not already bounded SHALL add enforcement for that call.
 
 #### Scenario: Requests stay within the budget
-- **WHEN** the researcher agent state accumulates more image blocks than the budget allows
-- **THEN** every subsequent LLM request (researcher, report) SHALL contain at most the
+- **WHEN** the research-agent state accumulates more image blocks than the budget allows
+- **THEN** every subsequent LLM request (research-agent, report) SHALL contain at most the
   budgeted number of image blocks, and no provider "too many images" error SHALL occur
 
 #### Scenario: Playground requests stay within the budget
@@ -49,7 +49,7 @@ introduces an LLM call whose history is not already bounded SHALL add enforcemen
 ### Requirement: Overflowing tool results are substituted newest-first before the model call
 
 The app SHALL count image blocks across the agent state before each model call of every agent
-whose tools may return images (currently the researcher and the playground). While the total
+whose tools may return images (currently research-agent and the playground). While the total
 exceeds the budget, it SHALL substitute image-carrying tool messages with error tool messages
 (same message id, `status="error"`), walking from the newest tool message to the oldest and
 stopping as soon as the total is within the budget. Enforcement SHALL be tool-agnostic: it
@@ -125,13 +125,12 @@ scope here and MAY be added later if the silence proves confusing in practice.
 
 ### Requirement: Researcher prompt discloses the image budget
 
-The researcher system prompt SHALL mention that a conversation-wide image budget exists and
+The research-agent system prompt SHALL mention that a conversation-wide image budget exists and
 that overflowing image results are dropped with an explanatory tool error, so the agent treats
 a dropped result as budget exhaustion rather than a transient tool failure. The prompt SHALL
 NOT restate what to do about a given drop — the substituted tool messages carry that
 instruction.
 
 #### Scenario: Prompt mentions the budget
-- **WHEN** the researcher agent is built
+- **WHEN** the research-agent is built
 - **THEN** its system prompt SHALL include the image-budget disclosure
-

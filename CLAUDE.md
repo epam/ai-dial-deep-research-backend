@@ -69,15 +69,45 @@ Override `--timeout` as needed.
 ## Conventions
 
 - **LLM prompts use triple-quoted multiline strings**, not adjacent/parenthesized string-literal concatenation. Do **not** escape newlines with trailing backslashes to join wrapped lines — let long lines wrap as real newlines (harmless inside an LLM prompt) and keep each source line within the 100-col limit. A leading `"""\` to avoid a blank first line is fine. This keeps prompt copy readable and diff-friendly. Applies to system prompts (`app/preparation/prompts.py`, `app/research/prompts.py`) and any injected/middleware prompt text.
+- **Wrap injected prompt content in XML tags.** Any value the app substitutes into a prompt that
+  is long, multi-line, or carries formatting of its own — a report draft, the rendered section
+  structure, a findings log, the user's question, a plan, a topics map — goes inside a named tag
+  (`<draft>…</draft>`, `<report_structure>…</report_structure>`). The tags mark where the value
+  begins and ends, so its headings, bullets or numbering cannot be read as part of the
+  instructions around it. Use lowercase snake_case tag names that say what the value is. Short
+  scalars — a word count, a ceiling, a comma-separated list of names — stay inline; a tag around
+  a number is noise. One exception to weigh: a tool message the agent is told to reproduce
+  verbatim to the user, where a tag can leak into the reply.
 - **No new aliases on pydantic-settings fields** — rely on the default field-name → env-var mapping (with the class's `env_prefix`). E.g. `heartbeat_interval` under `env_prefix=""` reads `HEARTBEAT_INTERVAL`.
-- **Keep the README environment-variables table in sync with the settings.** Update it whenever an env var is added or removed (required or optional alike), and whenever a var's required/optional status changes.
-- **Keep the application-properties artifacts in sync with the model.** When `ApplicationProperties` (`src/dial_deep_research/app_properties.py`) changes: `make format` regenerates `docs/generated-app-schema.json` (and `make lint` fails on drift), but `dial_conf/core/applications-template.json` and the README core-config snippets are updated by hand. Field descriptions live in the pydantic schema (`Field(description=...)`), not as comments in the example.
 - **LLM structured-output schemas put the verdict last.** Order fields so a decision/verdict field comes *after* the supporting content that justifies it — the model emits fields in schema order, so reasoning-first yields better decisions. E.g. `questions` before `sufficient`; `revised_plan` (or `problems_found`) before `approved` (or `verdict`). Among the supporting fields themselves, order by logical precedence — a precondition/gating check before any check that only matters once it holds (e.g. `recorded_plan_matches` before `user_approved_a_plan`). Pydantic v2 allows a required field after defaulted ones, so the ordering is free.
 - **Logging follows the `logging-policy` spec** (`openspec/specs/logging-policy/spec.md`):
   level semantics with a single-ERROR ownership rule, the INFO request skeleton, and the
   content allowlist — log structure (names, counts, durations, ids, outcomes), never message
   bodies, tool arguments, response bodies, header values, or URL query strings, at any level.
   Payload records exist only behind `LOG_PAYLOADS`.
+- **Keep the README environment-variables table in sync with the settings.** Update it whenever an env var is added or removed (required or optional alike), and whenever a var's required/optional status changes.
+- **Update `dial_conf/core/applications-template.json` in the same change whenever the required application properties change.** Adding, removing or renaming a required field of `ApplicationProperties` (`src/dial_deep_research/app_properties.py`), and making an existing field required or optional, each means editing every instance in the template so it again sets exactly the required properties — `tests/test_app_properties.py` fails until it does. Nothing else goes in: the template is an example of the config file's shape, so a property that has a default stays out of it. Never copy a default in, because `make infra-config` seeds a contributor's `applications.json` from the template and a copied default pins that channel to the value it had at seed time. The requirement is specified in `openspec/specs/local-stack/spec.md` ("Local application instance config seeded from a committed template").
+- **The application-properties reference is the model and the generated schema, nowhere else.** `ApplicationProperties` owns every property, its description and its default; `make format` regenerates `docs/generated-app-schema.json` from it and `make lint` fails on drift. Field descriptions live in the pydantic schema (`Field(description=...)`). The README core-config snippets are updated by hand.
+- **Keep `docs/architecture.md` up to date with the runtime flow.** It is a map over
+  `app/preparation/` and `app/research/`: the turn structure, the node graphs, and their
+  diagrams. When a change alters a node, an edge, a routing condition, a state field, or a
+  turn-boundary behavior (what starts a turn, what ends it, what persists across turns), update
+  the affected diagram and prose in the same change — don't leave it for later. Write for a
+  reader who has neither this codebase's context nor the change history: name the current
+  behavior plainly, never how it changed ("previously", "now", "instead of"). The
+  [OpenSpec specs](../openspec/specs) stay the one place that owns a requirement's full wording;
+  this page links to the spec section and quotes only the short excerpt needed for the diagram,
+  never restates a rule at length — a rule duplicated here goes stale the moment the spec changes
+  and no one edits both.
+- **Every LLM call states its inputs and outputs in the spec that owns it.** When adding an LLM
+  call or changing what an existing one receives, write it down: which system prompt and what
+  fills it, which messages (and whether history is full, filtered, or rendered to text), whether
+  image content is included, which tools are bound, and what comes back (free text, a structured
+  schema, or tool calls only). Name the deliberate omissions too — "this call does not receive
+  the findings" is part of the contract. Inputs are the one thing about an LLM call that code
+  review reliably misses: a reviewer judging coverage without the images it is judging looks
+  correct in the diff and is wrong in production, and nothing fails when a refactor quietly
+  changes what a prompt sees.
 - **Never name a list-element field `index` in anything persisted to `custom_content.state`.** The DIAL SDK's chunk-merge (`aidial_sdk.utils.merge_chunks` / `_indexed_list`) treats any list of dicts whose elements carry an `index` key as an OpenAI-style indexed streaming delta — it re-slots the elements by `index` and strips the key, corrupting the stored value (a 1-based list comes back as `[{}, {…}, …]` with the key gone). Use another name (e.g. `number`) for an ordinal field on a persisted list element.
 
 ## Code Style
@@ -89,6 +119,13 @@ Override `--timeout` as needed.
 - use kwargs whenever possible instead of positional arguments - this improves readability.
   Note that some functions and methods have positional-only arguments - it's ok.
 - use comments to explain non-obvious code. don't write comments that restate the code.
+- **comments describe the code as it is, never how it changed.** no "instead of X", "the old
+  rule", "previously", "no longer", "this used to". a reader who does not have the diff cannot
+  use such a comment, and it goes stale the moment the next change lands — the reason a rule
+  exists is durable, the thing it replaced is not. write the rule and why it holds: not
+  "keying on the segment rather than on whether a tool ran", but "every chunk of one message
+  carries the same id, so a change in it means a new segment". this covers docstrings and test
+  names and docstrings too: a test asserts current behavior, not the absence of a past bug.
 - when writing docstrings, be concise
 - single source of truth, and mind staleness (docstrings, comments, READMEs, and similar):
   keep each fact — a concept, rule, mode, or concrete detail like a URL format, path, or

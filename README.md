@@ -16,6 +16,8 @@ A DIAL-native **deep research** application: a LangChain/LangGraph agent that co
 generic-RAG MCP server, clarifies the user's query, aligns on a research plan, runs a
 research loop grounded in the MCP tools, and streams progress to DIAL as timed stages.
 
+See [docs/architecture.md](docs/architecture.md) for diagrams of the runtime flow.
+
 - [Configuration](#configuration)
 - [Environment variables](#environment-variables)
   - [Notes on the environment variables](#notes-on-the-environment-variables)
@@ -44,9 +46,11 @@ Configuration comes from two sources:
   DIAL Core on each application instance and are fetched and validated per request against
   the JSON schema generated
   from `src/dial_deep_research/app_properties.py` (committed at
-  [`docs/generated-app-schema.json`](./docs/generated-app-schema.json)). A worked example
-  ships in
-  [`dial_conf/core/applications-template.json`](./dial_conf/core/applications-template.json).
+  [`docs/generated-app-schema.json`](./docs/generated-app-schema.json)) — that schema and the
+  model behind it are the full reference for every property, its meaning and its default.
+  [`dial_conf/core/applications-template.json`](./dial_conf/core/applications-template.json)
+  is an example of the config file's shape and sets only the required properties, so it is not
+  a property reference.
   A request whose properties fail validation is delivered as a DIAL protocol error (a "not
   configured — contact your administrator" message), not a normal reply.
 
@@ -166,8 +170,11 @@ for a fictional example instance:
 }
 ```
 
-> ℹ️ `applicationProperties` is elided above — see `applications-template.json` for its
-> filled-in contents and `docs/generated-app-schema.json` for the authoritative field list.
+> ℹ️ `applicationProperties` is elided above. `applications-template.json` shows it filled in
+> with the required properties only; `docs/generated-app-schema.json` is the authoritative list
+> of every property, required or optional, with its description and default. A property the
+> config omits takes the default from that schema, so a channel only needs to state what it
+> wants to differ.
 
 `mcp_servers` lists the MCP servers the research agent connects to (at least one is
 required; `server_name` must be unique across the list). Each server is one of two modes:
