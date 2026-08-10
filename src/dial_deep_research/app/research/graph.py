@@ -1,49 +1,105 @@
 """Assembles the deterministic research graph.
 
-`START → researcher → reviewer → (researcher | report) → END`. No checkpointer, no
-`interrupt()` — research runs autonomously within one turn. The only loop/termination
-decision is `route_after_review`, pure Python over the state.
+`START → research-agent → (research-review | report) → (research-agent | report) →
+(report-review | END) → (report | END)`. No checkpointer, no `interrupt()` — research runs
+autonomously within one turn. Every loop/termination decision is pure Python over the graph
+state: the research loop's are `route_after_research_agent` and `route_after_research_review`,
+the report loop's are `route_after_report` and `route_after_report_review`.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 
+from dial_deep_research.app_properties import ReportSection
+
 from .nodes import (
-    build_researcher_agent,
+    ReportReviewStageEmitter,
+    build_research_agent,
     make_report_node,
-    make_reviewer_node,
-    route_after_review,
+    make_report_review_node,
+    make_research_review_node,
+    route_after_report,
+    route_after_report_review,
+    route_after_research_agent,
+    route_after_research_review,
 )
 from .state import ResearchState
 
 
 def build_research_graph(
-    tools: list[BaseTool], today_date: str, max_iterations: int, client_name: str
+    tools: list[BaseTool],
+    today_date: str,
+    max_research_iterations: int,
+    client_name: str,
+    report_structure: Sequence[ReportSection],
+    max_report_words: int,
+    max_report_versions: int,
+    emit_report_review_stage: ReportReviewStageEmitter,
 ) -> Any:
-    """Compile the research graph over the loaded tools and config."""
-    researcher = build_researcher_agent(tools, today_date, client_name=client_name)
+    """Compile the research graph over the loaded tools and this turn's configuration.
+
+    `emit_report_review_stage` is the runner's own callback: the report-review node decides what
+    to report about a review, the runner holds the DIAL `Choice` and decides how it renders.
+    """
+    research_agent = build_research_agent(
+        tools=tools,
+        today_date=today_date,
+        client_name=client_name,
+    )
 
     builder = StateGraph(ResearchState)
-    builder.add_node("researcher", researcher)
+    builder.add_node(node="research-agent", action=research_agent)
     # mypy can't infer the node's TypedDict state param from an async callable; the
     # plain-function node form is the documented one and works at runtime.
     builder.add_node(
-        "reviewer",
-        make_reviewer_node(today_date, max_iterations),  # type: ignore[call-overload]
+        node="research-review",
+        action=make_research_review_node(  # type: ignore[call-overload]
+            today_date=today_date,
+        ),
     )
-    builder.add_node("report", make_report_node(today_date))  # type: ignore[call-overload]
+    builder.add_node(
+        node="report",
+        action=make_report_node(  # type: ignore[call-overload]
+            today_date=today_date,
+            sections=report_structure,
+            max_words=max_report_words,
+        ),
+    )
+    builder.add_node(
+        node="report-review",
+        action=make_report_review_node(  # type: ignore[call-overload]
+            today_date=today_date,
+            sections=report_structure,
+            max_words=max_report_words,
+            emit_stage=emit_report_review_stage,
+        ),
+    )
 
-    builder.add_edge(START, "researcher")
-    builder.add_edge("researcher", "reviewer")
+    builder.add_edge(start_key=START, end_key="research-agent")
     builder.add_conditional_edges(
-        "reviewer",
-        route_after_review(max_iterations),
-        {"researcher": "researcher", "report": "report"},
+        source="research-agent",
+        path=route_after_research_agent(max_research_iterations=max_research_iterations),
+        path_map={"research-review": "research-review", "report": "report"},
     )
-    builder.add_edge("report", END)
+    builder.add_conditional_edges(
+        source="research-review",
+        path=route_after_research_review(),
+        path_map={"research-agent": "research-agent", "report": "report"},
+    )
+    builder.add_conditional_edges(
+        source="report",
+        path=route_after_report(max_versions=max_report_versions),
+        path_map={"report-review": "report-review", "end": END},
+    )
+    builder.add_conditional_edges(
+        source="report-review",
+        path=route_after_report_review(),
+        path_map={"report": "report", "end": END},
+    )
 
     return builder.compile()

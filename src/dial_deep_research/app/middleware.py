@@ -1,6 +1,6 @@
 """Shared agent middleware, used by every agent that talks to the MCP tools.
 
-Agent-specific middleware (e.g. the researcher's forced tool choice) lives with its
+Agent-specific middleware (e.g. research-agent's forced tool choice) lives with its
 agent; this module holds middleware any tool-calling agent may need.
 """
 

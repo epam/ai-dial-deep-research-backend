@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A DIAL chat completion (deployment id `deep-research`, display name `Deep Research`) that runs a per-request LangChain tool-calling agent against a single HTTP MCP server (the generic-RAG service), reached either as a DIAL application through Core (deployment mode) or a directly-reachable endpoint (local-dev mode). Tool calls and tool results stream to DIAL as timed stages; only the agent's final assistant text becomes message content. All turn-aborting failures are resolved to a user-safe message (carrying an error reference) and delivered through the DIAL error protocol — a non-200 error body or an in-stream error chunk — never as fake-success HTTP 200 assistant content. LLM calls, DIAL file operations, and the deployment-mode MCP connection authenticate with the per-request api-key that DIAL Core forwards with each request (via the SDK's auth-header propagation), not a static service key; the per-request bearer token is forwarded to the RAG MCP when present. This capability replaces the original echo placeholder and absorbs the structural DIAL-app surface (protocol conformance, streaming, health) under its own contract.
+A DIAL application server implementing the chat-completion protocol for the `deep-research` deployment (application type display name `Deep Research`), and for the `deep-research-playground` deployment when that channel is enabled. Each turn starts with the preparation agent (see **clarification-and-plan-alignment**); when it approves a plan and calls `start_research`, the research graph runs in the same turn (see **research-execution**) and the report that graph settles on becomes the turn's answer. Research tools come from the HTTP MCP servers configured in the application properties (e.g. the generic-RAG service), each reached as a DIAL application through Core (deployment mode) or as a directly-reachable endpoint (direct mode), with a fresh client per turn. Tool calls and their results surface as timed DIAL stages; assistant message content carries model-authored text only — never tool calls, tool results, or structured non-text blocks. All turn-aborting failures are resolved to a user-safe message (carrying an error reference) and delivered through the DIAL error protocol — a non-200 error body or an in-stream error chunk — never as fake-success HTTP 200 assistant content. LLM calls, DIAL file operations, and deployment-mode MCP connections authenticate with the per-request api-key that DIAL Core forwards with each request (via the SDK's auth-header propagation), not a static service key; the per-request bearer token is forwarded to deployment-mode MCP servers when present. This capability owns the structural DIAL-app surface: protocol conformance, the streaming transport, and the health endpoint.
 ## Requirements
 ### Requirement: DIAL-protocol application server
 The repository SHALL implement an application server that conforms to the DIAL application protocol, using the official DIAL Python SDK, exposing a chat completion endpoint consumable by DIAL core under the deployment id `deep-research`.
@@ -16,15 +16,23 @@ The repository SHALL implement an application server that conforms to the DIAL a
 - **THEN** it SHALL respond with an appropriate HTTP 4xx error surfaced via the SDK, without crashing the server process
 
 ### Requirement: Streaming response path
-The app SHALL produce its assistant response through the SDK's streaming API so that the streaming code path is exercised end-to-end. The app SHALL stream assistant text to `choice` token-by-token as the LLM produces it, rather than buffering each LLM call's full output and emitting it as a single chunk after the producing graph node returns; concretely, the per-request agent's `astream` invocation SHALL subscribe to LangGraph's `messages` stream mode (composed with the existing `updates` mode) and forward every `AIMessageChunk`'s text content to `choice.append_content` immediately, so users see content arrive while the model is still generating.
+The app SHALL produce its assistant response through the SDK's streaming API so that the streaming code path is exercised end-to-end.
+
+**Preparation text SHALL stream token-by-token** as the LLM produces it, rather than being buffered and emitted as a single chunk after the producing graph node returns; concretely, the preparation agent's `astream` invocation SHALL subscribe to LangGraph's `messages` stream mode (composed with the existing `updates` mode) and forward every `AIMessageChunk`'s text content to `choice.append_content` immediately, so users see content arrive while the model is still generating.
+
+**The research report SHALL NOT stream.** A report draft may still be revised when it is produced (see the **report-composition** capability's review loop), and DIAL content is append-only, so no draft may reach `choice` while the loop is running. The report SHALL be appended in one call once the loop settles on the draft to deliver. The research graph's stream therefore need not subscribe to the `messages` mode at all; DIAL stages and the SDK keep-alive carry the turn while the loop runs.
 
 #### Scenario: Streamed delivery
 - **WHEN** DIAL core requests a streaming chat completion
 - **THEN** the app SHALL emit the assistant content via one or more streaming chunks terminated by an end-of-stream signal, conforming to the SDK's streaming contract
 
-#### Scenario: Assistant text streams token-by-token, not message-by-message
-- **WHEN** the agent's underlying LLM produces a multi-token assistant message (whether the final answer or an intermediate text-plus-tool-calls message)
+#### Scenario: Preparation text streams token-by-token, not message-by-message
+- **WHEN** the preparation agent's underlying LLM produces a multi-token assistant message (whether a final answer or an intermediate text-plus-tool-calls message)
 - **THEN** the app SHALL emit `choice.append_content` calls for individual token chunks during generation, such that DIAL core observes incremental content updates before the producing LangGraph node has returned, and SHALL NOT defer the text to a single end-of-step emission
+
+#### Scenario: The report is appended once, not streamed
+- **WHEN** the report node produces a draft, whether it is approved or revised afterwards
+- **THEN** no token of any draft SHALL be appended to `choice` while the review loop runs, and the delivered report SHALL reach `choice` as a single append after the loop settles
 
 ### Requirement: Health endpoint
 The app SHALL expose a lightweight health check endpoint that returns success when the process is able to serve requests.
@@ -39,25 +47,25 @@ Each chat completion request SHALL first be handled by the preparation agent (se
 the **clarification-and-plan-alignment** capability). When the preparation agent
 approves a plan and calls `start_research`, the app SHALL run the **research
 execution graph** (see the **research-execution** capability) in the same turn; the
-research agent is the graph's **researcher node**, not a directly-invoked
+research agent is the graph's **research-agent node**, not a directly-invoked
 first-message agent.
 
-The researcher node SHALL be a fresh per-request LangChain `create_agent` over the
+The research-agent node SHALL be a fresh per-request LangChain `create_agent` over the
 tools fetched from a freshly-constructed MCP client, plus one sentinel tool
 (`finish_iteration`). It SHALL have access only to MCP-loaded tools and that
 sentinel — no other built-in tools, subagents, skills, or persistent memory beyond
-the graph state. The researcher SHALL be run with **forced tool choice** — every model
+the graph state. Research-agent SHALL be run with **forced tool choice** — every model
 call re-issued with `tool_choice="any"` by an in-process `AgentMiddleware` — so every
 model step emits a tool call and the model can never emit a free-form assistant
 message.
 
-A researcher iteration therefore ends **only** when the researcher calls
+A research-agent iteration therefore ends **only** when research-agent calls
 `finish_iteration`, which SHALL be declared `return_direct=True`: the agent loop
 returns as soon as that tool executes, with no further model round-trip. The two
-mechanisms together make `finish_iteration` the single exit from a researcher
+mechanisms together make `finish_iteration` the single exit from a research-agent
 iteration — the loop's other exit is a tool-call-free assistant message, which forced
-tool choice makes unreachable — so the researcher cannot stop early and leave the graph
-without a reviewer verdict. Phase
+tool choice makes unreachable — so research-agent cannot stop early and leave the graph
+without a research-review verdict. Phase
 control lives in the research graph's edges (see the **research-execution**
 capability), not in middleware over a single agent's control flow.
 
@@ -70,15 +78,15 @@ features (long-lived sessions, `Mcp-Session-Id`, `Last-Event-ID` resumability,
 `notifications/tools/list_changed`, `notifications/resources/*`,
 `notifications/prompts/list_changed`) are out of scope for this capability.
 
-#### Scenario: Researcher invokes an MCP tool
+#### Scenario: research-agent invokes an MCP tool
 
-- **WHEN** the researcher needs information from the knowledge base during an iteration
+- **WHEN** research-agent needs information from the knowledge base during an iteration
 - **THEN** it SHALL emit a tool call, the MCP server SHALL execute the tool, and the result SHALL be incorporated into the accumulated research context
 
-#### Scenario: Researcher is run only after plan approval
+#### Scenario: research-agent is run only after plan approval
 
 - **WHEN** a chat completion request is processed and no plan has been approved yet
-- **THEN** the researcher node SHALL NOT run and no MCP client SHALL be constructed for research; the turn SHALL produce only preparation output
+- **THEN** the research-agent node SHALL NOT run and no MCP client SHALL be constructed for research; the turn SHALL produce only preparation output
 
 #### Scenario: Per-request agent and MCP scoping
 
@@ -102,15 +110,61 @@ For every tool the agent invokes during a request, the app SHALL emit a single D
 - **THEN** the app SHALL emit a stage whose title uses the `error ❌` variant (e.g. `[TOOL] "<tool_name>" - error ❌ (...)`), whose body carries the JSON-fenced "Input" section followed by a fenced "Error" section with the error text; the agent SHALL receive the same error text as a `ToolMessage` in its next step and MAY retry with corrected arguments without the chat completion failing
 
 ### Requirement: Assistant message content contains only model text
-The DIAL response message content SHALL carry all of the agent's natural-language assistant text emitted during the turn, in chronological order — including text produced on intermediate `AIMessage` instances that also carry `tool_calls`, not just the final text-only `AIMessage`. Tool calls, tool results, and any structured non-text content blocks (e.g. Anthropic-style `thinking` blocks, image blocks) SHALL NOT appear in the assistant message content; they are conveyed via stages (for tool execution UI display) and via `assistant.custom_content.state["messages"]` (for cross-turn replay). When two streamed text segments from distinct `AIMessage`s are separated in time by one or more tool stages, the app SHALL insert a `"\n\n"` separator between them in `message.content` so the segments render as separate paragraphs rather than running together.
+The DIAL response message content SHALL, in chronological order, contain only the
+natural-language assistant text that each component is specified below to forward — never tool
+calls, tool results, or structured non-text content blocks (e.g. Anthropic-style `thinking`
+blocks, image blocks); those are conveyed via stages (for tool execution UI display) and via
+`assistant.custom_content.state["messages"]` (for cross-turn replay). Coverage differs by
+component: preparation forwards its own text, while the research graph forwards none of
+research-agent's, research-review's, or report-review's text — only the settled report — as the
+next paragraph specifies.
 
-#### Scenario: Tool-using turn streams intermediate text alongside the final answer
-- **WHEN** the agent produces an intermediate `AIMessage` carrying both natural-language text (e.g. `"Plan: ..."`) and `tool_calls`, then tool result(s), then a final `AIMessage` with the answer
-- **THEN** the DIAL response `message.content` SHALL contain the intermediate text followed by the final text, in that order, with a `"\n\n"` separator between them; tool stages SHALL still render between the two segments via the stage channel; the response content SHALL NOT contain serialized tool calls, tool result payloads, or `messages_to_dict` blobs
+**Preparation and research populate this content by entirely different means.** Preparation
+streams its own `AIMessage` text token-by-token as the model produces it, including text on an
+intermediate `AIMessage` that also carries `tool_calls` — not just the final text-only
+`AIMessage` — and each of its tool calls becomes a DIAL stage alongside that streamed text. The
+research graph SHALL NOT stream, or otherwise forward, any `AIMessage`'s text into
+`message.content`: research-agent's own reasoning is discarded, whatever text accompanies its
+tool calls, and its tool calls become DIAL stages only, as does each report review (see
+**report-composition**). The research graph's sole contribution to `message.content` is the one
+report the review loop settles on, appended once the loop ends (see **Streaming response path**
+for the append-once cadence) — never streamed, and no other text of its own.
 
-#### Scenario: Text-only turn (no tool calls)
-- **WHEN** the agent answers without invoking any tool, producing a single text-only final `AIMessage`
-- **THEN** the DIAL response `message.content` SHALL equal that message's text, with no leading or trailing separator, streamed token-by-token
+Text streamed from **distinct assistant messages** SHALL be separated by a `"\n\n"` in
+`message.content`, so the segments render as separate paragraphs rather than running together;
+the tokens of one message SHALL be concatenated untouched. The boundary is the message, not the
+tool round: two segments SHALL be separated whether or not a tool ran between them — including
+the same model call re-streamed after a transient failure, whose already-streamed fragment cannot
+be retracted. The first segment of a turn SHALL take no leading separator. A streamed chunk
+carries the id of the message it belongs to (the provider's response id, or one langchain_core
+stamps per LLM run), which is what makes the boundary observable.
+
+#### Scenario: Preparation's tool-using turn streams intermediate text alongside the final answer
+- **WHEN** the preparation agent produces an intermediate `AIMessage` carrying both
+  natural-language text (e.g. `"Plan: ..."`) and `tool_calls`, the tool call returns a result,
+  and the agent then produces a final `AIMessage` with the answer
+- **THEN** the DIAL response `message.content` SHALL contain the intermediate text followed by
+  the final text, in that order, with a `"\n\n"` separator between them; tool stages SHALL still
+  render between the two segments via the stage channel; the response content SHALL NOT contain
+  serialized tool calls, tool result payloads, or `messages_to_dict` blobs
+
+#### Scenario: Preparation's text-only turn (no tool calls)
+- **WHEN** the preparation agent answers without invoking any tool, producing a single
+  text-only final `AIMessage`
+- **THEN** the DIAL response `message.content` SHALL equal that message's text, with no leading
+  or trailing separator, streamed token-by-token
+
+#### Scenario: Research-agent's tool-calling text never reaches content
+- **WHEN** research-agent produces an `AIMessage` carrying both natural-language text and
+  `tool_calls`
+- **THEN** the tool call SHALL become a DIAL stage as usual, and the message's text SHALL NOT
+  appear in `message.content` at any point in the turn — not streamed, not appended later
+
+#### Scenario: A research turn's content is the report alone
+- **WHEN** a turn hands off to research and the review loop settles on a report
+- **THEN** `message.content` SHALL gain exactly one addition from the research phase — that
+  report, appended once — and no text from research-agent, research-review, or report-review
+  SHALL appear in it at any point
 
 #### Scenario: Structured content blocks flattened to text
 - **WHEN** an `AIMessageChunk` carries `content` as a list of content blocks (e.g. `[{type: "text", text: "..."}, {type: "thinking", thinking: "..."}, {type: "image", ...}]`) instead of a bare string
@@ -120,18 +174,26 @@ The DIAL response message content SHALL carry all of the agent's natural-languag
 - **WHEN** a follow-up chat completion request arrives after an earlier tool-using turn
 - **THEN** the second turn's agent SHALL receive the prior turn's intermediate `AIMessage(tool_calls=…, content=…)` and `ToolMessage(...)` slice plus the prior turn's final `AIMessage` as conversation history, reconstructed from the prior assistant message's `custom_content.state["messages"]` field, in the original order, instead of being limited to prior assistant text
 
+#### Scenario: A new assistant message starts a new paragraph with no tool round between
+- **WHEN** two text segments from distinct assistant messages reach the choice with no tool result between them
+- **THEN** the app SHALL still insert a `"\n\n"` between them, because the boundary is the change of message
+
+#### Scenario: Tokens of one message are not separated
+- **WHEN** one assistant message streams as many chunks
+- **THEN** the app SHALL append them with nothing inserted between, producing one paragraph
+
 ### Requirement: Tool messages persisted via DIAL custom_content state
 
 For every chat completion request, the app SHALL accumulate the ordered sequence of
 `AIMessage`, `ToolMessage`, and injected `HumanMessage` instances observed during
-the turn — for a research turn this is the research graph's slice: every researcher
+the turn — for a research turn this is the research graph's slice: every research-agent
 `AIMessage` carrying `tool_calls`, every `ToolMessage` returned by a tool, every
-next-iteration plan `HumanMessage` injected by the reviewer node, and the final
+next-iteration plan `HumanMessage` injected by the research-review node, and the final
 report `AIMessage` — and SHALL persist that sequence by serializing it via
 `langchain_core.messages.messages_to_dict` and writing it under
 `assistant.custom_content.state` (the `messages` field of the unified `DialState`).
 The injected next-iteration plan `HumanMessage`s SHALL be captured in run order so
-the persisted slice interleaves them at the positions the researcher saw them; they
+the persisted slice interleaves them at the positions research-agent saw them; they
 SHALL NOT be appended to the user-visible assistant `content`. Before serialization,
 the app SHALL traverse every message's `content` and, for every LangChain v1
 `ImageContentBlock` carrying a `base64` field, replace the inline data with a `url`
@@ -149,7 +211,7 @@ which the original message structure could be recovered.
 #### Scenario: Research turn slice is fully persisted
 
 - **WHEN** a research turn produces `AIMessage(tool_calls=[X]) → ToolMessage(X_result) → AIMessage(tool_calls=[finish_iteration]) → ToolMessage(finish_iteration) → [injected next-plan HumanMessage] → … → AIMessage(report)`
-- **THEN** `custom_content.state["messages"]` SHALL carry those entries in run order, each encoded with its matching `messages_to_dict` `type` discriminator, the injected next-plan `HumanMessage` appearing at the position the researcher saw it, and the report `AIMessage` last
+- **THEN** `custom_content.state["messages"]` SHALL carry those entries in run order, each encoded with its matching `messages_to_dict` `type` discriminator, the injected next-plan `HumanMessage` appearing at the position research-agent saw it, and the report `AIMessage` last
 
 #### Scenario: Multimodal tool loop persists with image URLs, not image bytes
 
@@ -472,8 +534,8 @@ precedence, most-specific first:
    the in-app retries per **Transient LLM stream drops retried in-app** are exhausted) SHALL
    resolve to the retryable service network-error message, never the generic non-retryable HTTP
    fallback;
-4. a dedicated mid-stream rule for a plain `openai.APIError` (an LLM that failed after the report
-   node began streaming) that carries no usable status or code;
+4. a dedicated mid-stream rule for a plain `openai.APIError` (an LLM call that failed after its
+   stream began) that carries no usable status or code;
 5. curated messages for known internal conditions (research step-budget exhaustion; the two
    turn-aborting app conditions below);
 6. a generic fallback.
@@ -494,9 +556,11 @@ resolution (`display_message` and `message` both set to the composed user-facing
 `code` and `type` propagated from the normalized details) so the SDK delivers it as a non-200
 error body (for non-streaming requests, or failures before the choice opens) or as an in-stream
 `{"error": ...}` chunk terminating the open 200 stream (for streaming requests, i.e. any failure
-after the choice opens). Any partial report content already streamed SHALL remain visible with the
-error rendered beneath it. The app SHALL NOT append the error as ordinary assistant `content`, and
-SHALL NOT persist state on a turn that aborts.
+after the choice opens). Any content already appended to the choice SHALL remain visible with the
+error rendered beneath it — preparation text, which streams. A report cannot contribute partial
+content: its call is not streamed, and a completed draft reaches the choice only once the review
+loop settles. The app SHALL NOT append the
+error as ordinary assistant `content`, and SHALL NOT persist state on a turn that aborts.
 
 **Outgoing-status policy.** The app SHALL NOT emit a status DIAL Core's balancer treats as
 retriable (429, 502, 503, 504). A client-attributable status (one of 400, 401, 403, 404, 409, 413,
@@ -515,7 +579,9 @@ reported as "not configured".
 
 **Absorbed failures are unaffected.** Failures that are deliberately swallowed and never abort the
 turn SHALL NOT trigger this path: per-tool errors caught by `handle_tool_error` (surfaced as an
-`error ❌` stage), Opik-tracing failures, and image-rehydration failures. These continue to let the
+`error ❌` stage), a failed report-review call and a failed report revision once a draft exists (both
+absorbed by the report loop, which delivers a draft instead), Opik-tracing failures, and
+image-rehydration failures. These continue to let the
 turn complete normally.
 
 #### Scenario: Upstream failure carrying a display message
@@ -525,7 +591,7 @@ turn complete normally.
   later" sentence to it
 
 #### Scenario: LLM failure mid-stream after partial content
-- **WHEN** the report node has already streamed some assistant content and the LLM then fails
+- **WHEN** the preparation agent has already streamed some assistant content and the LLM then fails
   mid-stream (a plain `openai.APIError` with no usable status/code)
 - **THEN** the app SHALL deliver an in-stream `{"error": ...}` chunk terminating the stream, the
   already-streamed partial content SHALL remain visible, and the error text SHALL be the dedicated
@@ -598,17 +664,28 @@ surfaced as `httpx.RemoteProtocolError` (peer closed the connection mid-body) or
 only failures before a response starts, so without this a single dropped stream aborts the whole
 turn.
 
-This applies to every LLM call surface: the preparation, playground, and researcher agent model
-calls; the structured review calls (query review, plan review, research review); and the
-report-writing stream. The retry budget is 2 retries per call (3 attempts total) with exponential
-backoff and jitter. A retry re-issues the failed call from scratch with the same inputs; partial
-tokens the failed attempt already streamed to the user are not retracted, so a retried call MAY
-render duplicated partial text in the chat (accepted: observed drops occur at stream start, and a
-rare visual duplicate is preferred over losing a long research turn).
+This applies to every LLM call surface: the preparation, playground, and research-agent model
+calls; the structured review calls (query review, plan review, research review, **report
+review**); and the report-writing call, for its first draft and every revision alike. Retry
+coverage is opted into per call site, so a new LLM call is not covered until its site wraps
+itself — adding a call surface without it silently breaks this requirement. The retry budget is 2
+retries per call (3 attempts total) with exponential backoff and jitter. A retry re-issues the
+failed call from scratch with the same inputs; partial tokens the failed attempt already streamed
+to the user are not retracted, so a retried call MAY render duplicated partial text in the chat
+(accepted: observed drops occur at stream start, and a rare visual duplicate is preferred over
+losing a long research turn). Where that happens, the retry is a distinct assistant message, so a
+`"\n\n"` separates the abandoned fragment from the full answer per **Assistant message content
+contains only model text** — the duplicate reads as its own paragraph rather than running into the
+text that replaces it. The report-writing call is not streamed at all, so a retried report call
+cannot duplicate visible text.
 
 When the budget is exhausted, the last exception SHALL propagate unchanged to the top-level
 handler and deliver through the DIAL error protocol per **Failures delivered as DIAL protocol
-errors**. Exceptions other than the two transient-drop shapes SHALL NOT trigger this retry; they
+errors** — **except at the two call sites the report loop absorbs**: the report-review call, and a
+report revision once a draft exists. There the exhausted exception SHALL be caught inside the loop
+and the current or previous draft delivered instead (see **report-composition**), because a finished
+report must not be discarded over a later failure. The **first** draft is not an exception: no draft
+exists yet, so propagation remains correct for it. Exceptions other than the two transient-drop shapes SHALL NOT trigger this retry; they
 keep their existing handling.
 
 #### Scenario: Stream drops once at the start of an agent model call
@@ -616,19 +693,24 @@ keep their existing handling.
   call succeeds
 - **THEN** the turn SHALL complete normally with no error delivered to the user
 
+#### Scenario: A retry's abandoned fragment is separated from the full answer
+- **WHEN** a streaming model call has already appended some tokens to the choice, drops, and the retried call succeeds
+- **THEN** the fragment SHALL remain visible (it cannot be retracted) and the retried text SHALL be appended after a `"\n\n"`, since the retry is a distinct assistant message
+
 #### Scenario: Stream drops persistently
-- **WHEN** an LLM call fails with `httpx.RemoteProtocolError` on every attempt in the budget
+- **WHEN** an LLM call whose failure aborts the turn fails with `httpx.RemoteProtocolError` on every attempt in the budget
 - **THEN** the app SHALL stop after 3 attempts and deliver the failure through the DIAL error
   protocol, resolved as the retryable network-drop message with an error reference
 
-#### Scenario: Report stream drops after partial content
-- **WHEN** the report-writing stream drops mid-content and a retry succeeds
-- **THEN** the turn SHALL complete with the retried report; content already streamed by the
-  failed attempt MAY remain visible above it, and the persisted report SHALL be the retried
-  attempt's full text only
+#### Scenario: Persistent drops in the report loop do not abort the turn
+- **WHEN** the report-review call, or a report revision written after a first draft, fails on every attempt in the budget
+- **THEN** the app SHALL NOT deliver a protocol error; the report loop SHALL absorb the failure, deliver the current or previous draft, and log a warning
+
+#### Scenario: The report call drops mid-response
+- **WHEN** the report-writing call's connection drops while its response is being read and a retry succeeds
+- **THEN** the turn SHALL complete with the retried report, and the delivered and persisted report SHALL be the retried attempt's text only; a failed attempt SHALL leave no text anywhere, since the call is not streamed and its response is read only after it completes
 
 #### Scenario: Non-transient failures are not retried in-app
 - **WHEN** an LLM call fails with an HTTP status error (e.g. 400) or a timeout
 - **THEN** the in-app stream-drop retry SHALL NOT engage; the failure keeps its existing handling
   (the OpenAI client's own retries and the DIAL error protocol)
-

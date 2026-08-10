@@ -50,14 +50,14 @@ async def test_model_call_event_for_final_answer(caplog: pytest.LogCaptureFixtur
         usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
     )
 
-    await ModelCallLoggingMiddleware(agent_name="researcher").awrap_model_call(
+    await ModelCallLoggingMiddleware(agent_name="research-agent").awrap_model_call(
         _request(), _handler_returning(message)
     )
 
     [record] = caplog.records
     text = record.getMessage()
     assert record.levelno == logging.INFO
-    assert "agent=researcher" in text
+    assert "agent=research-agent" in text
     assert "finish=final_answer" in text
     assert f"content_length={len(message.content)}" in text
     assert "tokens=in:10, out:5, cache_read:0" in text  # cache_read 0 when provider reports none
@@ -76,7 +76,7 @@ async def test_model_call_event_reports_cached_tokens(caplog: pytest.LogCaptureF
         },
     )
 
-    await ModelCallLoggingMiddleware(agent_name="researcher").awrap_model_call(
+    await ModelCallLoggingMiddleware(agent_name="research-agent").awrap_model_call(
         _request(), _handler_returning(message)
     )
 

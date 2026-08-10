@@ -230,9 +230,13 @@ class PrepTools:
                 raise ToolException(prompts.START_NO_PLAN)
             if not state.plan_approved:
                 raise ToolException(prompts.START_NOT_APPROVED)
+
             state.research_started = True
-            return prompts.RESEARCH_READY.format(
-                query=state.current_query, plan=_numbered(state.plan.steps)
-            )
+
+            # NOTE: StopAfterResearchStartMiddleware agent middleware stops agent execution
+            # once state.research_started is set to True.
+            # Hence, providing string output is not required,
+            # but it's a safeguard in case the middleware does not work.
+            return prompts.RESEARCH_READY
 
         return start_research
