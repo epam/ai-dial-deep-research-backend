@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -362,6 +365,33 @@ def test_schema_dial_root_keywords_present_by_default() -> None:
     assert schema["$id"] == APPLICATION_TYPE_SCHEMA_ID
     assert schema["dial:applicationTypeDisplayName"] == APPLICATION_TYPE_DISPLAY_NAME
     assert schema["dial:appendApplicationPropertiesHeader"] is False
+
+
+APPLICATIONS_TEMPLATE = Path(__file__).parent.parent / "dial_conf" / "core"
+APPLICATIONS_TEMPLATE /= "applications-template.json"
+
+
+def _template_channels() -> dict[str, dict]:
+    return json.loads(APPLICATIONS_TEMPLATE.read_text(encoding="utf-8"))["applications"]
+
+
+def test_applications_template_channels_validate() -> None:
+    for name, channel in _template_channels().items():
+        try:
+            ApplicationProperties.model_validate(channel["applicationProperties"])
+        except ValidationError as error:
+            pytest.fail(f"channel {name} in the committed template is not valid: {error}")
+
+
+def test_applications_template_sets_only_the_required_properties() -> None:
+    # The template is an example of the file's shape, not a property reference: it supplies what
+    # an operator must supply and nothing else, so a channel seeded from it follows the model's
+    # defaults as they change. The reference is the model and `docs/generated-app-schema.json`.
+    required = {
+        name for name, field in ApplicationProperties.model_fields.items() if field.is_required()
+    }
+    for name, channel in _template_channels().items():
+        assert set(channel["applicationProperties"]) == required, name
 
 
 def test_schema_dial_root_keywords_absent_when_excluded() -> None:

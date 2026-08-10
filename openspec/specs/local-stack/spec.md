@@ -120,11 +120,19 @@ The repository SHALL keep application instances (client configs) in a gitignored
 `dial_conf/core/applications.json`, seeded from a committed generic template
 `dial_conf/core/applications-template.json`:
 
-- The template SHALL contain exactly one generic example instance (no real client names or
-  other sensitive content), referencing the Deep Research type by `applicationTypeSchemaId`
-  and carrying `applicationProperties` consistent with
-  `data/configs/example-application-properties.json`, plus a `roles.default.limits` fragment
-  granting the `default` role access to the example instance.
+- The template SHALL contain one generic example instance per registered application type —
+  the research type and the playground type — with no real client names or other sensitive
+  content, each referencing its type by `applicationTypeSchemaId`, plus a
+  `roles.default.limits` fragment granting the `default` role access to each instance.
+- The template is an **example of the config file's shape**, not a property reference. Each
+  instance's `applicationProperties` SHALL set only the properties the properties model
+  requires, and SHALL NOT restate a property that has a default. The full reference for what
+  a property means and what it defaults to is the model and its generated schema (see
+  **application-config-schema**).
+- A change to the model's **required** properties — a required property added, removed or
+  renamed, or an existing property becoming required or optional — SHALL update the template's
+  instances in the same change, and the test suite SHALL fail while the template does not set
+  exactly the required set.
 - `make infra-config` SHALL copy the template to `dial_conf/core/applications.json` when the
   local file does not exist, and SHALL NOT overwrite an existing local file.
 - The README SHALL document that real client instances are added to the local
@@ -135,6 +143,32 @@ The repository SHALL keep application instances (client configs) in a gitignored
 - **WHEN** a contributor runs `make infra-config` on a fresh clone
 - **THEN** `dial_conf/core/applications.json` SHALL be created as a copy of the committed
   template
+
+#### Scenario: Template sets the required properties only
+
+- **WHEN** the committed template's instances are checked against the properties model
+- **THEN** each instance's `applicationProperties` SHALL set exactly the properties the model
+  requires, and SHALL set no property that the model gives a default
+
+#### Scenario: A newly required property is added to the template
+
+- **WHEN** a property is added to the properties model as required, or an existing property
+  becomes required
+- **THEN** the committed template's instances SHALL be updated in the same change to set it,
+  and the test suite SHALL fail until they do
+
+#### Scenario: A property that becomes optional leaves the template
+
+- **WHEN** a required property gains a default and so becomes optional
+- **THEN** the committed template's instances SHALL drop it in the same change, and the test
+  suite SHALL fail until they do
+
+#### Scenario: A changed default reaches an already-seeded channel
+
+- **WHEN** a property's default changes in the properties model and a contributor's
+  `applications.json` was seeded from the template before that change
+- **THEN** the seeded channel SHALL follow the new default, because the template stated no
+  value for that property to pin
 
 #### Scenario: Existing local file preserved
 
