@@ -171,12 +171,13 @@ class ReportSection(BaseModel):
 # (see `ReportSection.description`). The inline citation format is deliberately NOT here: it
 # applies to every section's body, so it stays a report-wide rule in the report prompt.
 _REFERENCES_DESCRIPTION = """\
-Decode every source cited in the report. If any document was cited, add a Sources table decoding \
-each `doc <id>`, with columns `doc id`, `title`, `publication date`. If any dataset was cited, add \
-a separate Datasets table below it, with columns `dataset id`, `title`. Each table lists only the \
-sources of its type actually cited above, so a type with nothing cited drops its own table. The \
-section itself is always written: if the research cited no source at all, say so plainly here \
-rather than leaving the section out or inventing entries."""
+Decode every source cited in the report.
+If any document was cited, add a "Documents" table, with columns: `id`, `title`, `publication date`.
+If any dataset was cited, add a "Datasets" table, with columns: `title`.
+Each table lists only the sources of its type actually cited in the report,
+so a type with nothing cited drops its own table.
+The section itself is always written: if the research cited no source at all,
+say so plainly here rather than leaving the section out or inventing entries."""
 
 DEFAULT_REPORT_STRUCTURE: list[ReportSection] = [
     ReportSection(

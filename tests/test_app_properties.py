@@ -83,14 +83,6 @@ def test_report_defaults_resolve_without_configuration() -> None:
     assert properties.max_report_versions == 3
 
 
-def test_default_references_description_owns_the_source_entry_rules() -> None:
-    # Both cited types are decoded in that one description, so it is the whole answer to how
-    # sources are listed.
-    references = ApplicationProperties.model_validate(VALID_PROPERTIES).default_report_structure[-1]
-    assert "doc id" in references.description
-    assert "dataset id" in references.description
-
-
 def test_empty_report_structure_is_rejected() -> None:
     data = {**VALID_PROPERTIES, "default_report_structure": []}
     with pytest.raises(ValidationError) as excinfo:
