@@ -129,6 +129,6 @@
 - [x] 13.1 Confirm the CLAUDE.md convention on stating each LLM call's inputs and outputs is present (already applied in the working tree)
 - [x] 13.2 `make format` and `make lint` clean, including the schema drift check
 - [x] 13.3 `make test` green
-- [ ] 13.4 Run a real turn with `scripts/send_conversation.py` and check by eye: the answer is the report alone, sections match the configuration, the references section is present, no meta-annotations, and the review stage shows the counts and findings
-- [ ] 13.5 Read the INFO log of that run against the skeleton: report-generated and report-reviewed present with their counts, and no report or finding text anywhere
+- [x] 13.4 Run a real turn with `scripts/send_conversation.py` and check by eye: the answer is the report alone, sections match the configuration, the references section is present, no meta-annotations, and the review stage shows the counts and findings
+- [x] 13.5 Read the INFO log of that run against the skeleton: report-generated and report-reviewed present with their counts, and no report or finding text anywhere
 - [x] 13.6 Update `docs/architecture.md` for the behavior this change alters: four nodes instead of three, the report ↔ report-review loop and its edges, the report-review stage, the report appended once rather than streamed (two places say "streamed"), and the revised outer step-budget bound
