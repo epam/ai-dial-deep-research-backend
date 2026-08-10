@@ -317,15 +317,20 @@ is part of the contract, not an accident of implementation.
   not to.
 - Messages: one human message, assembled **stable content first** so successive review calls in a run
   share a byte prefix (the same rule as research-review's assembly, see **prompt-caching**): the
-  configured report structure, the protected sections, the ceiling, the aligned research question,
-  and **the approved preparation plan only** — the first entry of the plan list, since later entries
-  are authored by research-review rather than the user and cannot carry a user's formatting
-  instruction. The draft and its measured word count come **last**, being the only parts that differ
-  between the calls of one run.
+  configured report structure with each section's description, the protected sections, the aligned
+  research question, and **the approved preparation plan only** — the plan list's first entry,
+  since later entries are authored by research-review rather than the user and cannot carry a
+  user's formatting instruction. The draft comes **last**, being the only part that differs between
+  the calls of one run.
+- **Neither the measured word count nor the ceiling is included**, and the message tells this call
+  that the app checks the headings and the length itself. Length is not its to judge: the app
+  measures the draft and adds the length violation on its own (see **report-composition**).
 - **The research findings are NOT included** — no transcript, no tool results, no images. Every
   criterion this call judges is decidable from the draft, the configuration, and the query and
   plan.
-- Output: a structured verdict — the findings, then approval or revision instructions.
+- Output: a structured verdict — one list of report violations, where an empty list is the
+  approval. There is no separate approval field, so a remark the model does not want acted on
+  cannot be expressed and forces a revision instead.
 
 #### Scenario: research-review judges coverage without the images
 
@@ -336,8 +341,9 @@ is part of the contract, not an accident of implementation.
 #### Scenario: report-review sees the draft but not the findings
 
 - **WHEN** report-review judges a draft
-- **THEN** its input SHALL contain the draft, the configuration, the counts, and the query and
-  plan, and SHALL NOT contain any tool result, transcript message, or image
+- **THEN** its input SHALL contain the draft, the configured structure, the protected sections, and
+  the query and plan, and SHALL NOT contain any tool result, transcript message, image, measured
+  word count, or ceiling
 
 #### Scenario: A revision's prompt extends the draft's prompt
 

@@ -65,28 +65,30 @@ exhausted — iteration count, owned by the research router: the last permitted 
 review call, so no research-iteration-reviewed event can carry the hand-off; (8) report generated — draft ordinal
 (1 for the first draft, incrementing per revision), duration, report length in characters and in
 measured words, token usage when available including the cached-input-token count, owned by the
-report node; (8a) report reviewed — draft ordinal, duration, the review model's
-`verdict` (`approved`/`revise`/`failed`) and separately the app's `action`
-(`deliver`/`revise`/`revise_over_ceiling`), the draft's measured word count, the
-configured ceiling, the **number** of findings the review returned, and token usage when available
-including the cached-input-token count, owned by the report-review node. The findings themselves are
-LLM response text and SHALL NOT appear in this record or any other, at any level — they are carried to
-the user in a DIAL stage instead (see **report-composition**); (8b) report delivered without
-review — draft ordinal, the configured version budget, the draft's measured word count, owned by
-the research runner: an exhausted budget makes no review call, so no report-reviewed event can
-carry it; (9) request completed — outcome (`completed`/`failed`), total duration, and on
-failure the same `error_reference` as the ERROR record. The `finish_iteration` sentinel tool SHALL
-NOT produce a tool-call event above DEBUG.
+report node; (8a) report reviewed — draft ordinal, duration, the `outcome`
+(`deliver`/`revise`), an `error` field naming the exception kind when the review call failed and
+nothing when it succeeded, the draft's measured word count, the configured ceiling, the
+**number** of violations recorded against the draft, and token usage when available including the
+cached-input-token count, owned by the report-review node. That number counts one combined list —
+the app's own rule violations followed by the review model's — because that list is what a
+revision acts on. The violations themselves are LLM response text and SHALL NOT appear in this
+record or any other, at any level — they are carried to the user in a DIAL stage instead (see
+**report-composition**); (8b) report delivered without review — draft ordinal, the configured
+version budget, the draft's measured word count, owned by the research runner: an exhausted budget
+makes no review call, so no report-reviewed event can carry it; (9) request completed — outcome
+(`completed`/`failed`), total duration, and on failure the same `error_reference` as the ERROR
+record. The `finish_iteration` sentinel tool SHALL NOT produce a tool-call event above DEBUG.
 
-Splitting the model's `verdict` from the app's `action` is deliberate: a draft the model approved
-and the app revised anyway (because the measured count exceeded the ceiling) is otherwise
-indistinguishable in the log from one the model asked to revise, and telling those apart is how the
-review step's usefulness gets judged over time.
+One `outcome` field carries the decision because the review model has no verdict field of its own:
+an empty violation list is its approval (see **report-composition**), and the app folds its own
+rule violations into that list before the decision is taken. The record therefore states that a
+revision was required and how many violations it acts on, not whether the app's rules or the
+review model raised them.
 
 A report delivered with the review still unsatisfied SHALL be visible in the logs: an exhausted
-version budget fires the report-delivered-without-review event, and `verdict=failed` marks a
-review call that did not produce a verdict; such a call SHALL additionally log a WARNING naming
-the failure kind.
+version budget fires the report-delivered-without-review event, and a populated `error` field on
+the report-reviewed event marks a review call that did not produce a verdict; such a call SHALL
+additionally log a WARNING naming the failure kind.
 
 A **failed revision** is recorded differently, because neither of the two report events can carry it:
 the report-review node never runs for it (the graph leaves the loop instead, see
@@ -94,7 +96,7 @@ the report-review node never runs for it (the graph leaves the loop instead, see
 produced. Its record SHALL therefore be a WARNING owned by the report node, naming the failure kind,
 the ordinal of the revision that failed, and the ordinal of the draft delivered in its place. The
 delivered report is the one an earlier report-generated event already recorded.
-None of these SHALL log report text — counts, verdicts, actions, and durations only, per the content
+None of these SHALL log report text — counts, outcomes, and durations only, per the content
 allowlist.
 
 #### Scenario: Successful research turn reads as a skeleton at INFO
