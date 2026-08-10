@@ -39,6 +39,10 @@ from dial_deep_research.app.research.prompts import (
     render_protected_section_names,
     render_report_structure,
 )
+from dial_deep_research.app.research.report_rules import (
+    build_report_rules,
+    render_writer_instructions,
+)
 from dial_deep_research.app_properties import DEFAULT_REPORT_STRUCTURE, ReportSection
 from dial_deep_research.utils.content import count_image_blocks, count_words
 
@@ -53,6 +57,14 @@ _CUSTOM_SECTIONS = [
     ),
     ReportSection(name="Outlook", description="What follows, where the findings support it."),
 ]
+
+
+_ONE_SECTION = [ReportSection(name="Summary", description="The answer.", protected=True)]
+
+
+def _conforming_draft(body: str, sections: list[ReportSection] | None = None) -> str:
+    """A draft whose headings satisfy the structure rule, so only the rule under test can fire."""
+    return "\n\n".join(f"## {section.name}\n\n{body}" for section in (sections or _ONE_SECTION))
 
 
 def _state(**overrides: Any) -> Any:
@@ -295,16 +307,17 @@ async def test_an_approved_draft_within_the_ceiling_is_delivered(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
-    node, stages = _review_node(llm, monkeypatch)
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
 
-    result = await node(_state(report="a short draft", report_version=1))
+    result = await node(_state(report=_conforming_draft("a short draft"), report_version=1))
 
     assert result == {"report_revision_instruction": None}
     [outcome] = stages
     assert outcome.violations == []
     assert outcome.error is None
     assert outcome.draft_number == 1
-    assert outcome.word_count == 3
+    # The heading's two words count with the body's three.
+    assert outcome.word_count == 5
 
 
 async def test_violations_become_the_revision_instruction_and_reach_the_stage(
@@ -312,9 +325,9 @@ async def test_violations_become_the_revision_instruction_and_reach_the_stage(
 ) -> None:
     violation = "The References section was dropped; restore it with the source tables."
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[violation])))
-    node, stages = _review_node(llm, monkeypatch)
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
 
-    result = await node(_state(report="a short draft"))
+    result = await node(_state(report=_conforming_draft("a short draft")))
 
     assert result["report_revision_instruction"] is not None
     assert violation in result["report_revision_instruction"]
@@ -327,16 +340,16 @@ async def test_an_approving_review_cannot_pass_an_over_ceiling_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
-    node, stages = _review_node(llm, monkeypatch, max_words=3)
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION, max_words=3)
 
-    result = await node(_state(report="one two three four five"))
+    result = await node(_state(report=_conforming_draft("one two three four five")))
 
     assert result["report_revision_instruction"] is not None
     [outcome] = stages
     # The count is the app's: the length violation joins the list even though the model
     # reported none, so the stage shows why the revision happens.
     [length_violation] = outcome.violations
-    assert "5 words" in length_violation
+    assert "7 words" in length_violation
     assert "3-word ceiling" in length_violation
     assert outcome.error is None
 
@@ -351,7 +364,7 @@ async def test_citations_and_the_sources_section_do_not_push_a_draft_over_the_ce
         "## Sources\n\n| doc id | title |\n| 150 | The annual report on rates |\n"
     )
     sections = [
-        *_CUSTOM_SECTIONS,
+        ReportSection(name="Summary", description="The answer.", protected=True),
         ReportSection(
             name="Sources",
             description="The cited sources.",
@@ -370,29 +383,48 @@ async def test_citations_and_the_sources_section_do_not_push_a_draft_over_the_ce
     assert outcome.violations == []
 
 
+async def test_a_rule_violation_survives_an_approving_review(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The structure rule is the app's own: an approving model cannot pass a draft that renamed a
+    # section, and the stage shows the rule's own wording.
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
+
+    result = await node(_state(report="## Overview\n\nThe answer."))
+
+    assert result["report_revision_instruction"] is not None
+    [outcome] = stages
+    # One violation, naming the section the structure requires and the one the draft wrote.
+    [violation] = outcome.violations
+    assert "'Summary'" in violation
+    assert "'Overview'" in violation
+    assert outcome.error is None
+
+
 async def test_a_failed_review_call_still_shortens_an_over_long_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     llm = _FakeReviewLLM(RuntimeError("provider is down"))
-    node, stages = _review_node(llm, monkeypatch, max_words=3)
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION, max_words=3)
 
-    result = await node(_state(report="one two three four five"))
+    result = await node(_state(report=_conforming_draft("one two three four five")))
 
     assert result["report_revision_instruction"] is not None
     [outcome] = stages
     # The failure and the length violation are separate facts, and both stay visible.
     assert outcome.error == "RuntimeError"
     [length_violation] = outcome.violations
-    assert "5 words" in length_violation
+    assert "7 words" in length_violation
 
 
 async def test_a_failed_review_call_delivers_a_draft_within_the_ceiling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     llm = _FakeReviewLLM(RuntimeError("provider is down"))
-    node, stages = _review_node(llm, monkeypatch)
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
 
-    result = await node(_state(report="a short draft"))
+    result = await node(_state(report=_conforming_draft("a short draft")))
 
     assert result == {"report_revision_instruction": None}
     # The failure is visible as a stage of its own, with nothing to revise against.
@@ -405,9 +437,9 @@ async def test_an_unparseable_verdict_is_absorbed_like_a_failed_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     llm = _FakeReviewLLM(_UNPARSEABLE)
-    node, stages = _review_node(llm, monkeypatch)
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
 
-    result = await node(_state(report="a short draft"))
+    result = await node(_state(report=_conforming_draft("a short draft")))
 
     assert result == {"report_revision_instruction": None}
     [outcome] = stages
@@ -421,10 +453,10 @@ async def test_violations_reach_the_stage_but_never_a_log_record(
     """The asymmetry is the requirement: the stage shows the violations, the log counts them."""
     violation = "The draft ends with 'Confidence: High (3 sources)'; remove it."
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[violation])))
-    node, stages = _review_node(llm, monkeypatch)
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
     caplog.set_level(logging.DEBUG, logger=nodes.__name__)
 
-    await node(_state(report="a short draft"))
+    await node(_state(report=_conforming_draft("a short draft")))
 
     assert stages[0].violations == [violation]
     records = [record.getMessage() for record in caplog.records]
@@ -438,9 +470,9 @@ async def test_the_stage_reports_the_draft_being_reviewed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
-    node, stages = _review_node(llm, monkeypatch, max_words=1200)
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION, max_words=1200)
 
-    await node(_state(report="a short draft", report_version=2))
+    await node(_state(report=_conforming_draft("a short draft"), report_version=2))
 
     [outcome] = stages
     # The stage reports the state's version index as-is: this is the second draft.
@@ -544,9 +576,9 @@ def test_render_length_exemptions_follows_the_configured_structure() -> None:
 def test_report_system_prompt_states_the_ceiling_and_the_protected_names() -> None:
     prompt = REPORT_SYSTEM_PROMPT.format(
         today_date=_TODAY,
-        report_structure=render_report_structure(DEFAULT_REPORT_STRUCTURE),
-        max_words=2750,
-        length_exemptions=render_length_exemptions(DEFAULT_REPORT_STRUCTURE),
+        rules=render_writer_instructions(
+            build_report_rules(sections=DEFAULT_REPORT_STRUCTURE, max_words=2750)
+        ),
         protected_sections=render_protected_section_names(DEFAULT_REPORT_STRUCTURE),
     )
 

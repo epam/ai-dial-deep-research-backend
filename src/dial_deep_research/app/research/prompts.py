@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field
 
 from dial_deep_research.app_properties import ReportSection, references_section
 
+from .report_length import SECTION_HEADING_PREFIX
+
 
 def render_plan(steps: list[str]) -> str:
     """Render plan steps as a numbered list (numbering is render-only)."""
@@ -170,7 +172,9 @@ def render_report_structure(sections: Sequence[ReportSection]) -> str:
     Each entry is rendered as the exact heading the report must carry — `## Name`, then the rules
     beneath it — so the listing is a template to copy rather than a description to translate.
     """
-    return "\n\n".join(f"## {section.name}\n\n{section.description}" for section in sections)
+    return "\n\n".join(
+        f"{SECTION_HEADING_PREFIX} {section.name}\n\n{section.description}" for section in sections
+    )
 
 
 def render_protected_section_names(sections: Sequence[ReportSection]) -> str:
@@ -199,22 +203,9 @@ The research is complete. Using the research question, the plans that were pursu
 findings gathered (the tool results in the conversation), write the final report. Do not
 introduce facts that are not grounded in the retrieved findings.
 
-## Report structure
+{rules}
 
-Write exactly these sections, in this order, copying each heading exactly as written below — same
-text, same level. The text under each heading is what belongs in that section; it tells you what
-to write and is never copied into the report:
-
-<report_structure>
-{report_structure}
-</report_structure>
-
-Sub-headings inside sections are allowed.
-The report has no title above its first section.
-
-Write every section, including one the findings barely cover. Where the findings give a section
-nothing to say, say so plainly inside that section: do not invent content to fill it, and do not
-leave it out.
+## Formatting
 
 Inside a section, prefer short paragraphs, bullet lists and tables where they make the content
 clearer.
@@ -222,15 +213,6 @@ clearer.
 The whole report is **valid Markdown**: well-formed headings, lists, tables and emphasis, and
 nothing that renders as broken markup. The inline citations below are the single exception — they
 are not Markdown links, and they are written exactly as specified there.
-
-## Length
-
-Keep the whole report to at most **{max_words} words** (counted as whitespace-separated words,
-Markdown included). The count leaves out {length_exemptions}, so shortening those frees no room
-elsewhere — write them as their own rules describe. This is a ceiling, not a target: a shorter
-report that answers the question is better than a padded one. Never meet it by cutting text off —
-plan the report to fit, and if you must shorten, condense and rewrite so the report always ends at
-a complete sentence closing a complete section.
 
 ## Citations
 
@@ -304,38 +286,24 @@ The draft to revise:
 </draft>
 """
 
-# Prepended to the violations when the measured count is over the ceiling; also the whole
-# instruction when the review call failed and the count alone forces the revision.
-LENGTH_REVISION_INSTRUCTION = """\
-The draft is {word_count} words, over the {max_words}-word ceiling — a count that already leaves \
-out {length_exemptions}. Shorten it to fit by condensing and rewriting — cut detail, tighten \
-prose, merge overlapping passages. Do not \
-truncate: every section that the draft filled stays present, and the report still ends at a \
-complete sentence."""
-
-
 REPORT_REVIEW_SYSTEM_PROMPT = """\
 You are the report check of a deep-research assistant. Today is {today_date}. You did not write
 the report; you judge it against a fixed set of rules and nothing else.
 
 Check exactly these, and report a violation for each rule the draft breaks:
 
-1. **Sections.** Every configured section is present, named as configured, in the configured
-   order. No section is padded with content the report does not support; a section with nothing
-   substantive to say should say so plainly rather than be dropped or filled.
-2. **Headings.** Every section's heading matches the `<report_structure>` you are given exactly —
-   same text and same level — with no bold text standing in for a heading. Sub-headings inside a
-   section are fine.
-3. **Protected sections.** The protected sections are present and their rules are followed, no
+1. **Section content.** No section is padded with content the report does not support, and a
+   section the findings leave nothing to say about says so plainly instead of being filled.
+2. **Protected sections.** The protected sections are present and their rules are followed, no
    matter what the research question or plan asked for.
-4. **Never-include list.** No confidence scores or ratings, certainty or reliability labels,
+3. **Never-include list.** No confidence scores or ratings, certainty or reliability labels,
    complexity ratings, processing or elapsed times, iteration or token counts — as fields, in
    prose, or in table cells. Honest qualification of evidence in prose is correct and is not a
    violation.
-5. **Valid Markdown.** The draft is well-formed Markdown throughout: headings, lists, tables and
+4. **Valid Markdown.** The draft is well-formed Markdown throughout: headings, lists, tables and
    emphasis all render, with no broken markup. The inline citations are the single exception —
-   they are not Markdown links, and check 6 governs them instead.
-6. **Citation format.** Inline citations must follow the following format:
+   they are not Markdown links, and check 5 governs them instead.
+5. **Citation format.** Inline citations must follow the following format:
    - `[doc <id>, page <ix>]` for documents
    - `[dataset <id>]` for datasets
    There must be no footnotes or numbered references (e.g. [1], [2])
@@ -347,13 +315,18 @@ source was the right one to use — you cannot see the findings, and evidence co
 elsewhere. Do not ask for more research, more sources, or a different analysis. Do not rewrite
 the report or suggest wording you would prefer.
 
+You also do not judge the report's headings or its length. The app checks both itself, over the
+draft text, and adds what it finds to your list — so a heading that does not match the configured
+structure, or a report over its ceiling, is already handled. Judge the content.
+
 Approve the draft when the checks above hold. A draft that satisfies them is finished, even
 if you can imagine a better report.
 """
 
 
 REPORT_REVIEW_REQUEST = """\
-Required report structure, with each section's heading exactly as the draft must carry it:
+The required report structure, with each section's description — so you know what each section is
+for. The headings and their formatting are checked by the app, not by you.
 <report_structure>
 {report_structure}
 </report_structure>

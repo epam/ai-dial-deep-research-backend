@@ -14,12 +14,12 @@ configured order, each rendered as a Markdown heading carrying the configured se
 
 **Heading levels are fixed.** Every configured section SHALL be a `##` heading carrying exactly
 its configured name — never `#`, never `###`, and never bold text standing in for a heading. A
-report SHALL carry no `#` heading at all, and sub-headings within a section SHALL be `###` or
-deeper. Both the report writer and the review step SHALL be given this rule, and the review step
-SHALL report a violation for a section written at any other level. The level is not decoration:
-the app finds the references section by its heading when measuring length, DIAL chat renders the
-report from its heading structure, and a report whose sections sit at differing levels reads as
-several documents.
+report SHALL carry no `##` heading that is not a configured section, and sub-headings within a
+section SHALL be `###` or deeper. The report writer SHALL be given this rule, and the app SHALL
+check it itself over the finished draft (see the app-checked-rules requirement below). The level
+is not decoration: the app finds the references section by its heading when measuring length, DIAL
+chat renders the report from its heading structure, and a report whose sections sit at differing
+levels reads as several documents.
 
 A section's configured **description is the single home for that section's rules**. Everything
 about what the section contains — its purpose, what to put in it, how to render it, any table
@@ -90,10 +90,9 @@ configured structure declares.
 
 #### Scenario: A section written at the wrong heading level is a violation
 
-- **WHEN** a draft writes a configured section as `# Conclusion` or as bold text instead of a
-  `##` heading
-- **THEN** the review step SHALL report it as a violation and a revision SHALL be required while
-  the version budget allows
+- **WHEN** a draft writes a configured section as `# Conclusion`, or as `## **Conclusion**`
+- **THEN** the app's own structure check SHALL report it, naming the heading the section must
+  carry, and a revision SHALL be required while the version budget allows
 
 #### Scenario: A section the findings do not support is not padded
 
@@ -413,15 +412,60 @@ own inference is content about the findings, not a rating of the research.
 - **THEN** the report SHALL state neither the elapsed time nor the number of iterations or tool
   calls it took
 
+### Requirement: The rules the app can check itself are checked in Python, not by a model
+
+Some report rules are decidable from the draft text alone. Those SHALL be owned by the app: the
+**section structure** (every configured section present, named exactly as configured, in the
+configured order, as a `##` heading) and the **word ceiling**. They SHALL be checked in Python on
+every reviewed draft, and their violations SHALL join the review model's violations as one list, so
+a revision acts on both together.
+
+Each such rule SHALL keep three things in one place: the instruction given to the report writer,
+the check over the finished draft, and the wording of the violation a revision acts on. A rule is
+configured once from the instance's configuration and used at both points, so the writer can never
+be told something different from what its draft is judged against.
+
+**The review model SHALL NOT be asked to judge either of them.** It is told that the app checks the
+headings and the length, and its own checks are the ones that need a reader: a padded section, a
+section that should admit it has nothing to say, the protected-section rules, the prohibited
+annotations, valid Markdown, and the citation format. A model verdict SHALL NOT be able to pass a
+draft that breaks an app-checked rule, and a review call that fails SHALL NOT suppress one.
+
+Because the structure check passes only when every heading matches the configuration exactly, the
+references section is then found by the length measure by construction — a draft that renamed it,
+omitted it, or wrote it at another level is reported by the structure rule rather than silently
+losing its exemption. No separate signal for the exemption is therefore emitted, and the
+correspondence between the two is covered by tests rather than at runtime.
+
+#### Scenario: An approving verdict cannot pass a mis-headed draft
+
+- **WHEN** the review model returns no violations for a draft whose `Conclusion` section is written
+  as `# Conclusion`
+- **THEN** the app's structure rule SHALL report it, a revision SHALL be required while the budget
+  allows, and the violation SHALL name the section and the heading it must carry
+
+#### Scenario: A failed review call still reports the app-checked rules
+
+- **WHEN** the review call fails on a draft that is over the ceiling and missing a configured
+  section
+- **THEN** both violations SHALL still be reported, and the turn SHALL NOT fail
+
+#### Scenario: The review model is not asked about headings or length
+
+- **WHEN** the report-review call is issued
+- **THEN** its prompt SHALL state that the app checks the headings and the length itself, and
+  SHALL NOT ask it to verify either
+
 ### Requirement: A review ↔ revise loop enforces the report rules before delivery
 
 A finished draft SHALL be judged by an independent review step before it is delivered. That
 step SHALL read the draft, the configured report structure, the protected sections, and the
 research question and plan — the last two because they are where a user's formatting instruction
 lives, and without them the step cannot tell a legitimately-followed instruction from an
-override of a protected rule. It SHALL judge the draft against the configured structure, the
-protected sections and their rules, the prohibited meta-annotations, and the citation format
-rules the **research-execution** capability defines. It SHALL NOT be given the measured word
+override of a protected rule. It SHALL judge the draft against the section content rules, the
+protected sections and their rules, the prohibited meta-annotations, well-formed Markdown, and the
+citation format rules the **research-execution** capability defines. The section structure and the
+word ceiling are not its to judge — the app checks those itself (see the requirement above). It SHALL NOT be given the measured word
 count or the ceiling: length needs no model — the app measures it and adds the length violation
 itself (see the ceiling requirement).
 

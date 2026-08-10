@@ -224,7 +224,7 @@ class ResearchRunner:
             report_version=self._report_version, max_versions=max_versions
         ):
             return
-        word_count = count_report_words(self._report, properties.default_report_structure)
+        word_count = count_report_words(self._report, sections=properties.default_report_structure)
         logger.info(
             "Report delivered without review: draft=%d max_versions=%d words=%d",
             self._report_version,

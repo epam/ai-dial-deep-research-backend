@@ -52,7 +52,6 @@ from dial_deep_research.utils.llm import (
 
 from .middleware import ForceToolChoiceMiddleware, IterationCounterMiddleware
 from .prompts import (
-    LENGTH_REVISION_INSTRUCTION,
     REPORT_REQUEST,
     REPORT_REVIEW_REQUEST,
     REPORT_REVIEW_SYSTEM_PROMPT,
@@ -70,6 +69,7 @@ from .prompts import (
     render_report_structure,
 )
 from .report_length import count_report_words
+from .report_rules import build_report_rules, render_writer_instructions
 from .state import ResearchState
 
 logger = logging.getLogger(__name__)
@@ -265,9 +265,9 @@ def make_report_node(
             SystemMessage(
                 content=REPORT_SYSTEM_PROMPT.format(
                     today_date=today_date,
-                    report_structure=render_report_structure(sections),
-                    max_words=max_words,
-                    length_exemptions=render_length_exemptions(sections),
+                    rules=render_writer_instructions(
+                        build_report_rules(sections=sections, max_words=max_words)
+                    ),
                     protected_sections=render_protected_section_names(sections),
                 )
             ),
@@ -282,7 +282,7 @@ def make_report_node(
             report_messages.append(
                 HumanMessage(
                     content=REPORT_REVISION_REQUEST.format(
-                        word_count=count_report_words(previous_draft, sections),
+                        word_count=count_report_words(previous_draft, sections=sections),
                         max_words=max_words,
                         length_exemptions=render_length_exemptions(sections),
                         instruction=state.get("report_revision_instruction") or "",
@@ -313,7 +313,7 @@ def make_report_node(
             draft_number,
             time.monotonic() - start,
             len(text),
-            count_report_words(text, sections),
+            count_report_words(text, sections=sections),
             format_token_usage(response.usage_metadata),
         )
         # No `AIMessage` into `messages`: drafts stay out of the transcript, so a rejected one
@@ -332,15 +332,18 @@ def make_report_review_node(
 ) -> ReportReviewNode:
     """Build the report-review node: judge the draft, emit its stage, decide the next step.
 
-    It sees the draft, the configuration and the query and plan — never the research findings,
-    which is why it cannot reopen evidence coverage. A failing call never fails the turn: the
-    loop falls back to the measured count alone.
+    Two judgements meet here. The app's own rules (`report_rules`) are checked in Python over the
+    draft text, and the review model judges what needs a reader — padding, banned annotations,
+    protected-section rules, citation format. It sees the draft, the configuration and the query
+    and plan, never the research findings, which is why it cannot reopen evidence coverage. A
+    failing call never fails the turn: the rules still run and their violations still stand.
     """
+    rules = build_report_rules(sections=sections, max_words=max_words)
 
     async def report_review(state: ResearchState) -> dict[str, Any]:
         start = time.monotonic()
         draft = state["report"] or ""
-        word_count = count_report_words(draft, sections)
+        word_count = count_report_words(draft, sections=sections)
         draft_number = state.get("report_version", 0)
 
         violations: list[str] = []
@@ -383,18 +386,12 @@ def make_report_review_node(
                 error,
             )
 
-        if word_count > max_words:
-            # The count is the app's, not the model's opinion: the length violation joins the
-            # list whether the model reported one, reported none, or the call failed — so an
-            # approving review cannot pass an over-long draft, and a failed one still shortens it.
-            violations = [
-                LENGTH_REVISION_INSTRUCTION.format(
-                    word_count=word_count,
-                    max_words=max_words,
-                    length_exemptions=render_length_exemptions(sections),
-                ),
-                *violations,
-            ]
+        # The rules are the app's own, not the model's opinion: their violations join the list
+        # whether the model reported any, reported none, or the call failed — so an approving
+        # review cannot pass a draft that breaks one, and a failed review still shortens an
+        # over-long draft and reports a mis-headed section.
+        rule_violations = [v for rule in rules for v in rule.violations(draft)]
+        violations = [*rule_violations, *violations]
         duration = time.monotonic() - start
         outcome = ReportReviewOutcome(
             draft_number=draft_number,

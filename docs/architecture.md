@@ -183,8 +183,8 @@ The rest of the loop, in brief — each item is specified in the linked specs:
 - **Report structure**: `default_report_structure` (an application property) — an ordered list of
   `{name, description, protected, references_section}` sections, Overview → Key Findings →
   Detailed Analysis → Conclusion → References by default. Every section is rendered as a `##`
-  heading; report-review checks the level as well as the name. A section's `description` is the
-  single home for its content rules and is passed verbatim to both the report node and
+  heading, and the app checks that itself (see the rules bullet below). A section's `description`
+  is the single home for its content rules and is passed verbatim to both the report node and
   report-review. A protected section (Overview and References, by default) may be neither dropped
   nor restyled by anything the user asked for; at least one section must be protected. Both models
   are told which sections are protected as a rule of their own — the marker is never rendered next
@@ -198,11 +198,22 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   when the structure declares one and the draft wrote it as a `##` heading under its configured
   name; a renamed, missing, or wrongly-levelled heading is measured with the rest, so a structure
   violation earns no length budget. The count is computed in Python and given to the report node
-  as a number, so no model has to count; report-review never sees the count — the app itself
-  prepends the length violation when the count exceeds the ceiling. The ceiling is enforced by
+  as a number, so no model has to count; report-review never sees the count — the app's own length
+  rule adds the violation when the count exceeds the ceiling. The ceiling is enforced by
   rewriting, never by truncation: no token cap is placed on the report call, and a shortening
   revision rewrites to fit instead of cutting, so the report ends at a clean boundary. A draft over
   the ceiling forces a revision deterministically, even when report-review approved it.
+- **App-checked rules** (`app/research/report_rules.py`): the two report rules the app decides
+  itself, over the draft text — the section structure (every configured section present, named
+  exactly as configured, in order, as a `##` heading) and the word ceiling. Each rule owns three
+  things in one class: the instruction rendered into the report writer's prompt, the check over the
+  finished draft, and the wording of the violation a revision acts on, so the writer can never be
+  told something different from what its draft is judged against. Their violations are prepended to
+  report-review's own, and report-review is told the app checks both — leaving it what needs a
+  reader: a padded section, the protected-section rules, the banned annotations, valid Markdown,
+  the citation format. Because the structure check passes only when every heading matches the
+  configuration, the references section is then found by the length measure by construction; that
+  correspondence is covered by tests rather than by a runtime signal.
 - **Version budget**: `max_report_versions` (default 3) — at most that many report versions, the
   first draft included, so at most three report calls. The last permitted version is delivered as
   it stands, without another review call: its verdict could not be acted on. A failed

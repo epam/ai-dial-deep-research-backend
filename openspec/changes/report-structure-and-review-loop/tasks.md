@@ -112,11 +112,23 @@
 - [x] 11.9 Tests: the five defaults with their flags, the misplaced-`references_section` rejection, a structure declaring none, `tests/test_report_length.py` for the citation and references-section rules including the wrong-heading-level cases, the absence of any marker in the rendered structure, and a draft over the raw count but within the measured one. Fix the two `tests/test_dial_stages.py` assertions that were already failing at HEAD on the review-failure wording
 - [x] 11.10 Update `docs/architecture.md`: the default structure with its flags, the `##` rule, and what a counted word is
 
-## 12. Verification and docs
+## 12. Deterministic report rules
 
-- [x] 12.1 Confirm the CLAUDE.md convention on stating each LLM call's inputs and outputs is present (already applied in the working tree)
-- [x] 12.2 `make format` and `make lint` clean, including the schema drift check
-- [x] 12.3 `make test` green
-- [ ] 12.4 Run a real turn with `scripts/send_conversation.py` and check by eye: the answer is the report alone, sections match the configuration, the references section is present, no meta-annotations, and the review stage shows the counts and findings
-- [ ] 12.5 Read the INFO log of that run against the skeleton: report-generated and report-reviewed present with their counts, and no report or finding text anywhere
-- [x] 12.6 Update `docs/architecture.md` for the behavior this change alters: four nodes instead of three, the report ↔ report-review loop and its edges, the report-review stage, the report appended once rather than streamed (two places say "streamed"), and the revised outer step-budget bound
+- [x] 12.1 Add `app/research/report_rules.py`: a `ReportRule` base with `writer_instruction()` and `violations(draft)`, so one rule owns what the writer is told, what the draft is checked for, and how the violation is worded
+- [x] 12.2 `ReportStructureRule` — every configured section present, named exactly as configured, in order, as a `##` heading; reports a missing, renamed, decorated, mis-levelled, reordered or extra section. It owns the `## Report structure` prompt block
+- [x] 12.3 `ReportLengthRule` — the measured count against the ceiling. It owns the `## Length` prompt block and the length violation, both moved out of `prompts.py`
+- [x] 12.4 Share the heading parsing with `report_length.py` (`iter_headings`, `normalize_heading`, `SECTION_HEADING_LEVEL`), so the rule and the references-section cut cannot disagree about what a heading is. The rule is strict about decoration and the cut is lenient, so a decorated heading is reported without also losing the draft its exemption
+- [x] 12.5 Render the rules into `REPORT_SYSTEM_PROMPT` at one `{rules}` placeholder, in list order
+- [x] 13.6 Run the rules in the report-review node and prepend their violations to the model's list, replacing the length-only prepend. No separate references-exemption signal: the structure check passing means the cut found the section
+- [x] 12.7 Drop the sections, headings and length checks from the report-review prompt, and tell it plainly that the app checks those — leaving it the checks that need a reader
+- [x] 12.8 Tests: `tests/test_report_rules.py` for each rule, and a report-loop test that a rule violation survives an approving review. Update the loop and graph tests to use drafts whose headings conform
+- [x] 12.9 Update `docs/architecture.md` for the split between the app's rules and the review model's checks
+
+## 13. Verification and docs
+
+- [x] 13.1 Confirm the CLAUDE.md convention on stating each LLM call's inputs and outputs is present (already applied in the working tree)
+- [x] 13.2 `make format` and `make lint` clean, including the schema drift check
+- [x] 13.3 `make test` green
+- [ ] 13.4 Run a real turn with `scripts/send_conversation.py` and check by eye: the answer is the report alone, sections match the configuration, the references section is present, no meta-annotations, and the review stage shows the counts and findings
+- [ ] 13.5 Read the INFO log of that run against the skeleton: report-generated and report-reviewed present with their counts, and no report or finding text anywhere
+- [x] 13.6 Update `docs/architecture.md` for the behavior this change alters: four nodes instead of three, the report ↔ report-review loop and its edges, the report-review stage, the report appended once rather than streamed (two places say "streamed"), and the revised outer step-budget bound

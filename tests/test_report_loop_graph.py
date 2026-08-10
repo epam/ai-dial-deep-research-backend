@@ -21,9 +21,17 @@ from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.graph import build_research_graph
 from dial_deep_research.app.research.prompts import ReportReview
 from dial_deep_research.app.research.state import build_initial_state
-from dial_deep_research.app_properties import DEFAULT_REPORT_STRUCTURE
+from dial_deep_research.app_properties import ReportSection
 
 pytestmark = pytest.mark.asyncio
+
+# One section, so a draft satisfies the structure rule with a single heading: this file protects
+# the graph wiring, and the rules have their own tests.
+_SECTIONS = [ReportSection(name="Summary", description="The answer.", protected=True)]
+
+
+def _draft(body: str) -> str:
+    return f"## Summary\n\n{body}"
 
 
 class _FakeChatModel:
@@ -104,7 +112,7 @@ def _build(
         today_date="2026-07-31",
         max_research_iterations=10,
         client_name="ACME",
-        report_structure=DEFAULT_REPORT_STRUCTURE,
+        report_structure=_SECTIONS,
         max_report_words=max_report_words,
         max_report_versions=max_report_versions,
         emit_report_review_stage=stages.append,
@@ -123,12 +131,12 @@ async def _run(compiled: Any) -> dict[str, Any]:
 
 async def test_approved_first_draft_ends_the_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     compiled, llm, stages = _build(
-        monkeypatch, drafts=["short draft"], reviews=[ReportReview(report_violations=[])]
+        monkeypatch, drafts=[_draft("short draft")], reviews=[ReportReview(report_violations=[])]
     )
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.review_calls) == (1, 1)
-    assert final["report"] == "short draft"
+    assert final["report"] == _draft("short draft")
     assert final["report_version"] == 1
     assert len(stages) == 1
     assert stages[0].revision_instruction is None
@@ -137,7 +145,7 @@ async def test_approved_first_draft_ends_the_loop(monkeypatch: pytest.MonkeyPatc
 async def test_violations_drive_a_revision_then_approval(monkeypatch: pytest.MonkeyPatch) -> None:
     compiled, llm, stages = _build(
         monkeypatch,
-        drafts=["first draft", "second draft"],
+        drafts=[_draft("first draft"), _draft("second draft")],
         reviews=[
             ReportReview(report_violations=["Conclusion section missing"]),
             ReportReview(report_violations=[]),
@@ -146,7 +154,7 @@ async def test_violations_drive_a_revision_then_approval(monkeypatch: pytest.Mon
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.review_calls) == (2, 2)
-    assert final["report"] == "second draft"
+    assert final["report"] == _draft("second draft")
     assert final["report_version"] == 2
     assert [stage.revision_instruction is not None for stage in stages] == [True, False]
     # The revision extends the first draft's prompt rather than replacing any of it.
@@ -162,14 +170,14 @@ async def test_budget_caps_report_calls_at_the_version_count(
     third is delivered without a review call — its verdict could not be acted on."""
     compiled, llm, stages = _build(
         monkeypatch,
-        drafts=["draft one", "draft two", "draft three"],
+        drafts=[_draft("draft one"), _draft("draft two"), _draft("draft three")],
         reviews=[ReportReview(report_violations=["still wrong"])] * 3,
         max_report_versions=3,
     )
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.review_calls) == (3, 2)
-    assert final["report"] == "draft three"
+    assert final["report"] == _draft("draft three")
     assert final["report_version"] == 3
     assert all(stage.revision_instruction is not None for stage in stages)
 
@@ -177,14 +185,14 @@ async def test_budget_caps_report_calls_at_the_version_count(
 async def test_budget_of_one_skips_the_review_entirely(monkeypatch: pytest.MonkeyPatch) -> None:
     compiled, llm, stages = _build(
         monkeypatch,
-        drafts=["the only draft"],
+        drafts=[_draft("the only draft")],
         reviews=[],
         max_report_versions=1,
     )
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.review_calls) == (1, 0)
-    assert final["report"] == "the only draft"
+    assert final["report"] == _draft("the only draft")
     assert stages == []
 
 
@@ -194,14 +202,15 @@ async def test_over_ceiling_draft_is_revised_despite_approval(
     """The measured count overrides an approving verdict — and the loop still terminates."""
     compiled, llm, stages = _build(
         monkeypatch,
-        drafts=["one two three four five", "two words"],
+        drafts=[_draft("one two three four five"), _draft("two words")],
         reviews=[ReportReview(report_violations=[])] * 2,
-        max_report_words=3,
+        # The heading's two words count too: the first draft measures 7, the second 4.
+        max_report_words=4,
     )
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.review_calls) == (2, 2)
-    assert final["report"] == "two words"
+    assert final["report"] == _draft("two words")
     # The approving review's empty list gained the app-measured length violation.
     assert len(stages[0].violations) == 1
     assert stages[0].revision_instruction is not None
@@ -214,13 +223,13 @@ async def test_failed_revision_delivers_the_previous_draft(
     """A revision whose own call fails leaves the loop instead of re-reviewing the same draft."""
     compiled, llm, stages = _build(
         monkeypatch,
-        drafts=["the first draft", RuntimeError("context length exceeded")],
+        drafts=[_draft("the first draft"), RuntimeError("context length exceeded")],
         reviews=[ReportReview(report_violations=["too long"])],
     )
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.review_calls) == (2, 1)
-    assert final["report"] == "the first draft"
+    assert final["report"] == _draft("the first draft")
     # The failed write recorded no version, so the state still names the delivered draft.
     assert final["report_version"] == 1
     assert final["report_revision_failed"] is True
