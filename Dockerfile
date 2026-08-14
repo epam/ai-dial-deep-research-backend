@@ -37,6 +37,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /opt/app
 
+# Remove the base image's pip for the same reason .venv is built without it: the runtime
+# installs nothing, and pip's SBOM of its vendored dependencies makes Trivy report advisories
+# against code the app never imports.
+RUN python -m pip uninstall -y pip
+
 # BusyBox adduser: -D = no password, -g = gecos.
 RUN adduser -u 1001 -D -g "" appuser
 
