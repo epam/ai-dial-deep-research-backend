@@ -77,7 +77,9 @@ record or any other, at any level — they are carried to the user in a DIAL sta
 version budget, the draft's measured word count, owned by the research runner: an exhausted budget
 makes no review call, so no report-reviewed event can carry it; (9) request completed — outcome
 (`completed`/`failed`), total duration, and on failure the same `error_reference` as the ERROR
-record. The `finish_iteration` sentinel tool SHALL NOT produce a tool-call event above DEBUG.
+record. Neither the `finish_iteration` sentinel tool nor the `update_status` tool SHALL produce a
+tool-call event above DEBUG: neither performs research, and `update_status` is surfaced to the user
+as the activity stage instead (see **dial-agent-with-mcp**).
 
 One `outcome` field carries the decision because the review model has no verdict field of its own:
 an empty violation list is its approval (see **report-composition**), and the app folds its own
@@ -117,6 +119,11 @@ allowlist.
 - **WHEN** research-agent calls the `finish_iteration` sentinel
 - **THEN** no INFO tool-call event is emitted for it
 
+#### Scenario: update_status stays out of the INFO skeleton
+
+- **WHEN** research-agent calls `update_status`
+- **THEN** no INFO tool-call event is emitted for it
+
 #### Scenario: Failed turn closes the narrative
 
 - **WHEN** a turn fails after the request-received event
@@ -135,6 +142,35 @@ allowlist.
 
 - **WHEN** a model response carries no usage metadata
 - **THEN** the event still fires, with its token-usage field marked unavailable
+
+### Requirement: Status-tool misuse is logged as a warning
+
+Two ways of calling `update_status` waste a model round trip or produce nothing the user can act
+on, and the service SHALL record each as a WARNING so the pattern is diagnosable without reading
+payloads: an assistant message whose only tool call is `update_status`, and an assistant message
+carrying more than one `update_status` call.
+
+Each record SHALL be emitted once per assistant message rather than once per tool call, and SHALL
+carry counts only — how many tool calls the message held and how many of them were status calls.
+The announced status text is a tool-call argument value and SHALL NOT appear in these records or
+in any other, at any level, per the content allowlist.
+
+#### Scenario: A status-only message warns once
+
+- **WHEN** research-agent produces an assistant message whose only tool call is `update_status`
+- **THEN** the service SHALL emit one WARNING naming the condition and the tool-call counts, and
+  the record SHALL NOT contain the announced status text
+
+#### Scenario: Repeated status calls in one message warn once
+
+- **WHEN** research-agent produces an assistant message carrying three `update_status` calls
+- **THEN** the service SHALL emit one WARNING for that message rather than one per call, carrying
+  the number of status calls
+
+#### Scenario: Correct usage is silent
+
+- **WHEN** research-agent calls `update_status` exactly once alongside at least one research tool
+- **THEN** no misuse WARNING SHALL be emitted for that message
 
 ### Requirement: Content allowlist for log records
 

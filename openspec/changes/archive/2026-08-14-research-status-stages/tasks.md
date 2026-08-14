@@ -148,9 +148,9 @@
 - [x] 9.10 Update `docs/architecture.md`: the research-review node in the research graph flowchart, and
       the stage list in the loop invariants, which names the report-review and activity stages only.
 - [x] 9.11 Run `make format` and `make lint`, then the full test suite.
-- [ ] 9.12 Drive a real query end to end with `scripts/send_conversation.py` against a running server,
+- [x] 9.12 Drive a real query end to end with `scripts/send_conversation.py` against a running server,
       and confirm in the DIAL UI that a research review that continues and one that completes each
-      render their own stage, next to the live activity stage.
+      render their own stage, next to the live activity stage. Confirmed in the client.
 
 ## 10. The tool-stage title format
 

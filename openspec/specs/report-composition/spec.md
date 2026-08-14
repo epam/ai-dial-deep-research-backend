@@ -199,9 +199,11 @@ one INFO log record, so the loop's behavior is measurable without reading anyone
   as markdown). The list is everything the next revision must fix: the review model's violations,
   with the app-rendered length violation prepended when the measured count exceeds the ceiling.
 
-Its title SHALL follow the normalized shape the tool stages use, with its own prefix rather than
-`[TOOL]`, and SHALL carry the review's outcome and the elapsed time. The stage exists for the report
-review only; research review SHALL NOT emit one (out of scope here, and it MAY be added later).
+Its title SHALL carry its own prefix rather than `[TOOL]`, the draft number, the review's outcome and
+the elapsed time — the shape a result stage has, without the tool stages' start and end
+timestamps, which a single call inside one node does not need. The prefix SHALL name the report
+review specifically: the research review emits a stage of its own in the same title shape, and the two
+are told apart by their prefixes (see **research-execution**).
 
 A review that produced no violations SHALL still emit a stage, recording that the draft was approved.
 A review whose **call failed** SHALL emit one too, recording the failure — alongside the app-measured
@@ -268,6 +270,11 @@ the draft it judges.
 - **WHEN** an instance configures a version budget of one
 - **THEN** no report-review stage SHALL be emitted — not the unreviewed-delivery one either —
   because no review call is made and nothing is exhausted
+
+#### Scenario: The two review stages are told apart by their prefixes
+
+- **WHEN** one turn emits both a research-review stage and a report-review stage
+- **THEN** each SHALL carry its own prefix, so a reader can tell which review produced which stage
 
 ### Requirement: Reports respect a configured word ceiling without abrupt truncation
 
