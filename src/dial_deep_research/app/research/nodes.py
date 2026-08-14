@@ -71,12 +71,30 @@ from .prompts import (
 from .report_length import count_report_words
 from .report_rules import build_report_rules, render_writer_instructions
 from .state import ResearchState
+from .tools import (
+    HOW_TO_WRITE_STATUS,
+    RULE_NEVER_ALONE,
+    RULE_NOT_WITH_FINISH,
+    RULE_ONCE_PER_TURN,
+    UPDATE_STATUS_TOOL_NAME,
+    WHEN_TO_ANNOUNCE,
+)
 
 logger = logging.getLogger(__name__)
 
 ResearchReviewNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
 ReportNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
 ReportReviewNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
+
+# Names the work a node is starting. The runner renders it as the open activity stage; a node
+# never touches DIAL itself.
+ActivityEmitter = Callable[[str], None]
+
+# What each node calls itself while it runs. Written like research-agent's own statuses — short,
+# present tense, no prefix — so the one live line reads the same whoever set it.
+RESEARCH_REVIEW_ACTIVITY = "Reviewing what research found so far"
+REPORT_ACTIVITY = "Writing the report"
+REPORT_REVIEW_ACTIVITY = "Reviewing the report"
 
 
 def build_research_agent(tools: list[BaseTool], today_date: str, client_name: str) -> Any:
@@ -87,6 +105,14 @@ def build_research_agent(tools: list[BaseTool], today_date: str, client_name: st
         system_prompt=RESEARCH_AGENT_SYSTEM_PROMPT.format(
             today_date=today_date,
             client_name=client_name,
+            # The same sentences the status tool's description carries, and that its response
+            # quotes back when a rule is broken — one wording, so the model never has to
+            # reconcile two.
+            how_to_write_status=HOW_TO_WRITE_STATUS,
+            when_to_announce=WHEN_TO_ANNOUNCE,
+            rule_once_per_turn=RULE_ONCE_PER_TURN,
+            rule_never_alone=RULE_NEVER_ALONE,
+            rule_not_with_finish=RULE_NOT_WITH_FINISH,
         ),
         middleware=[
             *agent_logging_middleware("research-agent"),
@@ -120,6 +146,57 @@ def _render_findings(messages: list[BaseMessage]) -> str:
     return "\n\n".join(lines)
 
 
+def _drop_tool_calls(message: AIMessage, ids: set[str]) -> AIMessage | None:
+    """`message` without the tool calls in `ids`, or `None` if nothing of it is left.
+
+    `additional_kwargs["tool_calls"]` is cleaned alongside the parsed list because
+    langchain_openai falls back to it whenever the parsed list is empty, which would put the
+    removed call straight back on the wire.
+    """
+    tool_calls = [tc for tc in message.tool_calls if tc["id"] not in ids]
+    additional = {k: v for k, v in message.additional_kwargs.items() if k != "tool_calls"}
+    raw = message.additional_kwargs.get("tool_calls") or []
+    if remaining := [tc for tc in raw if tc.get("id") not in ids]:
+        additional["tool_calls"] = remaining
+    if not tool_calls and not extract_text_from_content(message.content).strip():
+        return None
+    return message.model_copy(update={"tool_calls": tool_calls, "additional_kwargs": additional})
+
+
+def _strip_status_calls(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """The transcript without research-agent's status announcements.
+
+    What the agent told the user it was doing is not evidence: it must not be weighed as a
+    search when coverage is judged, nor sit in the context of the model writing the report. A
+    status usually shares its message with real tool calls, so the call is removed from the
+    message rather than the message from the transcript, and its result is removed with it —
+    every remaining call keeps its own result, which providers require.
+
+    Being deterministic, this preserves the byte prefix successive calls share (see the
+    prompt-caching spec).
+    """
+    dropped_ids: set[str] = set()
+    kept: list[BaseMessage] = []
+    for message in messages:
+        if isinstance(message, ToolMessage):
+            if message.tool_call_id not in dropped_ids:
+                kept.append(message)
+            continue
+        if isinstance(message, AIMessage) and message.tool_calls:
+            status_ids = {
+                tc["id"]
+                for tc in message.tool_calls
+                if tc["name"] == UPDATE_STATUS_TOOL_NAME and tc["id"]
+            }
+            if status_ids:
+                dropped_ids |= status_ids
+                if (stripped := _drop_tool_calls(message, status_ids)) is not None:
+                    kept.append(stripped)
+                continue
+        kept.append(message)
+    return kept
+
+
 def _should_continue_research(*, plans_count: int, research_iteration: int) -> bool:
     """One more research-agent iteration iff research-review recorded a plan for a not-yet-run
     iteration. The iteration cap needs no check here: it is enforced before the review runs
@@ -137,10 +214,13 @@ def research_budget_exhausted(*, research_iteration: int, max_research_iteration
     return research_iteration >= max_research_iterations
 
 
-def make_research_review_node(today_date: str) -> ResearchReviewNode:
+def make_research_review_node(
+    today_date: str, emit_activity: ActivityEmitter
+) -> ResearchReviewNode:
     """Build the research-review node over the given date."""
 
     async def research_review(state: ResearchState) -> dict[str, Any]:
+        emit_activity(RESEARCH_REVIEW_ACTIVITY)
         start = time.monotonic()
         # include_raw keeps the raw AIMessage alongside the parsed verdict so we can log the
         # call's token usage (including cached input tokens); with it, parse failures surface
@@ -160,7 +240,7 @@ def make_research_review_node(today_date: str) -> ResearchReviewNode:
                 HumanMessage(
                     content=RESEARCH_REVIEW_HUMAN_MESSAGE.format(
                         query=state["original_query"],
-                        findings=_render_findings(state["messages"]),
+                        findings=_render_findings(_strip_status_calls(state["messages"])),
                         plans=plans_text,
                     )
                 ),
@@ -250,11 +330,15 @@ def review_budget_exhausted(*, report_version: int, max_versions: int) -> bool:
 
 
 def make_report_node(
-    today_date: str, sections: Sequence[ReportSection], max_words: int
+    today_date: str,
+    sections: Sequence[ReportSection],
+    max_words: int,
+    emit_activity: ActivityEmitter,
 ) -> ReportNode:
     """Build the report node: it writes the first draft, and every revision after it."""
 
     async def report(state: ResearchState) -> dict[str, Any]:
+        emit_activity(REPORT_ACTIVITY)
         start = time.monotonic()
         llm = with_stream_drop_retry(get_chat_model(LLMModelConfig()))
         plans_text = "\n\n".join(
@@ -271,7 +355,7 @@ def make_report_node(
                     protected_sections=render_protected_section_names(sections),
                 )
             ),
-            *state["messages"],
+            *_strip_status_calls(state["messages"]),
             HumanMessage(
                 content=REPORT_REQUEST.format(query=state["original_query"], plans=plans_text)
             ),
@@ -329,6 +413,7 @@ def make_report_review_node(
     sections: Sequence[ReportSection],
     max_words: int,
     emit_stage: ReportReviewStageEmitter,
+    emit_activity: ActivityEmitter,
 ) -> ReportReviewNode:
     """Build the report-review node: judge the draft, emit its stage, decide the next step.
 
@@ -341,6 +426,7 @@ def make_report_review_node(
     rules = build_report_rules(sections=sections, max_words=max_words)
 
     async def report_review(state: ResearchState) -> dict[str, Any]:
+        emit_activity(REPORT_REVIEW_ACTIVITY)
         start = time.monotonic()
         draft = state["report"] or ""
         word_count = count_report_words(draft, sections=sections)

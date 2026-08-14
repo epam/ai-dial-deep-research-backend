@@ -21,10 +21,11 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from aidial_sdk.chat_completion import Choice
+from aidial_sdk.chat_completion import Choice, Stage, Status
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
+    ToolCall,
     ToolMessage,
 )
 from langgraph.types import StreamPart
@@ -44,7 +45,12 @@ from .nodes import ReportReviewOutcome, review_budget_exhausted
 from .prompts import render_length_exemptions
 from .report_length import count_report_words
 from .state import build_initial_state
-from .tools import build_finish_iteration_tool
+from .tools import (
+    FINISH_TOOL_NAME,
+    UPDATE_STATUS_TOOL_NAME,
+    build_finish_iteration_tool,
+    build_update_status_tool,
+)
 
 if TYPE_CHECKING:
     # opik is an optional extra; only needed for the type annotation here.
@@ -52,7 +58,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_FINISH_TOOL = "finish_iteration"
+_FINISH_TOOL = FINISH_TOOL_NAME
+
+# The activity stage the runner opens before the graph runs. Every later title comes from
+# research-agent's `update_status` calls or from a node announcing itself on entry.
+_INITIAL_ACTIVITY = "Starting research"
+
+# Joins the statuses of one assistant message into a single title. The model is told to send
+# one status per turn; this keeps the extras visible without opening a stage that would close
+# an instant later and so read as a finished step.
+_STATUS_JOIN = "; "
 
 
 class ResearchRunner:
@@ -65,6 +80,9 @@ class ResearchRunner:
         self._seen_ids: set[str] = set()
         self._report: str | None = None
         self._report_version = 0
+        # The one open activity stage. A DIAL stage name can only be appended to, so changing
+        # what it says means replacing the stage; `None` means none is open right now.
+        self._activity_stage: Stage | None = None
         # Only separate the report from preparation text that actually reached the choice. With
         # the silent hand-off there usually is none, and then the report starts the message.
         self._content_already_streamed = content_already_streamed
@@ -77,8 +95,10 @@ class ResearchRunner:
         bearer_token: str | None = None,
     ) -> list[BaseMessage]:
         tools = await load_mcp_tools(mcp_servers=properties.mcp_servers, bearer_token=bearer_token)
-        # The finish sentinel is research-specific: research-agent calls it to end an iteration.
+        # Both are research-specific and app-owned: the sentinel ends an iteration, the status
+        # tool tells the user what the agent is doing. Neither reaches an MCP server.
         tools.append(build_finish_iteration_tool())
+        tools.append(build_update_status_tool())
         graph = build_research_graph(
             tools=tools,
             today_date=datetime.now().date().isoformat(),
@@ -88,6 +108,7 @@ class ResearchRunner:
             max_report_words=properties.max_report_words,
             max_report_versions=properties.max_report_versions,
             emit_report_review_stage=self._emit_report_review_stage,
+            emit_activity=self._set_activity,
         )
         # LangGraph applies this to each graph run separately, so the same value bounds the
         # research graph and every research-agent-subgraph run (see the property's description).
@@ -95,14 +116,24 @@ class ResearchRunner:
         if opik_tracer is not None:
             config["callbacks"] = [opik_tracer]
 
-        async for part in graph.astream(
-            build_initial_state(prep_state),
-            stream_mode=["updates", "values"],
-            subgraphs=True,
-            version="v2",
-            config=config,
-        ):
-            self._handle_part(part)
+        # Opened before the graph so the first model call is not silent. From here on some
+        # activity stage is always open, and `finally` is what guarantees none outlives the turn:
+        # an unclosed stage reaches the client with no status and spins there for good.
+        self._set_activity(_INITIAL_ACTIVITY)
+        try:
+            async for part in graph.astream(
+                build_initial_state(prep_state),
+                stream_mode=["updates", "values"],
+                subgraphs=True,
+                version="v2",
+                config=config,
+            ):
+                self._handle_part(part)
+        except BaseException:
+            self._close_activity(Status.FAILED)
+            raise
+        else:
+            self._close_activity(Status.COMPLETED)
 
         self._emit_unreviewed_delivery_stage(properties)
         self._deliver_report()
@@ -122,6 +153,32 @@ class ResearchRunner:
             text = "\n\n" + text
         self._choice.append_content(text)
         self._messages = [*self._messages, AIMessage(content=self._report)]
+
+    def _set_activity(self, title: str) -> None:
+        """Replace the open activity stage with a new one titled `title`.
+
+        Replacement rather than renaming, because the SDK merges stage-name deltas by
+        concatenation — a name can only grow. Closing appends no elapsed time: the stage ends
+        because a new step started, not because the announced work finished, and a duration
+        would claim the opposite.
+        """
+        self._close_activity(Status.COMPLETED)
+        stage = self._choice.create_stage(title)
+        stage.open()
+        self._activity_stage = stage
+
+    def _close_activity(self, status: Status) -> None:
+        """Close the open activity stage if there is one. Doing this twice is harmless.
+
+        Deliberately not a `with` block: `Stage.__exit__` closes unconditionally on the
+        exception path, and closing an already-closed stage raises — which would replace the
+        exception being handled with a misleading one.
+        """
+        stage = self._activity_stage
+        if stage is None:
+            return
+        self._activity_stage = None
+        stage.close(status)
 
     def _handle_part(self, part: StreamPart) -> None:
         """Route one stream part by mode.
@@ -168,18 +225,68 @@ class ResearchRunner:
         return False
 
     def _handle_ai_message(self, msg: AIMessage) -> None:
-        if msg.tool_calls:
-            start = datetime.now()
-            for tc in msg.tool_calls:
-                tc_id = tc["id"]
-                if not tc_id:
-                    continue
-                args_json = json.dumps(tc["args"], default=str, indent=2)
-                self._pending_tool_calls[tc_id] = PendingToolCall(
-                    start=start, tool_name=tc["name"], args_json=args_json
-                )
+        if not msg.tool_calls:
+            return
+        self._handle_status_calls(msg.tool_calls)
+        start = datetime.now()
+        for tc in msg.tool_calls:
+            tc_id = tc["id"]
+            # A status call gets no pending entry, so it produces neither a `[TOOL]` result
+            # stage nor an INFO tool-call event: it is an announcement, not a research action.
+            if not tc_id or tc["name"] == UPDATE_STATUS_TOOL_NAME:
+                continue
+            args_json = json.dumps(tc["args"], default=str, indent=2)
+            self._pending_tool_calls[tc_id] = PendingToolCall(
+                start=start, tool_name=tc["name"], args_json=args_json
+            )
+
+    def _handle_status_calls(self, tool_calls: list[ToolCall]) -> None:
+        """Turn one assistant message's status calls into at most one activity stage.
+
+        Several statuses are joined into one title rather than applied in turn: applying them
+        would close each stage an instant after opening it, and a stage that opens and closes
+        together renders as a step that finished — the impression this stage exists to avoid.
+        A status sent alongside the finish sentinel is dropped, since the iteration is ending
+        and there is no new step to announce.
+        """
+        statuses = [
+            str(tc["args"].get("status", ""))
+            for tc in tool_calls
+            if tc["name"] == UPDATE_STATUS_TOOL_NAME
+        ]
+        if not statuses:
+            return
+        self._log_status_misuse(status_count=len(statuses), tool_call_count=len(tool_calls))
+        if any(tc["name"] == _FINISH_TOOL for tc in tool_calls):
+            return
+        title = _STATUS_JOIN.join(text for text in (s.strip() for s in statuses) if text)
+        if title:
+            self._set_activity(title)
+
+    def _log_status_misuse(self, *, status_count: int, tool_call_count: int) -> None:
+        """Report the two ways of misusing the status tool, once per assistant message.
+
+        Once per message rather than once per call, so three bad calls do not read as three
+        separate incidents. The status text stays out: it is a tool-call argument value, which
+        the logging policy keeps out of every record at every level.
+        """
+        if status_count > 1:
+            logger.warning(
+                "Status tool called more than once in one message: statuses=%d tool_calls=%d",
+                status_count,
+                tool_call_count,
+            )
+        if status_count == tool_call_count:
+            logger.warning(
+                "Status tool was a message's only tool call: tool_calls=%d",
+                tool_call_count,
+            )
 
     def _handle_tool_message(self, msg: ToolMessage) -> None:
+        if msg.name == UPDATE_STATUS_TOOL_NAME:
+            # The stage was set when the call appeared. What comes back is the acknowledgement
+            # the model reads, including any correction — none of it is the user's to see.
+            return
         tool_call = self._pending_tool_calls.pop(msg.tool_call_id, None)
         if tool_call is None:
             # No matching pending call (e.g. a duplicated emission already staged); skip.

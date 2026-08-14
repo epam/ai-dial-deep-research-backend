@@ -81,6 +81,22 @@ reports — another step writes the report. When you have gathered and verified 
 this iteration's plan asks for, call **finish_iteration** to end the iteration. Calling
 finish_iteration is how you signal "done"; do not try to end by writing text.
 
+Only a research tool or finish_iteration makes a step. update_status announces what you are
+doing and investigates nothing, so it never stands as a step of its own — see below.
+
+## Keep the user informed
+
+The user watches one line saying what you are doing right now. Call **update_status** to set it;
+each status replaces the one before it.
+
+{how_to_write_status}
+
+{when_to_announce}
+
+1. {rule_once_per_turn}
+2. {rule_never_alone}
+3. {rule_not_with_finish}
+
 ## Research strategy
 
 - Decompose each plan item into the concrete lookups it implies, and pursue them.

@@ -12,7 +12,6 @@ from the updates that drive the live output.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from contextlib import contextmanager
 from typing import Any
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -23,35 +22,11 @@ from dial_deep_research.app.history import Plan, PrepState
 from dial_deep_research.app.research import runner as runner_module
 from dial_deep_research.app.research.runner import ResearchRunner
 from dial_deep_research.app_properties import ApplicationProperties
+from tests.dial_spies import ChoiceSpy
 
 
-class _StageSpy:
-    def __init__(self) -> None:
-        self.body = ""
-
-    def append_content(self, text: str) -> None:
-        self.body += text
-
-
-class _ChoiceSpy:
-    def __init__(self) -> None:
-        self.content = ""
-        self.stage_titles: list[str] = []
-        self.stages: list[_StageSpy] = []
-
-    def append_content(self, text: str) -> None:
-        self.content += text
-
-    @contextmanager
-    def create_stage(self, title: str) -> Any:
-        self.stage_titles.append(title)
-        stage = _StageSpy()
-        self.stages.append(stage)
-        yield stage
-
-
-def _make_runner(*, content_already_streamed: bool = False) -> tuple[ResearchRunner, _ChoiceSpy]:
-    choice = _ChoiceSpy()
+def _make_runner(*, content_already_streamed: bool = False) -> tuple[ResearchRunner, ChoiceSpy]:
+    choice = ChoiceSpy()
     runner = ResearchRunner(  # type: ignore[arg-type]
         choice, content_already_streamed=content_already_streamed
     )

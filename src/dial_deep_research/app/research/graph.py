@@ -18,6 +18,7 @@ from langgraph.graph import END, START, StateGraph
 from dial_deep_research.app_properties import ReportSection
 
 from .nodes import (
+    ActivityEmitter,
     ReportReviewStageEmitter,
     build_research_agent,
     make_report_node,
@@ -40,11 +41,15 @@ def build_research_graph(
     max_report_words: int,
     max_report_versions: int,
     emit_report_review_stage: ReportReviewStageEmitter,
+    emit_activity: ActivityEmitter,
 ) -> Any:
     """Compile the research graph over the loaded tools and this turn's configuration.
 
-    `emit_report_review_stage` is the runner's own callback: the report-review node decides what
-    to report about a review, the runner holds the DIAL `Choice` and decides how it renders.
+    Both callbacks are the runner's own, on the same split: the node decides what to report, the
+    runner holds the DIAL `Choice` and decides how it renders. `emit_report_review_stage` carries
+    the outcome of one review. `emit_activity` names the work a node is starting, and each node
+    calls it first thing — the graph has no node-entry signal a stream consumer could read, since
+    an `updates` part arrives only once a node has finished.
     """
     research_agent = build_research_agent(
         tools=tools,
@@ -60,6 +65,7 @@ def build_research_graph(
         node="research-review",
         action=make_research_review_node(  # type: ignore[call-overload]
             today_date=today_date,
+            emit_activity=emit_activity,
         ),
     )
     builder.add_node(
@@ -68,6 +74,7 @@ def build_research_graph(
             today_date=today_date,
             sections=report_structure,
             max_words=max_report_words,
+            emit_activity=emit_activity,
         ),
     )
     builder.add_node(
@@ -77,6 +84,7 @@ def build_research_graph(
             sections=report_structure,
             max_words=max_report_words,
             emit_stage=emit_report_review_stage,
+            emit_activity=emit_activity,
         ),
     )
 

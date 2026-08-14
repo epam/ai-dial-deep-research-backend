@@ -129,6 +129,8 @@ flowchart TD
         model --> which{"which tool<br/>did it call?"}
         which -->|"an MCP tool"| mcp["The tool runs; its result is<br/>appended to the transcript"]
         mcp --> model
+        which -->|"update_status, alongside<br/>the step's first real tool call"| status["The runner replaces the open<br/>activity stage with this title;<br/>no result stage, no research done"]
+        status --> model
         which -->|"finish_iteration"| fin["finish_iteration is declared<br/>return_direct = True:<br/>the loop returns as soon as this tool<br/>runs, with no further model call"]
         which -.->|"a message with no tool call —<br/>the loop's other exit"| blocked["unreachable:<br/>tool_choice = any forbids it"]
     end
@@ -226,7 +228,20 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   text is LLM response content, which the logging content allowlist keeps out of log records at
   any level. A delivery whose draft the budget left unreviewed gets a closing stage and INFO
   record of its own, rendered without any model call, so "review approved the draft" and "the
-  budget ran out, violations may remain" stay distinguishable. Research review emits no stage.
+  budget ran out, violations may remain" stay distinguishable.
+- **Activity stage**: one DIAL stage is open at every moment of the research run, titled with what
+  is happening right now. The runner opens the first before the graph starts; each later one
+  replaces the one before it, which is what closes it — a stage name can only be appended to, never
+  rewritten. research-agent sets the title by calling `update_status`, and research-review, report
+  and report-review each set it on entry, so no LLM call in the graph runs behind a silent screen.
+  The stage carries a title only: no body, no `[TOOL]`-style prefix, and no elapsed time — it ends
+  because a new step started, not because the announced work finished, so a duration would claim
+  something untrue. Several statuses in one assistant message are joined into one title rather than
+  opening a stage that closes an instant later and so reads as a finished step; a status sent
+  together with `finish_iteration` is ignored. `update_status` gets no result stage of its own and
+  no INFO tool-call event, and its text never enters a log record, being a tool-call argument value.
+  The announcements are stripped from the transcripts research-review and the report node receive,
+  and kept in the one the app persists.
 - **Step budget**: `max_research_graph_steps` (an application property, default 500) is passed as
   LangGraph's `recursion_limit` — the most node executions one graph run may make, counted afresh
   for each nested run. The research-agent node is a compiled graph, so every iteration gets its own
