@@ -5,6 +5,7 @@ import pytest
 
 from dial_deep_research.utils.dial_stages import (
     DialStageReportReviewFormatter,
+    DialStageResearchReviewFormatter,
     DialStageToolCallFormatter,
     PendingToolCall,
     log_tool_call_completed,
@@ -36,6 +37,57 @@ def test_result_stage_title_error() -> None:
     )
 
 
+class TestResearchReviewStage:
+    """The research-review stage: the sibling title shape, and the one place findings are shown."""
+
+    def test_a_continuing_review_is_titled_as_work_in_progress(self) -> None:
+        title = DialStageResearchReviewFormatter.format_title(
+            research_iteration=1, will_continue=True, duration_seconds=8.2
+        )
+        # Another iteration is the loop working as designed, so the mark says "going round again"
+        # rather than warning about it.
+        assert title == "[RESEARCH REVIEW RESULT] iteration 1 - continue 🔄 (8.20s)"
+
+    def test_a_completing_review_is_titled_as_a_success(self) -> None:
+        title = DialStageResearchReviewFormatter.format_title(
+            research_iteration=2, will_continue=False, duration_seconds=6.1
+        )
+        assert title == "[RESEARCH REVIEW RESULT] iteration 2 - report ✅ (6.10s)"
+
+    def test_the_two_review_stages_are_told_apart_by_their_prefix(self) -> None:
+        research = DialStageResearchReviewFormatter.format_title(
+            research_iteration=1, will_continue=True, duration_seconds=1.0
+        )
+        report = DialStageReportReviewFormatter.format_title(
+            draft_number=1, revising=True, review_failed=False, duration_seconds=1.0
+        )
+        assert research.startswith("[RESEARCH REVIEW RESULT]")
+        assert report.startswith("[REPORT REVIEW RESULT]")
+
+    def test_body_carries_the_cap_the_assessment_and_the_steps(self) -> None:
+        body = DialStageResearchReviewFormatter.format_body(
+            research_iteration=2,
+            max_research_iterations=10,
+            assessment="The 2025 figure rests on a search summary, not on the source page.",
+            next_steps=["Open the source page.", "Confirm the figure there."],
+        )
+        assert "**Iteration** 2 of at most 10" in body
+        assert "The 2025 figure rests on a search summary, not on the source page." in body
+        assert "1. Open the source page." in body
+        assert "2. Confirm the figure there." in body
+
+    def test_an_empty_verdict_reads_as_a_verdict(self) -> None:
+        """An empty step list is the completion verdict, so it is stated rather than shown."""
+        body = DialStageResearchReviewFormatter.format_body(
+            research_iteration=3,
+            max_research_iterations=10,
+            assessment="Every plan item is supported by a source page.",
+            next_steps=[],
+        )
+        assert "**Next steps** none" in body
+        assert "research is complete" in body
+
+
 class TestReportReviewStage:
     """The report-review stage: its own title shape, and the one place violations are shown."""
 
@@ -43,15 +95,16 @@ class TestReportReviewStage:
         title = DialStageReportReviewFormatter.format_title(
             draft_number=2, revising=True, review_failed=False, duration_seconds=1.5
         )
-        # Its own prefix, not the tool-call one: a review is not a tool call. A revision is
-        # the loop working, not an error — the cross is reserved for a failed review call.
-        assert title == "[REPORT REVIEW] draft 2 - revise ⚠️ (1.50s)"
+        # Its own prefix, not the tool-call one: a review is not a tool call. A revision is the
+        # loop going round again, so it carries the in-progress mark; the cross is reserved for a
+        # failed review call.
+        assert title == "[REPORT REVIEW RESULT] draft 2 - revise 🔄 (1.50s)"
 
     def test_delivered_draft_is_titled_as_a_success(self) -> None:
         title = DialStageReportReviewFormatter.format_title(
             draft_number=1, revising=False, review_failed=False, duration_seconds=0.5
         )
-        assert title == "[REPORT REVIEW] draft 1 - deliver ✅ (0.50s)"
+        assert title == "[REPORT REVIEW RESULT] draft 1 - deliver ✅ (0.50s)"
 
     def test_failed_review_titles_carry_the_cross_whatever_the_action(self) -> None:
         deliver = DialStageReportReviewFormatter.format_title(
@@ -60,8 +113,8 @@ class TestReportReviewStage:
         revise = DialStageReportReviewFormatter.format_title(
             draft_number=1, revising=True, review_failed=True, duration_seconds=0.5
         )
-        assert deliver == "[REPORT REVIEW] draft 1 - deliver ❌ (0.50s)"
-        assert revise == "[REPORT REVIEW] draft 1 - revise ❌ (0.50s)"
+        assert deliver == "[REPORT REVIEW RESULT] draft 1 - deliver ❌ (0.50s)"
+        assert revise == "[REPORT REVIEW RESULT] draft 1 - revise ❌ (0.50s)"
 
     def test_body_carries_both_counts_and_the_violations(self) -> None:
         body = DialStageReportReviewFormatter.format_body(
@@ -119,7 +172,7 @@ class TestReportReviewStage:
 
     def test_unreviewed_delivery_has_its_own_title_without_a_duration(self) -> None:
         title = DialStageReportReviewFormatter.format_unreviewed_title(draft_number=3)
-        assert title == "[REPORT REVIEW] draft 3 - delivered without review ⚠️"
+        assert title == "[REPORT REVIEW RESULT] draft 3 - delivered without review ⚠️"
 
     def test_unreviewed_delivery_body_names_the_exhausted_budget(self) -> None:
         body = DialStageReportReviewFormatter.format_unreviewed_body(

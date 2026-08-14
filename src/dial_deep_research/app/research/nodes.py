@@ -214,10 +214,41 @@ def research_budget_exhausted(*, research_iteration: int, max_research_iteration
     return research_iteration >= max_research_iterations
 
 
+class ResearchReviewOutcome(BaseModel):
+    """One research review's result, handed to the runner so it can render a DIAL stage.
+
+    Carries no DIAL types: the node decides what to report, the runner decides how it is rendered.
+    `max_research_iterations` accompanies the iteration number so the stage can say how much further
+    research may go. `will_continue` comes from the same function the router calls, so the stage
+    cannot announce one route while the graph takes the other. There is no error field, unlike
+    `ReportReviewOutcome`: research-review re-raises a failed call instead of absorbing it, so a
+    failure ends the turn and shows as the activity stage closing failed. The assessment and the
+    next steps belong in the stage only — never in a log record, per the logging-policy content
+    allowlist.
+    """
+
+    research_iteration: int
+    max_research_iterations: int
+    assessment: str
+    next_steps: list[str]
+    will_continue: bool
+    duration_seconds: float
+
+
+ResearchReviewResultStageEmitter = Callable[[ResearchReviewOutcome], None]
+
+
 def make_research_review_node(
-    today_date: str, emit_activity: ActivityEmitter
+    today_date: str,
+    max_research_iterations: int,
+    emit_result_stage: ResearchReviewResultStageEmitter,
+    emit_activity: ActivityEmitter,
 ) -> ResearchReviewNode:
-    """Build the research-review node over the given date."""
+    """Build the research-review node: judge coverage, emit its result stage, plan what remains.
+
+    `max_research_iterations` is not a bound this node enforces — the router does that before the
+    node is reached. It is here for the stage, which states the cap beside the iteration number.
+    """
 
     async def research_review(state: ResearchState) -> dict[str, Any]:
         emit_activity(RESEARCH_REVIEW_ACTIVITY)
@@ -262,16 +293,27 @@ def make_research_review_node(
             update["plans"] = plans
             update["messages"] = [HumanMessage(content=render_next_instruction(review.next_steps))]
 
-        # Verdict mirrors `route_after_research_review` over the post-update state, so the
-        # skeleton event never disagrees with the actual routing.
+        # Verdict mirrors `route_after_research_review` over the post-update state, so neither the
+        # skeleton event nor the stage disagrees with the actual routing.
         will_continue = _should_continue_research(
             plans_count=len(plans), research_iteration=state["research_iteration"]
+        )
+        duration = time.monotonic() - start
+        emit_result_stage(
+            ResearchReviewOutcome(
+                research_iteration=state["research_iteration"],
+                max_research_iterations=max_research_iterations,
+                assessment=review.assessment,
+                next_steps=list(review.next_steps or []),
+                will_continue=will_continue,
+                duration_seconds=duration,
+            )
         )
         logger.info(
             "Research iteration reviewed: research_iteration=%d duration=%.1fs verdict=%s "
             "next_plan_steps=%d tokens=%s",
             state["research_iteration"],
-            time.monotonic() - start,
+            duration,
             "continue" if will_continue else "report",
             len(review.next_steps or []),
             format_token_usage(usage),

@@ -136,7 +136,7 @@ flowchart TD
     end
 
     fin -->|"the only way a research-agent<br/>iteration can end"| itgate{"another iteration<br/>permitted by the cap?"}
-    itgate -->|yes| research_review["research-review node<br/>independent structured LLM call<br/>→ assessment + next_steps"]
+    itgate -->|yes| research_review["research-review node<br/>independent structured LLM call<br/>→ assessment + next_steps,<br/>and one DIAL stage"]
     itgate -->|"no — a 'continue' verdict could<br/>not be acted on, so the last<br/>iteration is not reviewed"| report
     research_review --> route{"next_steps non-empty?"}
     route -->|yes| nextplan["Record the plan and inject it as<br/>the next iteration's instruction"]
@@ -221,7 +221,17 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   it stands, without another review call: its verdict could not be acted on. A failed
   report-review call or a failed revision is absorbed rather than failing the turn. `1` skips
   report-review entirely.
-- **Report-review stage**: each report-review call emits one DIAL stage carrying the draft number,
+- **Research-review stage**: each research-review call emits one DIAL stage, titled
+  `[RESEARCH REVIEW RESULT]`, carrying the reviewed iteration with the iteration cap, the
+  reviewer's assessment, and the next steps as a numbered list — or a line stating that research is
+  complete, which is what an empty step list means. Its title names the route the graph then takes,
+  `continue` or `report`, taken from the same function the router calls. The assessment and the
+  steps are LLM response text, so the matching INFO record carries the step *count* only. An
+  iteration the cap left unreviewed emits no stage, having produced no findings, and neither does a
+  failed review call: research-review re-raises, so the turn ends and the open activity stage closes
+  as failed.
+- **Report-review stage**: each report-review call emits one DIAL stage, titled
+  `[REPORT REVIEW RESULT]`, carrying the draft number,
   the measured word count with the ceiling, and the violations as a list — the review model's
   violations, with the app-measured length violation prepended when the draft exceeds the ceiling.
   The matching INFO record carries the same numbers and only the *count* of violations — their

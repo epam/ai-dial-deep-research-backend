@@ -293,7 +293,12 @@ async def test_research_review_names_its_work_before_calling_a_model(
 ) -> None:
     _no_model(monkeypatch)
     seen: list[str] = []
-    node = nodes.make_research_review_node(today_date="2026-08-14", emit_activity=seen.append)
+    node = nodes.make_research_review_node(
+        today_date="2026-08-14",
+        max_research_iterations=10,
+        emit_result_stage=lambda _outcome: None,
+        emit_activity=seen.append,
+    )
 
     with pytest.raises(RuntimeError):
         await node(_research_state())  # type: ignore[arg-type]

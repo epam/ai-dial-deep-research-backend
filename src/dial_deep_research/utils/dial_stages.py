@@ -9,6 +9,9 @@ from pydantic import BaseModel
 _RESULT_EMOJI = "✅"
 _ERROR_EMOJI = "❌"
 _WARNING_EMOJI = "⚠️"
+# An outcome that sends a review loop round again. Not a warning: more work following is the loop
+# working as designed, and a warning icon would claim a problem where there is none.
+_IN_PROGRESS_EMOJI = "🔄"
 
 
 class PendingToolCall(BaseModel):
@@ -49,25 +52,77 @@ def timed_stage_title(base_name: str, start: datetime, end: datetime) -> str:
     return f"{base_name} ({elapsed:.2f}s, start: {start:%H:%M:%S}, end: {end:%H:%M:%S})"
 
 
+class DialStageResearchReviewFormatter:
+    """Renders one research review as a DIAL stage: what the reviewer judged, and what follows.
+
+    The title shape and the `RESULT` prefix are the report-review formatter's, so the two review
+    stages read as siblings and are told apart by their prefix alone. The body carries the
+    assessment and the next steps, which is the one place they appear — the logs get the step count.
+    """
+
+    _PREFIX = "[RESEARCH REVIEW RESULT]"
+
+    @classmethod
+    def format_title(
+        cls, *, research_iteration: int, will_continue: bool, duration_seconds: float
+    ) -> str:
+        action = "continue" if will_continue else "report"
+        emoji = _IN_PROGRESS_EMOJI if will_continue else _RESULT_EMOJI
+        return (
+            f"{cls._PREFIX} iteration {research_iteration} - {action} {emoji}"
+            f" ({duration_seconds:.2f}s)"
+        )
+
+    @classmethod
+    def format_body(
+        cls,
+        *,
+        research_iteration: int,
+        max_research_iterations: int,
+        assessment: str,
+        next_steps: Sequence[str],
+    ) -> str:
+        lines = [
+            f"**Iteration** {research_iteration} of at most {max_research_iterations}",
+            "",
+            "**Assessment**",
+            "",
+            assessment,
+            "",
+        ]
+        if next_steps:
+            lines.append("**Next steps**")
+            lines.append("")
+            # Stage content renders as markdown, so the numbered lines render as a list.
+            lines.extend(f"{i}. {step}" for i, step in enumerate(next_steps, start=1))
+        else:
+            lines.append(
+                "**Next steps** none — every plan item is covered, so research is complete."
+            )
+        return "\n".join(lines)
+
+
 class DialStageReportReviewFormatter:
     """Renders one report review as a DIAL stage, and the closing stage of a draft the
     revision budget left unreviewed.
 
     Its own title shape rather than the tool-call one: a review is not a tool call, and the
-    `[TOOL] "<name>"` form would read as one. The body carries the review's violations, which is
-    the one place they appear — the logs get counts only.
+    `[TOOL] "<name>"` form would read as one. `RESULT` in the prefix separates it from the activity
+    stage, which names work that has not happened yet. The body carries the review's violations,
+    which is the one place they appear — the logs get counts only.
     """
 
-    _PREFIX = "[REPORT REVIEW]"
+    _PREFIX = "[REPORT REVIEW RESULT]"
 
     @classmethod
     def format_title(
         cls, *, draft_number: int, revising: bool, review_failed: bool, duration_seconds: float
     ) -> str:
         action = "revise" if revising else "deliver"
-        # The cross marks a real error — the review call failed — and outranks the action in
-        # the title; a revision is the loop working as designed, so it gets a warning only.
-        emoji = _ERROR_EMOJI if review_failed else _WARNING_EMOJI if revising else _RESULT_EMOJI
+        # The cross marks a real error — the review call failed — and outranks the action in the
+        # title; a revision is the loop going round again, which the in-progress mark says without
+        # claiming anything is wrong.
+        emoji = _ERROR_EMOJI if review_failed else _IN_PROGRESS_EMOJI if revising else _RESULT_EMOJI
         return f"{cls._PREFIX} draft {draft_number} - {action} {emoji} ({duration_seconds:.2f}s)"
 
     @classmethod

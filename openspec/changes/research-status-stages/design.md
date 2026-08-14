@@ -93,9 +93,10 @@ already turns tool calls into stages — the place that can see the whole `msg.t
 so apply the `finish_iteration` rule and the join rule.
 
 *Alternative rejected.* **The tool emitting its own stage through an injected callback**, the shape
-`emit_report_review_stage` uses. It would work: a tool can read the assistant message carrying its
-own call via `InjectedState`, so batch visibility is not the discriminator it first appears to be.
-It is rejected for coupling the graph to DIAL and splitting stage emission across two owners.
+the report-review result-stage emitter uses. It would work: a tool can read the assistant message
+carrying its own call via `InjectedState`, so batch visibility is not the discriminator it first
+appears to be. It is rejected for coupling the graph to DIAL and splitting stage emission across two
+owners.
 
 ### One stage, replaced, never accumulated or re-titled
 
@@ -126,22 +127,57 @@ not worth it. **Taking only the first and discarding the rest** discards somethi
 *Alternatives rejected.* **Stamping the duration on close**, as `timed_stage_title` does for tool
 stages and as the sibling `generic-rag` repo does — the stage closes because a *new* step started,
 so a duration would assert a completion that did not happen. **A `[STATUS]` prefix matching `[TOOL]`
-and `[REPORT REVIEW]`** — those label finished records in a growing list; this is the live line, and
-the prefix spends scarce width on a label that carries no information. **A body explaining the
+and `[REPORT REVIEW RESULT]`** — those label finished records in a growing list; this is the live line,
+and the prefix spends scarce width on a label that carries no information. **A body explaining the
 step** — more tokens per announcement and more room for the model to narrate instead of research.
 
-Because the title is the model's text unchanged and there is no body, no formatter is added to
-`utils/dial_stages.py`; a pass-through class would be structure without work.
+Because the activity stage's title is the model's text unchanged and it has no body, it gets no
+formatter in `utils/dial_stages.py`; a pass-through class would be structure without work. The
+research-review result stage does get one, having both a title shape and a body to build.
 
 ### Node entries announce through an injected emitter
 
 research-review, report and report-review call an emitter as their first action, threaded through
-`build_research_graph` beside `emit_report_review_stage` — the node decides what to report, the
-runner holds the `Choice` and decides how it renders.
+`build_research_graph` beside the result-stage emitters — the node decides what to report, the runner
+holds the `Choice` and decides how it renders.
 
 *Alternative rejected.* **Reading node entry off the graph stream** — with `stream_mode="updates"`
 an update arrives when a node *finishes*, so there is no entry signal to read. Inferring the next
 node from the routing the runner observes would duplicate the routers in `nodes.py:423-495`.
+
+### The research review's findings get a closed stage of their own
+
+The research-review node emits a second, independent stage once its call returns: it builds a
+`ResearchReviewOutcome` and hands it to the runner, which renders it through a new
+`DialStageResearchReviewFormatter`. The node decides what to report and the runner decides how it
+looks — the split the report-review stage already uses, and a second emitter parameter beside it.
+
+`will_continue` is computed in the node from `_should_continue_research`, the same function the router
+calls, so the title's outcome and the graph's next node cannot disagree. The outcome carries no error
+field, unlike `ReportReviewOutcome`: report-review absorbs a failed call, while research-review
+re-raises, so a failed research review ends the turn and shows as the activity stage closing failed.
+
+The body states the reviewed iteration together with the cap ("iteration 2 of at most 10"), the way
+the report-review body states the word count beside the ceiling. It answers how much further research
+may go, which the assessment does not, and it is why `max_research_iterations` is passed to this node
+as well as to the router.
+
+Both review stages carry a `RESULT` prefix — `[RESEARCH REVIEW RESULT]` and `[REPORT REVIEW RESULT]`.
+It is what separates them from the activity stage, which names work that has not happened yet: the
+research-review node emits both, and two stages naming the same review would otherwise read as
+duplicates of each other.
+
+An outcome that sends a loop round again is marked 🔄, in both review stages: more work following is
+the loop working as designed, and a warning icon on iteration 1 of a 10-iteration budget would claim a
+problem where there is none. ⚠️ is kept for the case where something genuinely remains unaddressed —
+a draft the version budget delivered without review, which may still carry the previous review's
+violations — and ❌ for a failed call.
+
+*Alternatives rejected.* **Putting the findings into the activity stage title** — a title cannot hold
+an assessment, and setting it would close the stage the same instant, which reads as a finished step
+(see the activity-stage decision above). **Reusing `DialStageReportReviewFormatter`** — its body is
+built from the draft number, the measured word count and the ceiling, none of which exist here, so the
+two would share a signature whose halves are disjoint.
 
 ### Statuses are hidden from research-review and the report node
 

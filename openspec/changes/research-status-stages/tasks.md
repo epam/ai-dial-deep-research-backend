@@ -49,7 +49,7 @@
 ## 4. Node entry announcements
 
 - [x] 4.1 Add an activity-emitter type and thread it through `build_research_graph`
-      (`app/research/graph.py:34-48`) beside `emit_report_review_stage`, wired from
+      (`app/research/graph.py:34-48`) beside the report-review result-stage emitter, wired from
       `ResearchRunner.run` to the replace helper from 3.1.
 - [x] 4.2 Call the emitter as the first action of the research-review, report and report-review nodes
       in `app/research/nodes.py`, with fixed titles written to the same convention as the model's:
@@ -114,3 +114,40 @@
       showed the failure icon, so nothing was left spinning. The first full run announced only once
       in an iteration that ran ~2m45s over 28 tool results in 8 turns; the prompt's frequency
       guidance was rewritten in response, after which the title tracks the work.
+
+## 9. The research review's findings as a stage
+
+- [x] 9.1 In `utils/dial_stages.py`, add an in-progress emoji constant (🔄) and set
+      `DialStageReportReviewFormatter._PREFIX` to `[REPORT REVIEW RESULT]`. A revising outcome carries
+      the in-progress emoji; the unreviewed delivery keeps ⚠️ and a failed call keeps ❌. Update the
+      five title assertions in `tests/test_dial_stages.py:48-122`.
+- [x] 9.2 Add `DialStageResearchReviewFormatter` beside it, prefixed `[RESEARCH REVIEW RESULT]`, with
+      `format_title` over the iteration number, the `will_continue` flag and the duration, and
+      `format_body` over the iteration number, the iteration cap, the assessment and the next steps —
+      the steps as a numbered markdown list, or a line stating research is complete when there are
+      none.
+- [x] 9.3 Add `ResearchReviewOutcome` and `ResearchReviewResultStageEmitter` to
+      `app/research/nodes.py`, beside their report-review counterparts. Fields: the reviewed iteration
+      number, the iteration cap, the assessment, the next steps, `will_continue`, and the call's
+      duration in seconds. No error field — research-review re-raises instead of absorbing a failure.
+- [x] 9.4 Give `make_research_review_node` an `emit_result_stage` parameter and the
+      `max_research_iterations` value, and emit the outcome once the call has returned, with
+      `will_continue` taken from `_should_continue_research` so the title cannot disagree with the
+      routing. The INFO record stays as it is: it already carries the iteration number, the duration,
+      the verdict and the step count.
+- [x] 9.5 Thread `emit_research_review_result_stage` through `build_research_graph` and add
+      `ResearchRunner._emit_research_review_result_stage`, rendering the outcome through the new
+      formatter.
+- [x] 9.6 Assert the formatter's titles and bodies for both verdicts, including the numbered list of
+      next steps and the research-is-complete line.
+- [x] 9.7 Assert the node emits exactly one outcome per call, carrying the iteration number, the
+      assessment and the steps, with `will_continue` matching where the graph routes next.
+- [x] 9.8 Assert an iteration the cap left unreviewed emits no research-review stage.
+- [x] 9.9 Assert no log record at any level, including DEBUG, carries the assessment or the next-step
+      text, and that the INFO record still carries the step count.
+- [x] 9.10 Update `docs/architecture.md`: the research-review node in the research graph flowchart, and
+      the stage list in the loop invariants, which names the report-review and activity stages only.
+- [x] 9.11 Run `make format` and `make lint`, then the full test suite.
+- [ ] 9.12 Drive a real query end to end with `scripts/send_conversation.py` against a running server,
+      and confirm in the DIAL UI that a research review that continues and one that completes each
+      render their own stage, next to the live activity stage.

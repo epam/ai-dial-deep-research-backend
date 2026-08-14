@@ -24,8 +24,13 @@ open while the work happens, not a record written once it is over.
   stage carries a title only: no body, no `[TOOL]`-style prefix, and no elapsed time.
 - **The other graph nodes announce themselves on entry.** research-review, report and report-review
   each set the activity stage as their first action, through an emitter callback threaded into the
-  graph — the same shape as the existing `emit_report_review_stage`. This removes the silence during
-  those three LLM calls.
+  graph — the same shape as the existing report-review result-stage emitter. This removes the silence
+  during those three LLM calls.
+- **The research review's findings become a stage of their own.** Each research-review call emits one
+  closed stage carrying the iteration number, the reviewer's assessment and the next-iteration steps,
+  the way each report review already does. The two stage kinds answer different questions: the
+  activity stage is open while work runs and says what is happening now, and this one appears once the
+  review is over and says what it decided.
 - **A closing stage does not mean the work finished.** A stage closes because a *new* step started.
   This is why no elapsed time is stamped on it, and why several announcements in one assistant
   message are merged into a single stage instead of leaving earlier ones to flash open and shut — a
@@ -55,7 +60,11 @@ None. The change alters behavior already owned by existing specs.
   the next one replaces it.
 - `research-execution`: the per-node LLM input and output contract changes in three places.
   research-agent gains a bound tool. research-review and the report node each stop receiving part
-  of the transcript. Node entry becomes an observable event that three nodes must emit.
+  of the transcript. Node entry becomes an observable event that three nodes must emit. A new
+  requirement makes each research review's findings visible as a stage of their own.
+- `report-composition`: its report-review stage requirement states that the stage exists for the
+  report review only and that research review emits none. Research review now emits one, so that
+  exclusion goes and the two stage requirements become siblings, told apart by their prefixes.
 - `logging-policy`: status text is a tool-call argument value and so may never appear in a log
   record at any level. Two WARNING events are added for the two misuse cases, carrying counts only.
 
@@ -68,11 +77,13 @@ Source:
 - `src/dial_deep_research/app/research/runner.py` — the single open-stage slot, the replace helper,
   the `_handle_ai_message` rules, the misuse WARNINGs, and the `try/finally` that closes the stage
   on the failure path.
-- `src/dial_deep_research/app/research/graph.py` — the activity emitter threaded alongside
-  `emit_report_review_stage`.
+- `src/dial_deep_research/app/research/graph.py` — the activity emitter and the research-review
+  result-stage emitter, threaded alongside the report-review one.
 - `src/dial_deep_research/app/research/nodes.py` — the entry announcements in research-review,
   report and report-review; the transcript filter and its two call sites, `_render_findings` and
-  the report node's message list.
+  the report node's message list; the research-review outcome model and its emission.
+- `src/dial_deep_research/utils/dial_stages.py` — the research-review result-stage formatter, and
+  the `RESULT` prefix both review stages carry.
 - `src/dial_deep_research/app/research/prompts.py` — the `update_status` section in
   `RESEARCH_AGENT_SYSTEM_PROMPT`, and the matching edit to its "You must always call a tool"
   section.
@@ -88,8 +99,6 @@ No changes required, though they look adjacent:
 - `src/dial_deep_research/app_properties.py` and `dial_conf/core/applications-template.json` — no
   new or changed application property.
 - `README.md` — no new or changed environment variable.
-- `src/dial_deep_research/utils/dial_stages.py` — the activity stage has no title decoration and no
-  body, so there is nothing for a formatter to do.
 - The report-review node's inputs — it reads no transcript, so it needs no filtering.
 - `src/dial_deep_research/app/preparation/` — preparation already streams its text token by token
   and is not silent.

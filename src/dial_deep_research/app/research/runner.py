@@ -1,9 +1,9 @@
 """Runs the research graph and emits it to a DIAL `Choice`.
 
 Drives the compiled graph with one `astream(subgraphs=True)` and routes its output:
-research-agent tool calls become timed DIAL stages, each report review becomes a stage of its
-own — as does a delivery the version budget left unreviewed — and the report the review loop
-settles on is appended once as the assistant content.
+research-agent tool calls become timed DIAL stages, each research review and each report review
+becomes a stage of its own — as does a delivery the version budget left unreviewed — and the report
+the review loop settles on is appended once as the assistant content.
 
 Nothing is streamed token-by-token here. A report draft may still be revised and DIAL content is
 append-only, so no draft may reach the choice while the loop runs — the report is appended after
@@ -35,13 +35,14 @@ from dial_deep_research.app.mcp_tools import load_mcp_tools
 from dial_deep_research.app_properties import ApplicationProperties
 from dial_deep_research.utils.dial_stages import (
     DialStageReportReviewFormatter,
+    DialStageResearchReviewFormatter,
     DialStageToolCallFormatter,
     PendingToolCall,
     log_tool_call_completed,
 )
 
 from .graph import build_research_graph
-from .nodes import ReportReviewOutcome, review_budget_exhausted
+from .nodes import ReportReviewOutcome, ResearchReviewOutcome, review_budget_exhausted
 from .prompts import render_length_exemptions
 from .report_length import count_report_words
 from .state import build_initial_state
@@ -107,6 +108,7 @@ class ResearchRunner:
             report_structure=properties.default_report_structure,
             max_report_words=properties.max_report_words,
             max_report_versions=properties.max_report_versions,
+            emit_research_review_result_stage=self._emit_research_review_result_stage,
             emit_report_review_result_stage=self._emit_report_review_result_stage,
             emit_activity=self._set_activity,
         )
@@ -347,6 +349,28 @@ class ResearchRunner:
             max_words=properties.max_report_words,
             length_exemptions=render_length_exemptions(properties.default_report_structure),
             max_versions=max_versions,
+        )
+        with self._choice.create_stage(title) as stage:
+            stage.append_content(body)
+
+    def _emit_research_review_result_stage(self, outcome: ResearchReviewOutcome) -> None:
+        """Render one research review as a DIAL stage.
+
+        Emitted while the activity stage the same node opened is still open: this stage records a
+        decision already taken, the activity stage names what is happening now. The assessment and
+        the next steps belong here and nowhere else — the logging-policy content allowlist keeps LLM
+        response text out of log records, so the logs carry only the step count.
+        """
+        title = DialStageResearchReviewFormatter.format_title(
+            research_iteration=outcome.research_iteration,
+            will_continue=outcome.will_continue,
+            duration_seconds=outcome.duration_seconds,
+        )
+        body = DialStageResearchReviewFormatter.format_body(
+            research_iteration=outcome.research_iteration,
+            max_research_iterations=outcome.max_research_iterations,
+            assessment=outcome.assessment,
+            next_steps=outcome.next_steps,
         )
         with self._choice.create_stage(title) as stage:
             stage.append_content(body)

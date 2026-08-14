@@ -114,3 +114,58 @@ is part of the contract, not an accident of implementation.
 - **THEN** the research tool calls of that message SHALL be preserved with their results, and only
   the `update_status` call and its acknowledgement SHALL be removed, leaving every remaining tool
   call paired with its result
+
+## ADDED Requirements
+
+### Requirement: Every research review's findings are visible as a DIAL stage
+
+Each research-review call SHALL emit one DIAL stage, so a user can see why research ran another
+iteration or stopped. The stage SHALL carry:
+
+- the number of the iteration just reviewed, counting from 1;
+- the reviewer's assessment of which plan items the findings cover and which they do not;
+- the next-iteration steps, as a numbered markdown list — one entry per step (stage content renders
+  as markdown). An empty list is the verdict that research is complete, and the stage SHALL say so
+  in words rather than render an empty list.
+
+Its title SHALL follow the shape the report-review stage uses (see **report-composition**): its own
+prefix rather than `[TOOL]`, the review's outcome, and the elapsed time. The outcome names which way
+the loop went from here — another iteration, or the report.
+
+This stage records a decision already taken, which is what separates it from the activity stage the
+same node opens on entry: the activity stage is open while the review call runs and says what is
+happening now, and this one is closed the moment it appears and says what came of it.
+
+A review that ran SHALL be visible whichever verdict it reached. The last permitted iteration gets no
+review call (see the iteration-cap requirement), so it emits no stage; the INFO record for the
+exhausted iteration budget is the only trace of that hand-off (see **logging-policy**). A failed
+review call is not caught either — the turn ends as an error and the open activity stage closes as
+failed — so no findings stage is emitted for it.
+
+The assessment and the next steps are LLM response text: they SHALL appear in the stage and SHALL NOT
+appear in any log record, where the research-review event carries the step count only. This is the
+same asymmetry the report-review stage rests on, under **logging-policy**'s content allowlist.
+
+#### Scenario: A review that demands another iteration is visible
+
+- **WHEN** research-review judges iteration 1 short of the plan and returns three next steps
+- **THEN** a stage SHALL appear carrying iteration number 1, the assessment, and the three steps as a
+  numbered list, and its title SHALL state that another iteration follows, with the elapsed time
+
+#### Scenario: A review that completes research is visible too
+
+- **WHEN** research-review finds every plan item covered and returns no next steps
+- **THEN** a stage SHALL still be emitted, carrying the assessment and stating in words that research
+  is complete, and its title SHALL state that the report follows
+
+#### Scenario: An unreviewed last iteration emits no stage
+
+- **WHEN** the iteration cap is reached, so the router routes to the report node without a review call
+- **THEN** no research-review stage SHALL be emitted
+
+#### Scenario: The assessment never reaches a log record
+
+- **WHEN** a research review records an assessment and next steps, at any configured log level
+  including DEBUG
+- **THEN** no log record SHALL contain any of that text; only the number of next-plan steps SHALL be
+  logged
