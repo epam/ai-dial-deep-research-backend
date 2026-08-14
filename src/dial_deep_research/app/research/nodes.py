@@ -92,7 +92,7 @@ ActivityEmitter = Callable[[str], None]
 
 # What each node calls itself while it runs. Written like research-agent's own statuses — short,
 # present tense, no prefix — so the one live line reads the same whoever set it.
-RESEARCH_REVIEW_ACTIVITY = "Reviewing what research found so far"
+RESEARCH_REVIEW_ACTIVITY = "Reviewing research findings"
 REPORT_ACTIVITY = "Writing the report"
 REPORT_REVIEW_ACTIVITY = "Reviewing the report"
 
