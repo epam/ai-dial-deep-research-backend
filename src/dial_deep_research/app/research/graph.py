@@ -19,7 +19,7 @@ from dial_deep_research.app_properties import ReportSection
 
 from .nodes import (
     ActivityEmitter,
-    ReportReviewStageEmitter,
+    ReportReviewResultStageEmitter,
     build_research_agent,
     make_report_node,
     make_report_review_node,
@@ -40,16 +40,16 @@ def build_research_graph(
     report_structure: Sequence[ReportSection],
     max_report_words: int,
     max_report_versions: int,
-    emit_report_review_stage: ReportReviewStageEmitter,
+    emit_report_review_result_stage: ReportReviewResultStageEmitter,
     emit_activity: ActivityEmitter,
 ) -> Any:
     """Compile the research graph over the loaded tools and this turn's configuration.
 
     Both callbacks are the runner's own, on the same split: the node decides what to report, the
-    runner holds the DIAL `Choice` and decides how it renders. `emit_report_review_stage` carries
-    the outcome of one review. `emit_activity` names the work a node is starting, and each node
-    calls it first thing — the graph has no node-entry signal a stream consumer could read, since
-    an `updates` part arrives only once a node has finished.
+    runner holds the DIAL `Choice` and decides how it renders. `emit_report_review_result_stage`
+    carries the outcome of one review. `emit_activity` names the work a node is starting, and each
+    node calls it first thing — the graph has no node-entry signal a stream consumer could read,
+    since an `updates` part arrives only once a node has finished.
     """
     research_agent = build_research_agent(
         tools=tools,
@@ -83,7 +83,7 @@ def build_research_graph(
             today_date=today_date,
             sections=report_structure,
             max_words=max_report_words,
-            emit_stage=emit_report_review_stage,
+            emit_result_stage=emit_report_review_result_stage,
             emit_activity=emit_activity,
         ),
     )

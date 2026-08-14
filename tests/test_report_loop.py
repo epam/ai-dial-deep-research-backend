@@ -299,7 +299,7 @@ def _review_node(
         today_date=_TODAY,
         sections=sections if sections is not None else DEFAULT_REPORT_STRUCTURE,
         max_words=max_words,
-        emit_stage=stages.append,
+        emit_result_stage=stages.append,
         emit_activity=lambda _title: None,
     )
     return node, stages

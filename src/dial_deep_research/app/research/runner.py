@@ -107,7 +107,7 @@ class ResearchRunner:
             report_structure=properties.default_report_structure,
             max_report_words=properties.max_report_words,
             max_report_versions=properties.max_report_versions,
-            emit_report_review_stage=self._emit_report_review_stage,
+            emit_report_review_result_stage=self._emit_report_review_result_stage,
             emit_activity=self._set_activity,
         )
         # LangGraph applies this to each graph run separately, so the same value bounds the
@@ -351,7 +351,7 @@ class ResearchRunner:
         with self._choice.create_stage(title) as stage:
             stage.append_content(body)
 
-    def _emit_report_review_stage(self, outcome: ReportReviewOutcome) -> None:
+    def _emit_report_review_result_stage(self, outcome: ReportReviewOutcome) -> None:
         """Render one report review as a DIAL stage.
 
         The node decided what to report; this decides how it looks. The violation text belongs

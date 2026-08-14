@@ -316,7 +316,7 @@ class ReportReviewOutcome(BaseModel):
         )
 
 
-ReportReviewStageEmitter = Callable[[ReportReviewOutcome], None]
+ReportReviewResultStageEmitter = Callable[[ReportReviewOutcome], None]
 
 
 def review_budget_exhausted(*, report_version: int, max_versions: int) -> bool:
@@ -412,10 +412,10 @@ def make_report_review_node(
     today_date: str,
     sections: Sequence[ReportSection],
     max_words: int,
-    emit_stage: ReportReviewStageEmitter,
+    emit_result_stage: ReportReviewResultStageEmitter,
     emit_activity: ActivityEmitter,
 ) -> ReportReviewNode:
-    """Build the report-review node: judge the draft, emit its stage, decide the next step.
+    """Build the report-review node: judge the draft, emit its result stage, decide the next step.
 
     Two judgements meet here. The app's own rules (`report_rules`) are checked in Python over the
     draft text, and the review model judges what needs a reader — padding, banned annotations,
@@ -488,7 +488,7 @@ def make_report_review_node(
             error=error,
             duration_seconds=duration,
         )
-        emit_stage(outcome)
+        emit_result_stage(outcome)
         logger.info(
             "Report reviewed: draft=%d duration=%.1fs outcome=%s error=%s words=%d "
             "ceiling=%d violations=%d tokens=%s",
