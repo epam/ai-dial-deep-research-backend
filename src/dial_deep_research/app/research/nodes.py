@@ -71,14 +71,7 @@ from .prompts import (
 from .report_length import count_report_words
 from .report_rules import build_report_rules, render_writer_instructions
 from .state import ResearchState
-from .tools import (
-    HOW_TO_WRITE_STATUS,
-    RULE_NEVER_ALONE,
-    RULE_NOT_WITH_FINISH,
-    RULE_ONCE_PER_TURN,
-    UPDATE_STATUS_TOOL_NAME,
-    WHEN_TO_ANNOUNCE,
-)
+from .tools import RULE_NEVER_ALONE, RULE_ONCE_PER_TURN, UPDATE_STATUS_TOOL_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -105,14 +98,11 @@ def build_research_agent(tools: list[BaseTool], today_date: str, client_name: st
         system_prompt=RESEARCH_AGENT_SYSTEM_PROMPT.format(
             today_date=today_date,
             client_name=client_name,
-            # The same sentences the status tool's description carries, and that its response
-            # quotes back when a rule is broken — one wording, so the model never has to
-            # reconcile two.
-            how_to_write_status=HOW_TO_WRITE_STATUS,
-            when_to_announce=WHEN_TO_ANNOUNCE,
+            # The two rules the status tool quotes back when it catches one being broken, so the
+            # correction repeats the instruction word for word. The prompt writes its other status
+            # rules itself.
             rule_once_per_turn=RULE_ONCE_PER_TURN,
             rule_never_alone=RULE_NEVER_ALONE,
-            rule_not_with_finish=RULE_NOT_WITH_FINISH,
         ),
         middleware=[
             *agent_logging_middleware("research-agent"),

@@ -16,9 +16,10 @@ FINISH_ITERATION_RESULT = "Research iteration complete; handing off to the resea
 FINISH_TOOL_NAME = "finish_iteration"
 UPDATE_STATUS_TOOL_NAME = "update_status"
 
-# The two rules the tool can catch the model breaking. Each is written once here and used in
-# three places — the research-agent system prompt, this tool's description, and the corrective
-# note in its response — so the model never meets the same rule in two different wordings.
+# The two rules the tool can catch the model breaking. They live here because `_broken_rules`
+# quotes them back verbatim in the corrective response, and the research-agent system prompt renders
+# these same strings — so the correction the model reads is word for word the rule it broke. The
+# prompt states the remaining status rules itself, having no second reader.
 RULE_ONCE_PER_TURN = (
     f"Never call {UPDATE_STATUS_TOOL_NAME} more than once in one turn. If several lines of work"
     " start at once, name them all in a single status."
@@ -27,49 +28,20 @@ RULE_NEVER_ALONE = (
     f"Never make {UPDATE_STATUS_TOOL_NAME} the only tool call of a turn. Always call it together"
     " with at least one other tool, normally the first tool call of the step it announces."
 )
-# Not catchable in the tool's own response: by the time it runs, the iteration is already ending.
-RULE_NOT_WITH_FINISH = (
-    f"Never call {UPDATE_STATUS_TOOL_NAME} together with {FINISH_TOOL_NAME}. Ending the iteration"
-    " is not a step to announce."
-)
 
 UPDATE_STATUS_RESULT = "Status shown to the user."
 _MISUSE_PREFIX = "You used this tool incorrectly."
 
-# When to announce, written once and used both here and in the research-agent system prompt.
-# Deliberately says nothing about what the steps should be: the model must follow its prompt, so
-# any illustration of a sequence of steps would be read as a research method to imitate.
-WHEN_TO_ANNOUNCE = """\
-Announce a new step whenever the work you are about to do is no longer what the status now on
-screen describes. One iteration normally passes through several such steps, and each one deserves
-its own status.
-
-Do not leave one status standing over a long run of tool calls. The user reads it as what you are
-doing at this moment, so a line that has stopped matching the work misleads — a rough status that
-is current beats a precise one that is stale. A single status covering a whole iteration is far
-too few.
-
-How you investigate is entirely yours to decide. This governs only how often you say what you are
-doing, never what you do."""
-
-# How to word a status, written once and used both here and in the research-agent system prompt.
+# The `status` argument's own description: what to write in it. It documents the argument, so it
+# travels with the argument rather than sitting in the prompt — the model reads it where it fills
+# the value in.
 HOW_TO_WRITE_STATUS = """\
 Write the step you are starting in five to eight words, and never more than twenty — the user
 reads it on one narrow line. Good statuses look like "Looking for US GDP forecasts" or "Searching
 for latest risks to economic outlook"."""
 
-_UPDATE_STATUS_DESCRIPTION = f"""\
-Tell the user what you are working on right now. Each status replaces the one before it.
-
-{HOW_TO_WRITE_STATUS}
-
-{WHEN_TO_ANNOUNCE}
-
-Rules:
-- {RULE_ONCE_PER_TURN}
-- {RULE_NEVER_ALONE}
-- {RULE_NOT_WITH_FINISH}
-"""
+_UPDATE_STATUS_DESCRIPTION = """\
+Tell the user what you are working on right now. Each status replaces the one before it."""
 
 
 def build_finish_iteration_tool() -> BaseTool:
@@ -95,7 +67,9 @@ def _broken_rules(messages: list[BaseMessage]) -> list[str]:
     """The rules the calling assistant message broke, judged from its own tool calls.
 
     The last message is the `AIMessage` carrying this call, so its `tool_calls` are the whole
-    batch the model asked for in this turn.
+    batch the model asked for in this turn. Calling the status tool together with the finish
+    sentinel is not judged here: by the time this runs the iteration is already ending, so a
+    correction would arrive with nowhere to apply it.
     """
     tool_calls = getattr(messages[-1], "tool_calls", []) if messages else []
     if not tool_calls:
@@ -122,7 +96,10 @@ def build_update_status_tool() -> BaseTool:
     """
 
     @tool(UPDATE_STATUS_TOOL_NAME, description=_UPDATE_STATUS_DESCRIPTION)
-    def update_status(status: str, state: Annotated[dict[str, Any], InjectedState]) -> str:
+    def update_status(
+        status: Annotated[str, HOW_TO_WRITE_STATUS],
+        state: Annotated[dict[str, Any], InjectedState],
+    ) -> str:
         broken = _broken_rules(state.get("messages") or [])
         if not broken:
             return UPDATE_STATUS_RESULT

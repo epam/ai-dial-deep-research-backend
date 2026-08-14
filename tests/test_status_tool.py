@@ -16,9 +16,10 @@ from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from langchain_core.tools import tool as make_tool
 
+from dial_deep_research.app.research.prompts import RESEARCH_AGENT_SYSTEM_PROMPT
 from dial_deep_research.app.research.tools import (
+    HOW_TO_WRITE_STATUS,
     RULE_NEVER_ALONE,
-    RULE_NOT_WITH_FINISH,
     RULE_ONCE_PER_TURN,
     UPDATE_STATUS_RESULT,
     UPDATE_STATUS_TOOL_NAME,
@@ -89,14 +90,31 @@ def test_both_misuses_at_once_are_both_reported() -> None:
     assert RULE_NEVER_ALONE in content
 
 
-def test_the_description_carries_the_same_rule_wordings() -> None:
-    """One wording per rule, so the model never has to reconcile the description it read with
-    the correction it gets back."""
+def test_the_argument_carries_how_to_write_a_status() -> None:
+    """What to put in the argument is documented on the argument, where the model fills it in."""
+    schema = build_update_status_tool().tool_call_schema.model_json_schema()
+
+    assert schema["properties"]["status"]["description"] == HOW_TO_WRITE_STATUS
+    assert "state" not in schema["properties"]
+
+
+def test_the_correction_repeats_the_wording_the_prompt_showed() -> None:
+    """The two catchable rules are shared for exactly this reason: the model is corrected with the
+    same sentence it was instructed with. The rules govern the shape of a turn, so the prompt states
+    them and the tool's description does not."""
+    prompt = RESEARCH_AGENT_SYSTEM_PROMPT.format(
+        today_date="2026-08-14",
+        client_name="ACME",
+        rule_once_per_turn=RULE_ONCE_PER_TURN,
+        rule_never_alone=RULE_NEVER_ALONE,
+    )
     description = build_update_status_tool().description
 
-    assert RULE_ONCE_PER_TURN in description
-    assert RULE_NEVER_ALONE in description
-    assert RULE_NOT_WITH_FINISH in description
+    for rule in (RULE_ONCE_PER_TURN, RULE_NEVER_ALONE):
+        assert rule in prompt
+        assert rule not in description
+    # The third rule has no second reader, so the prompt owns its wording outright.
+    assert "Never call update_status together with finish_iteration" in prompt
 
 
 class _FakeToolCallingModel(GenericFakeChatModel):
