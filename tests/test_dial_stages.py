@@ -24,7 +24,7 @@ def test_result_stage_title_success() -> None:
     end = datetime(2026, 4, 28, 14, 30, 6)
     assert (
         DialStageToolCallFormatter.format_title("search_docs", start, end)
-        == '[TOOL] "search_docs" - result ✅ (1.00s, start: 14:30:05, end: 14:30:06)'
+        == "[TOOL] search_docs ✅ (1.00s, start: 14:30:05, end: 14:30:06)"
     )
 
 
@@ -33,7 +33,7 @@ def test_result_stage_title_error() -> None:
     end = datetime(2026, 4, 28, 14, 30, 6)
     assert (
         DialStageToolCallFormatter.format_title("search_docs", start, end, is_error=True)
-        == '[TOOL] "search_docs" - error ❌ (1.00s, start: 14:30:05, end: 14:30:06)'
+        == "[TOOL] search_docs ❌ (1.00s, start: 14:30:05, end: 14:30:06)"
     )
 
 

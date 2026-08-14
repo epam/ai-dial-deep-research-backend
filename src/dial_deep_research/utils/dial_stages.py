@@ -107,7 +107,7 @@ class DialStageReportReviewFormatter:
     revision budget left unreviewed.
 
     Its own title shape rather than the tool-call one: a review is not a tool call, and the
-    `[TOOL] "<name>"` form would read as one. `RESULT` in the prefix separates it from the activity
+    `[TOOL] <name>` form would read as one. `RESULT` in the prefix separates it from the activity
     stage, which names work that has not happened yet. The body carries the review's violations,
     which is the one place they appear — the logs get counts only.
     """
@@ -196,8 +196,9 @@ class DialStageToolCallFormatter:
     def format_title(
         cls, tool_name: str, start: datetime, end: datetime, is_error: bool = False
     ) -> str:
-        action = f"error {_ERROR_EMOJI}" if is_error else f"result {_RESULT_EMOJI}"
-        return timed_stage_title(f'{cls._PREFIX} "{tool_name}" - {action}', start, end)
+        # The mark carries the outcome on its own, so the title spends no width on a word for it.
+        emoji = _ERROR_EMOJI if is_error else _RESULT_EMOJI
+        return timed_stage_title(f"{cls._PREFIX} {tool_name} {emoji}", start, end)
 
     @classmethod
     def format_body(cls, *, args_json: str, content: object, is_error: bool) -> str:

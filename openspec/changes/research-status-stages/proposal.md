@@ -35,6 +35,9 @@ open while the work happens, not a record written once it is over.
   This is why no elapsed time is stamped on it, and why several announcements in one assistant
   message are merged into a single stage instead of leaving earlier ones to flash open and shut — a
   stage that instantly completes reads as a step that completed, which would be false.
+- **Tool-call stage titles get shorter.** `[TOOL] <name> <emoji> (<timings>)`, with no quotes around
+  the name and no `result` or `error` word: the mark carries the outcome on its own. Preparation's
+  tool stages change with it, sharing the same formatter.
 - **Status calls are hidden from the models that read the transcript.** research-review and the
   report node stop receiving `update_status` calls and their tool responses, so status text never
   competes with genuine findings in a research-coverage judgement or in the report's context. The
@@ -57,11 +60,16 @@ None. The change alters behavior already owned by existing specs.
   covers *every* tool the agent invokes. `update_status` becomes an exception — it produces no
   result stage — and a second stage kind is introduced, the activity stage, whose lifecycle differs
   from every stage the app emits today: it is opened before its outcome is known and closed when
-  the next one replaces it.
+  the next one replaces it. The same requirement pins the tool-stage title, so the shorter form
+  belongs there too. Two further requirements, "Opik tracing of agent runs when configured" and
+  "Failures delivered as DIAL protocol errors", each refer to the failure stage as the `error ❌`
+  variant, wording the shorter title leaves behind: both now say a stage marked ❌.
 - `research-execution`: the per-node LLM input and output contract changes in three places.
   research-agent gains a bound tool. research-review and the report node each stop receiving part
   of the transcript. Node entry becomes an observable event that three nodes must emit. A new
-  requirement makes each research review's findings visible as a stage of their own.
+  requirement makes each research review's findings visible as a stage of their own. The researcher
+  requirement's tool-error scenario refers to the failure stage as the `error ❌` variant, and now
+  says a stage marked ❌, matching the shorter title.
 - `report-composition`: its report-review stage requirement states that the stage exists for the
   report review only and that research review emits none. Research review now emits one, so that
   exclusion goes and the two stage requirements become siblings, told apart by their prefixes.

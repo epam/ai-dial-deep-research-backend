@@ -151,3 +151,21 @@
 - [ ] 9.12 Drive a real query end to end with `scripts/send_conversation.py` against a running server,
       and confirm in the DIAL UI that a research review that continues and one that completes each
       render their own stage, next to the live activity stage.
+
+## 10. The tool-stage title format
+
+- [x] 10.1 In `utils/dial_stages.py`, shorten the tool-stage title to
+      `[TOOL] <name> <emoji> (<timings>)`: no quotes around the name, and no `result`/`error` word,
+      which the mark already carries.
+- [x] 10.2 Update the two tool-stage title assertions in `tests/test_dial_stages.py`.
+- [x] 10.3 Update the `dial-agent-with-mcp` delta — the normalized title form, the error-stage
+      scenario's example, and the `update_status` scenario's literal — and the report-review stage's
+      title sentence in the `report-composition` delta, which described its shape by pointing at the
+      tool stages'.
+- [x] 10.4 Normalize the three requirements that call the failure stage the `error ❌` variant, which
+      the shorter title leaves behind: the researcher requirement's tool-error scenario in
+      `research-execution`, and "Opik tracing of agent runs when configured" and "Failures delivered
+      as DIAL protocol errors" in `dial-agent-with-mcp`. Each is copied into its delta as a MODIFIED
+      requirement — extracted from the main spec rather than retyped, then diffed against it, so the
+      copy differs in the intended phrase alone.
+- [x] 10.5 Run `make format` and `make lint`, then the full test suite.

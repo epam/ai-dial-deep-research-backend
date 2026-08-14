@@ -15,8 +15,9 @@ one INFO log record, so the loop's behavior is measurable without reading anyone
   as markdown). The list is everything the next revision must fix: the review model's violations,
   with the app-rendered length violation prepended when the measured count exceeds the ceiling.
 
-Its title SHALL follow the normalized shape the tool stages use, with its own prefix rather than
-`[TOOL]`, and SHALL carry the review's outcome and the elapsed time. The prefix SHALL name the report
+Its title SHALL carry its own prefix rather than `[TOOL]`, the draft number, the review's outcome and
+the elapsed time — the shape a result stage has, without the tool stages' start and end
+timestamps, which a single call inside one node does not need. The prefix SHALL name the report
 review specifically: the research review emits a stage of its own in the same title shape, and the two
 are told apart by their prefixes (see **research-execution**).
 

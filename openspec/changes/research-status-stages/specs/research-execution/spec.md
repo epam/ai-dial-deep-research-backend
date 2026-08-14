@@ -115,6 +115,41 @@ is part of the contract, not an accident of implementation.
   the `update_status` call and its acknowledgement SHALL be removed, leaving every remaining tool
   call paired with its result
 
+### Requirement: Researcher investigates with forced tool choice and a finish_iteration sentinel
+
+The research-agent node SHALL be a tool-calling agent over the MCP-loaded tools plus one
+sentinel tool, `finish_iteration`. The agent SHALL be run with **forced tool choice**
+(every model call issued with `tool_choice="any"`) so that every model step emits a
+tool call and the model cannot produce a free-form assistant message (in particular,
+it cannot write a summary or a report).
+
+A research-agent iteration SHALL therefore end **only** when research-agent calls
+`finish_iteration`. That tool SHALL be declared `return_direct=True`, so the agent
+loop returns as soon as it executes, with no further model round-trip. Since the
+loop's only other exit is a tool-call-free assistant message, which forced tool choice
+makes unreachable, `finish_iteration` is the single exit from a research-agent iteration
+and research-agent cannot stop early. `finish_iteration` SHALL be a no-op signal that only
+ends the iteration; it SHALL NOT decide whether to review or report. Research-agent's
+prompt SHALL contain no report-writing instructions.
+
+A research-agent that never calls `finish_iteration` SHALL be bounded by the step budget
+of the **A per-graph-run step budget bounds every graph run** requirement below.
+
+#### Scenario: research-agent cannot emit a free-form report
+
+- **WHEN** the research-agent model is invoked at any step of an iteration
+- **THEN** it SHALL be constrained to call a tool (an MCP tool or `finish_iteration`) and SHALL NOT be able to return a free-form assistant message containing a summary or report
+
+#### Scenario: finish_iteration ends the iteration
+
+- **WHEN** research-agent calls `finish_iteration`
+- **THEN** the current research-agent iteration SHALL end immediately (no additional model call) and control SHALL pass to research-review
+
+#### Scenario: MCP tool error does not abort research
+
+- **WHEN** an MCP tool raises during research (e.g. argument validation rejects the call)
+- **THEN** the error SHALL be returned to research-agent as an error `ToolMessage` (via `handle_tool_error`) and surfaced as a stage marked ❌, and research-agent MAY retry without failing the turn
+
 ## ADDED Requirements
 
 ### Requirement: Every research review's findings are visible as a DIAL stage
