@@ -198,7 +198,7 @@ def research_budget_exhausted(*, research_iteration: int, max_research_iteration
     """True iff the just-finished iteration is the last permitted one, so no further one may run.
 
     Both numbers count iterations, 1-based — the research loop's mirror of
-    `review_budget_exhausted`: a "continue" verdict on the last permitted iteration could not
+    `report_review_budget_exhausted`: a "continue" verdict on the last permitted iteration could not
     be acted on, so the router skips the review call when this holds.
     """
     return research_iteration >= max_research_iterations
@@ -226,6 +226,20 @@ class ResearchReviewOutcome(BaseModel):
 
 
 ResearchReviewResultStageEmitter = Callable[[ResearchReviewOutcome], None]
+
+
+class ResearchBudgetExhausted(BaseModel):
+    """The iteration cap skipping a coverage review, handed to the runner to render as a stage.
+
+    Both numbers travel because the stage states the cap beside the iteration: a reader who does not
+    know the channel's configuration cannot tell an exhausted budget from an early stop otherwise.
+    """
+
+    research_iteration: int
+    max_research_iterations: int
+
+
+ResearchBudgetExhaustedEmitter = Callable[[ResearchBudgetExhausted], None]
 
 
 def make_research_review_node(
@@ -351,20 +365,55 @@ class ReportReviewOutcome(BaseModel):
 ReportReviewResultStageEmitter = Callable[[ReportReviewOutcome], None]
 
 
-def review_budget_exhausted(*, report_version: int, max_versions: int) -> bool:
+class ReportBudgetExhausted(BaseModel):
+    """The version budget skipping a report review, handed to the runner to render as a stage.
+
+    `length_exemptions` names what `word_count` leaves out, so the stage can state the measure it
+    shows. The counterpart of `ResearchBudgetExhausted` on the report side: both are reported by the
+    router that decides the hand-off, and both carry the budget beside the number it bounds.
+    """
+
+    draft_number: int
+    word_count: int
+    max_words: int
+    max_versions: int
+    length_exemptions: str
+
+
+ReportBudgetExhaustedEmitter = Callable[[ReportBudgetExhausted], None]
+
+
+def report_review_budget_exhausted(*, report_version: int, max_versions: int) -> bool:
     """True iff the current draft is the last permitted version, so no rewrite may follow it.
 
-    Both numbers count report versions, 1-based, which keeps the comparison plain. Shared by
-    the router (which skips the review when it holds) and the runner (which then announces the
-    unreviewed delivery), so the two cannot disagree.
+    Both numbers count report versions, 1-based, which keeps the comparison plain. The report
+    loop's mirror of `research_budget_exhausted`: a verdict on the last permitted version could
+    not be acted on, so the router skips the review call when this holds.
     """
     return report_version >= max_versions
+
+
+class ReportRevisionFailure(BaseModel):
+    """A revision the report call could not write, handed to the runner to render as a stage.
+
+    Carries numbers and the exception kind, never draft text: the draft the loop settles on is the
+    only one that reaches the response. The exception kind is known here and nowhere else — the
+    graph state records only that a revision failed.
+    """
+
+    failed_draft_number: int
+    delivered_draft_number: int
+    error: str
+
+
+ReportRevisionFailureEmitter = Callable[[ReportRevisionFailure], None]
 
 
 def make_report_node(
     today_date: str,
     sections: Sequence[ReportSection],
     max_words: int,
+    emit_revision_failed_stage: ReportRevisionFailureEmitter,
     emit_activity: ActivityEmitter,
 ) -> ReportNode:
     """Build the report node: it writes the first draft, and every revision after it."""
@@ -414,12 +463,20 @@ def make_report_node(
             # and leave the loop. The first draft has nothing to fall back to, so it propagates.
             if previous_draft is None:
                 raise
+            error = type(exc).__name__
             logger.warning(
                 "Report revision failed, delivering the previous draft: "
                 "failed_draft=%d delivered_draft=%d error=%s",
                 draft_number,
                 draft_number - 1,
-                type(exc).__name__,
+                error,
+            )
+            emit_revision_failed_stage(
+                ReportRevisionFailure(
+                    failed_draft_number=draft_number,
+                    delivered_draft_number=draft_number - 1,
+                    error=error,
+                )
             )
             return {"report_revision_failed": True}
 
@@ -538,24 +595,41 @@ def make_report_review_node(
     return report_review
 
 
-def route_after_research_agent(max_research_iterations: int) -> Callable[[ResearchState], str]:
+def route_after_research_agent(
+    max_research_iterations: int, emit_budget_exhausted: ResearchBudgetExhaustedEmitter
+) -> Callable[[ResearchState], str]:
     """Decide the edge out of the research-agent node.
 
     An iteration is reviewed only while another iteration may still run: a "continue" verdict
     on the last permitted iteration could not be acted on, so the call is not made and the
-    findings go straight to the report. Logged here — no node sits on that path.
+    findings go straight to the report. Reported here — no node sits on that path, and announcing
+    the skip from anywhere later would place it after the report's own stages.
+
+    A cap of one exhausts nothing: with a single permitted iteration a review could never be acted
+    on, so review is off by configuration and the user is told nothing. The log record still fires,
+    the hand-off having happened either way.
     """
 
     def route(state: ResearchState) -> str:
         research_iteration = state["research_iteration"]
-        if research_budget_exhausted(
+        if not research_budget_exhausted(
             research_iteration=research_iteration, max_research_iterations=max_research_iterations
         ):
-            logger.info(
-                "Research iteration budget exhausted: research_iteration=%d", research_iteration
+            return "research-review"
+        logger.info(
+            "Research iteration budget exhausted: research_iteration=%d "
+            "max_research_iterations=%d",
+            research_iteration,
+            max_research_iterations,
+        )
+        if max_research_iterations > 1:
+            emit_budget_exhausted(
+                ResearchBudgetExhausted(
+                    research_iteration=research_iteration,
+                    max_research_iterations=max_research_iterations,
+                )
             )
-            return "report"
-        return "research-review"
+        return "report"
 
     return route
 
@@ -577,25 +651,52 @@ def route_after_research_review() -> Callable[[ResearchState], str]:
     return route
 
 
-def route_after_report(max_versions: int) -> Callable[[ResearchState], str]:
-    """Decide the edge out of the report node.
+def route_after_report(
+    max_versions: int,
+    max_words: int,
+    sections: Sequence[ReportSection],
+    emit_budget_exhausted: ReportBudgetExhaustedEmitter,
+) -> Callable[[ResearchState], str]:
+    """Decide the edge out of the report node, and report the hand-off it decides on.
 
     Three exits. A revision whose own call failed leaves the loop immediately with the previous
     draft: returning to review would re-judge an unchanged draft and route straight back to a
     call that fails again, and since a failed revision writes nothing, no counter would bound
-    that cycle. The last permitted version is delivered without a review call — a verdict that
-    cannot be acted on is not worth one; the runner announces the unreviewed delivery. A budget
-    of one is the same gate failing already for the first draft. Otherwise the draft is
-    reviewed.
+    that cycle — the report node has already announced that one. The last permitted version is
+    delivered without a review call — a verdict that cannot be acted on is not worth one — and this
+    router announces it, the way its research counterpart announces the review the iteration cap
+    skipped. Otherwise the draft is reviewed.
+
+    A budget of one exhausts nothing: review is off by configuration, so the user is told nothing.
+    The log record still fires, the delivery having gone unreviewed either way.
     """
 
     def route(state: ResearchState) -> str:
         if state.get("report_revision_failed"):
             return "end"
-        exhausted = review_budget_exhausted(
-            report_version=state.get("report_version", 0), max_versions=max_versions
+        draft_number = state.get("report_version", 0)
+        if not report_review_budget_exhausted(
+            report_version=draft_number, max_versions=max_versions
+        ):
+            return "report-review"
+        word_count = count_report_words(state.get("report") or "", sections=sections)
+        logger.info(
+            "Report delivered without review: draft=%d max_versions=%d words=%d",
+            draft_number,
+            max_versions,
+            word_count,
         )
-        return "end" if exhausted else "report-review"
+        if max_versions > 1:
+            emit_budget_exhausted(
+                ReportBudgetExhausted(
+                    draft_number=draft_number,
+                    word_count=word_count,
+                    max_words=max_words,
+                    max_versions=max_versions,
+                    length_exemptions=render_length_exemptions(sections),
+                )
+            )
+        return "end"
 
     return route
 

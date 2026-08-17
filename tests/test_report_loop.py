@@ -114,12 +114,14 @@ def _report_node(
     *,
     sections: list[ReportSection] | None = None,
     max_words: int = 2750,
+    failures: list[nodes.ReportRevisionFailure] | None = None,
 ) -> Any:
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: RunnableLambda(llm))
     return nodes.make_report_node(
         today_date=_TODAY,
         sections=sections if sections is not None else DEFAULT_REPORT_STRUCTURE,
         max_words=max_words,
+        emit_revision_failed_stage=(failures.append if failures is not None else lambda _o: None),
         emit_activity=lambda _title: None,
     )
 
@@ -231,22 +233,34 @@ async def test_a_failed_revision_keeps_the_previous_draft(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     llm = _FailingReportLLM()
-    node = _report_node(llm, monkeypatch)
+    failures: list[nodes.ReportRevisionFailure] = []
+    node = _report_node(llm, monkeypatch, failures=failures)
 
-    result = await node(_state(report="draft one", report_revision_instruction="- Shorten it."))
+    # `report_version` counts the draft that exists, as it does when the graph reaches a revision.
+    result = await node(
+        _state(report="draft one", report_version=1, report_revision_instruction="- Shorten it.")
+    )
 
     # Nothing overwrites `report`, so the previous draft stays the one that is delivered.
     assert result == {"report_revision_failed": True}
     assert llm.calls == 1
+    # Without this the run would end on a review stage asking for a revision that never arrives.
+    [failure] = failures
+    assert (failure.failed_draft_number, failure.delivered_draft_number) == (2, 1)
+    assert failure.error == "ValueError"
 
 
 async def test_a_failed_first_draft_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Nothing to fall back to: the turn fails, as it did before the loop existed.
+    # Nothing to fall back to: the turn fails and the DIAL error path carries it.
     llm = _FailingReportLLM()
-    node = _report_node(llm, monkeypatch)
+    failures: list[nodes.ReportRevisionFailure] = []
+    node = _report_node(llm, monkeypatch, failures=failures)
 
     with pytest.raises(ValueError):
         await node(_state())
+
+    # No hand-off happened, so there is none to announce.
+    assert failures == []
 
 
 # --- the report-review node ---------------------------------------------------------------------

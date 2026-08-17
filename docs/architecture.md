@@ -137,13 +137,13 @@ flowchart TD
 
     fin -->|"the only way a research-agent<br/>iteration can end"| itgate{"another iteration<br/>permitted by the cap?"}
     itgate -->|yes| research_review["research-review node<br/>independent structured LLM call<br/>→ assessment + next_steps,<br/>and one DIAL stage"]
-    itgate -->|"no — a 'continue' verdict could<br/>not be acted on, so the last<br/>iteration is not reviewed"| report
+    itgate -->|"no — a 'continue' verdict could<br/>not be acted on, so the last<br/>iteration is not reviewed,<br/>announced by a closing stage"| report
     research_review --> route{"next_steps non-empty?"}
     route -->|yes| nextplan["Record the plan and inject it as<br/>the next iteration's instruction"]
     nextplan --> model
     route -->|no| report["report node<br/>LLM call over the whole findings<br/>transcript → the first draft, or a<br/>revision when a draft already exists"]
     report --> afterreport{"deliver now,<br/>or review the draft?"}
-    afterreport -->|"this call was a revision whose<br/>own model call failed —<br/>the previous draft stands"| finaldone(["END"])
+    afterreport -->|"this call was a revision whose<br/>own model call failed —<br/>the previous draft stands,<br/>announced by a closing stage"| finaldone(["END"])
     afterreport -->|"the last version the budget<br/>permits — delivered without review,<br/>announced by a closing stage"| finaldone
     afterreport -->|"otherwise"| report_review["report-review node<br/>structured LLM call over the draft and<br/>the configured sections → violations<br/>(the app adds the length one itself),<br/>and one DIAL stage"]
     report_review --> reroute{"over the word ceiling,<br/>or a revision asked for?"}
@@ -226,10 +226,19 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   reviewer's assessment, and the next steps as a numbered list — or a line stating that research is
   complete, which is what an empty step list means. Its title names the route the graph then takes,
   `continue` or `report`, taken from the same function the router calls. The assessment and the
-  steps are LLM response text, so the matching INFO record carries the step *count* only. An
-  iteration the cap left unreviewed emits no stage, having produced no findings, and neither does a
-  failed review call: research-review re-raises, so the turn ends and the open activity stage closes
-  as failed.
+  steps are LLM response text, so the matching INFO record carries the step *count* only. A failed
+  review call emits no stage: research-review re-raises, so the turn ends and the open activity
+  stage closes as failed. An iteration the cap left unreviewed is announced by a stage of its own,
+  emitted by the router as it hands over so that it precedes the report's stages: it states that the
+  review budget is exhausted and carries the iteration with the cap, without a duration — no call
+  was made, so it has no findings and no elapsed time. A cap of one emits nothing — one permitted
+  iteration means review is off by configuration, not exhausted, the same rule a version budget of
+  one follows.
+- **Report stage**: the report step emits one stage in a single case — a revision whose own model
+  call failed, where the previous draft is delivered instead. It carries its own
+  `[REPORT REVISION FAILED]` prefix, since no review took place, and names the draft that was not
+  written, the draft delivered, and the failure kind. No draft text: only the draft the loop settles
+  on reaches the response.
 - **Report-review stage**: each report-review call emits one DIAL stage, titled
   `[REPORT REVIEW RESULT]`, carrying the draft number,
   the measured word count with the ceiling, and the violations as a list — the review model's

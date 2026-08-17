@@ -34,6 +34,7 @@ from dial_deep_research.app.history import PrepState
 from dial_deep_research.app.mcp_tools import load_mcp_tools
 from dial_deep_research.app_properties import ApplicationProperties
 from dial_deep_research.utils.dial_stages import (
+    DialStageReportFormatter,
     DialStageReportReviewFormatter,
     DialStageResearchReviewFormatter,
     DialStageToolCallFormatter,
@@ -42,9 +43,13 @@ from dial_deep_research.utils.dial_stages import (
 )
 
 from .graph import build_research_graph
-from .nodes import ReportReviewOutcome, ResearchReviewOutcome, review_budget_exhausted
-from .prompts import render_length_exemptions
-from .report_length import count_report_words
+from .nodes import (
+    ReportBudgetExhausted,
+    ReportReviewOutcome,
+    ReportRevisionFailure,
+    ResearchBudgetExhausted,
+    ResearchReviewOutcome,
+)
 from .state import build_initial_state
 from .tools import (
     FINISH_TOOL_NAME,
@@ -80,7 +85,6 @@ class ResearchRunner:
         self._messages: list[BaseMessage] = []
         self._seen_ids: set[str] = set()
         self._report: str | None = None
-        self._report_version = 0
         # The one open activity stage. A DIAL stage name can only be appended to, so changing
         # what it says means replacing the stage; `None` means none is open right now.
         self._activity_stage: Stage | None = None
@@ -109,7 +113,10 @@ class ResearchRunner:
             max_report_words=properties.max_report_words,
             max_report_versions=properties.max_report_versions,
             emit_research_review_result_stage=self._emit_research_review_result_stage,
+            emit_research_budget_exhausted=self._emit_research_budget_exhausted_stage,
             emit_report_review_result_stage=self._emit_report_review_result_stage,
+            emit_report_revision_failed=self._emit_report_revision_failed_stage,
+            emit_report_budget_exhausted=self._emit_report_budget_exhausted_stage,
             emit_activity=self._set_activity,
         )
         # LangGraph applies this to each graph run separately, so the same value bounds the
@@ -137,7 +144,6 @@ class ResearchRunner:
         else:
             self._close_activity(Status.COMPLETED)
 
-        self._emit_unreviewed_delivery_stage(properties)
         self._deliver_report()
         return self._messages
 
@@ -203,7 +209,6 @@ class ResearchRunner:
         elif part["type"] == "values" and not part["ns"]:
             self._messages = part["data"]["messages"]
             self._report = part["data"].get("report")
-            self._report_version = part["data"].get("report_version", 0)
 
     def _handle_updates(self, data: dict[str, Any]) -> None:
         for node_update in data.values():
@@ -318,37 +323,22 @@ class ResearchRunner:
         with self._choice.create_stage(title) as result_stage:
             result_stage.append_content(body)
 
-    def _emit_unreviewed_delivery_stage(self, properties: ApplicationProperties) -> None:
+    def _emit_report_budget_exhausted_stage(self, outcome: ReportBudgetExhausted) -> None:
         """Announce a delivery whose draft the version budget left unreviewed.
 
         Distinguishes "review approved the draft" from "the budget ran out, so the previous
-        review's findings may remain". Deterministic — no model call: the last permitted version
-        exists only because the previous review demanded a rewrite. A budget of one emits
-        nothing — review is off by configuration, not exhausted.
+        review's findings may remain". The router decided it and measured the draft; this decides
+        how it looks. No model call was made, so the stage carries no elapsed time.
         """
-        max_versions = properties.max_report_versions
-        if not self._report or max_versions <= 1:
-            return
-        if not review_budget_exhausted(
-            report_version=self._report_version, max_versions=max_versions
-        ):
-            return
-        word_count = count_report_words(self._report, sections=properties.default_report_structure)
-        logger.info(
-            "Report delivered without review: draft=%d max_versions=%d words=%d",
-            self._report_version,
-            max_versions,
-            word_count,
+        title = DialStageReportReviewFormatter.format_budget_exhausted_title(
+            draft_number=outcome.draft_number
         )
-        title = DialStageReportReviewFormatter.format_unreviewed_title(
-            draft_number=self._report_version
-        )
-        body = DialStageReportReviewFormatter.format_unreviewed_body(
-            draft_number=self._report_version,
-            word_count=word_count,
-            max_words=properties.max_report_words,
-            length_exemptions=render_length_exemptions(properties.default_report_structure),
-            max_versions=max_versions,
+        body = DialStageReportReviewFormatter.format_budget_exhausted_body(
+            draft_number=outcome.draft_number,
+            word_count=outcome.word_count,
+            max_words=outcome.max_words,
+            length_exemptions=outcome.length_exemptions,
+            max_versions=outcome.max_versions,
         )
         with self._choice.create_stage(title) as stage:
             stage.append_content(body)
@@ -371,6 +361,40 @@ class ResearchRunner:
             max_research_iterations=outcome.max_research_iterations,
             assessment=outcome.assessment,
             next_steps=outcome.next_steps,
+        )
+        with self._choice.create_stage(title) as stage:
+            stage.append_content(body)
+
+    def _emit_research_budget_exhausted_stage(self, outcome: ResearchBudgetExhausted) -> None:
+        """Announce a coverage review the iteration cap skipped.
+
+        Emitted while the graph still runs, so it sits among the stages of the research it belongs
+        to rather than after the report's. Rendered from the router's numbers alone, with no model
+        call — which is why it carries no elapsed time.
+        """
+        title = DialStageResearchReviewFormatter.format_budget_exhausted_title()
+        body = DialStageResearchReviewFormatter.format_budget_exhausted_body(
+            research_iteration=outcome.research_iteration,
+            max_research_iterations=outcome.max_research_iterations,
+        )
+        with self._choice.create_stage(title) as stage:
+            stage.append_content(body)
+
+    def _emit_report_revision_failed_stage(self, outcome: ReportRevisionFailure) -> None:
+        """Announce a revision the report call could not write, and the draft delivered instead.
+
+        Without it the run ends on a review stage asking for a revision that never arrives. The
+        body names draft numbers and the failure kind only: the draft being delivered is the
+        answer, and the one that was never written has no text to show.
+        """
+        title = DialStageReportFormatter.format_revision_failed_title(
+            failed_draft_number=outcome.failed_draft_number,
+            delivered_draft_number=outcome.delivered_draft_number,
+        )
+        body = DialStageReportFormatter.format_revision_failed_body(
+            failed_draft_number=outcome.failed_draft_number,
+            delivered_draft_number=outcome.delivered_draft_number,
+            error=outcome.error,
         )
         with self._choice.create_stage(title) as stage:
             stage.append_content(body)

@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from dial_deep_research.utils.dial_stages import (
+    DialStageReportFormatter,
     DialStageReportReviewFormatter,
     DialStageResearchReviewFormatter,
     DialStageToolCallFormatter,
@@ -64,6 +65,20 @@ class TestResearchReviewStage:
         assert research.startswith("[RESEARCH REVIEW RESULT]")
         assert report.startswith("[REPORT REVIEW RESULT]")
 
+    def test_a_skipped_review_states_the_budget_without_a_duration(self) -> None:
+        """No call was made, so there is nothing to time and no verdict to show."""
+        title = DialStageResearchReviewFormatter.format_budget_exhausted_title()
+        body = DialStageResearchReviewFormatter.format_budget_exhausted_body(
+            research_iteration=10, max_research_iterations=10
+        )
+
+        assert title == (
+            "[RESEARCH REVIEW RESULT] review budget is exhausted - proceeding to report ⚠️"
+        )
+        assert "s)" not in title
+        assert "**Iteration** 10 of at most 10" in body
+        assert "without a coverage review" in body
+
     def test_body_carries_the_cap_the_assessment_and_the_steps(self) -> None:
         body = DialStageResearchReviewFormatter.format_body(
             research_iteration=2,
@@ -86,6 +101,25 @@ class TestResearchReviewStage:
         )
         assert "**Next steps** none" in body
         assert "research is complete" in body
+
+
+class TestReportStage:
+    """The report step reporting on itself: the one case where no review took place."""
+
+    def test_a_failed_revision_names_both_drafts_and_the_failure(self) -> None:
+        title = DialStageReportFormatter.format_revision_failed_title(
+            failed_draft_number=2, delivered_draft_number=1
+        )
+        body = DialStageReportFormatter.format_revision_failed_body(
+            failed_draft_number=2, delivered_draft_number=1, error="APIError"
+        )
+
+        # Its own prefix: borrowing the review's would say a review took place.
+        assert title == "[REPORT REVISION FAILED] writing draft 2 failed, delivering draft 1 ❌"
+        assert "**Draft** 2 — not written" in body
+        assert "APIError" in body
+        assert "**Delivered** draft 1" in body
+        assert "may remain unaddressed" in body
 
 
 class TestReportReviewStage:
@@ -170,12 +204,12 @@ class TestReportReviewStage:
         assert "❌ **Error** the LLM review call failed (RuntimeError)" in body
         assert "1. The draft is 3910 words" in body
 
-    def test_unreviewed_delivery_has_its_own_title_without_a_duration(self) -> None:
-        title = DialStageReportReviewFormatter.format_unreviewed_title(draft_number=3)
+    def test_an_exhausted_budget_has_its_own_title_without_a_duration(self) -> None:
+        title = DialStageReportReviewFormatter.format_budget_exhausted_title(draft_number=3)
         assert title == "[REPORT REVIEW RESULT] draft 3 - delivered without review ⚠️"
 
-    def test_unreviewed_delivery_body_names_the_exhausted_budget(self) -> None:
-        body = DialStageReportReviewFormatter.format_unreviewed_body(
+    def test_the_exhausted_budget_body_names_the_draft_and_the_budget(self) -> None:
+        body = DialStageReportReviewFormatter.format_budget_exhausted_body(
             draft_number=3,
             word_count=2100,
             max_words=2750,

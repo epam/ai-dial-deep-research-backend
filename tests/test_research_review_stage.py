@@ -3,7 +3,8 @@
 The node decides what to report and the runner decides how it looks, so these tests cover both
 ends: what the outcome carries — including a verdict that has to match where the graph routes —
 and the stage the runner renders from it beside the still-open activity stage. A review the
-iteration cap skipped has no findings, so it has no stage either.
+iteration cap skipped has no findings to show, and is announced by the router instead, in time to
+precede the report's own stages.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from dial_deep_research.app.history import Plan, PrepState
 from dial_deep_research.app.research import graph as graph_module
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.graph import build_research_graph
-from dial_deep_research.app.research.nodes import ResearchReviewOutcome
+from dial_deep_research.app.research.nodes import ResearchBudgetExhausted, ResearchReviewOutcome
 from dial_deep_research.app.research.prompts import ResearchReview
 from dial_deep_research.app.research.runner import ResearchRunner
 from dial_deep_research.app.research.state import build_initial_state
@@ -184,14 +185,18 @@ async def test_the_runner_renders_the_outcome_beside_the_open_activity_stage() -
     assert result.closed
 
 
-async def test_an_iteration_the_cap_left_unreviewed_emits_no_stage(
-    monkeypatch: MonkeyPatch,
-) -> None:
-    """The router skips the review on the last permitted iteration, so nothing is reported."""
+async def _run_graph_with_the_cap_reached(
+    monkeypatch: MonkeyPatch, *, max_research_iterations: int
+) -> tuple[dict[str, Any], list[Any], list[str]]:
+    """Drive a whole run whose research ends on the cap, collecting what each emitter reported.
+
+    The stubbed research-agent lands on the cap in one pass, so the run reaches the router in the
+    state a real one would after its last permitted iteration. A version budget of one turns the
+    report review off, so the run needs no review model.
+    """
 
     async def research_agent(state: dict[str, Any]) -> dict[str, Any]:
-        # The real research-agent counts its own iterations (IterationCounterMiddleware).
-        return {"research_iteration": state["research_iteration"] + 1}
+        return {"research_iteration": max_research_iterations}
 
     class _ReportModel:
         def with_retry(self, **kwargs: Any) -> _ReportModel:
@@ -202,25 +207,74 @@ async def test_an_iteration_the_cap_left_unreviewed_emits_no_stage(
 
     monkeypatch.setattr(graph_module, "build_research_agent", lambda *a, **kw: research_agent)
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: _ReportModel())
-    outcomes: list[ResearchReviewOutcome] = []
-    # A version budget of one turns the report review off too, so the run needs no review model.
+    findings: list[Any] = []
+    exhausted: list[Any] = []
+    order: list[str] = []
     compiled = build_research_graph(
         tools=[],
         today_date="2026-08-14",
-        max_research_iterations=1,
+        max_research_iterations=max_research_iterations,
         client_name="ACME",
         report_structure=_SECTIONS,
         max_report_words=2750,
         max_report_versions=1,
-        emit_research_review_result_stage=outcomes.append,
-        emit_report_review_result_stage=lambda _outcome: None,
-        emit_activity=lambda _title: None,
+        emit_research_review_result_stage=lambda outcome: (
+            findings.append(outcome),
+            order.append("findings"),
+        ),
+        emit_research_budget_exhausted=lambda outcome: (
+            exhausted.append(outcome),
+            order.append("budget-exhausted"),
+        ),
+        emit_report_review_result_stage=lambda _outcome: order.append("report-review"),
+        emit_report_revision_failed=lambda _outcome: order.append("revision-failed"),
+        emit_report_budget_exhausted=lambda _outcome: order.append("report-budget-exhausted"),
+        emit_activity=lambda title: order.append(f"activity:{title}"),
     )
 
     prep = PrepState(
         current_query="q", plan=Plan(steps=["step one"]), plan_approved=True, research_started=True
     )
     final = await compiled.ainvoke(build_initial_state(prep))
+    return final, exhausted + findings, order
+
+
+async def test_the_cap_announces_the_review_it_skipped(monkeypatch: MonkeyPatch) -> None:
+    final, reported, order = await _run_graph_with_the_cap_reached(
+        monkeypatch, max_research_iterations=10
+    )
 
     assert final["report"]
-    assert outcomes == []
+    [outcome] = reported
+    assert (outcome.research_iteration, outcome.max_research_iterations) == (10, 10)
+    # Announced while research is still the current work, so it precedes the report's own stages.
+    assert order.index("budget-exhausted") < order.index("activity:Writing the report")
+
+
+async def test_a_cap_of_one_announces_nothing(monkeypatch: MonkeyPatch) -> None:
+    """With one permitted iteration a review could never be acted on, so review is off by
+    configuration and there is nothing to report — the rule a version budget of one follows."""
+    final, reported, order = await _run_graph_with_the_cap_reached(
+        monkeypatch, max_research_iterations=1
+    )
+
+    assert final["report"]
+    assert reported == []
+    assert "budget-exhausted" not in order
+
+
+async def test_the_runner_renders_the_exhausted_budget_without_a_duration() -> None:
+    choice = ChoiceSpy()
+    runner = ResearchRunner(choice)  # type: ignore[arg-type]
+
+    runner._emit_research_budget_exhausted_stage(
+        ResearchBudgetExhausted(research_iteration=10, max_research_iterations=10)
+    )
+
+    [stage] = choice.stages
+    assert stage.title == (
+        "[RESEARCH REVIEW RESULT] review budget is exhausted - proceeding to report ⚠️"
+    )
+    assert "**Iteration** 10 of at most 10" in stage.body
+    assert "without a coverage review" in stage.body
+    assert stage.closed

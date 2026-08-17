@@ -101,6 +101,62 @@ class DialStageResearchReviewFormatter:
             )
         return "\n".join(lines)
 
+    @classmethod
+    def format_budget_exhausted_title(cls) -> str:
+        # No duration: no call was made — the skip is pure Python over the iteration count.
+        return f"{cls._PREFIX} review budget is exhausted - proceeding to report {_WARNING_EMOJI}"
+
+    @classmethod
+    def format_budget_exhausted_body(
+        cls, *, research_iteration: int, max_research_iterations: int
+    ) -> str:
+        return "\n".join(
+            [
+                f"**Iteration** {research_iteration} of at most {max_research_iterations}",
+                "",
+                f"**Verdict** none — the iteration budget ({max_research_iterations}) is exhausted,"
+                " so the findings go to the report without a coverage review. Any gap a review"
+                " would have named remains.",
+            ]
+        )
+
+
+class DialStageReportFormatter:
+    """Renders what becomes of a report draft when the report step cannot write the next one.
+
+    Its own prefix, not the review's: no review took place, and borrowing the review's prefix would
+    say one did. The prefix names the failure itself, so the outcome is legible before the numbers
+    are read. The stage names draft numbers and a failure kind only — a draft the loop did not
+    settle on stays out of the response.
+    """
+
+    _REVISION_FAILED_PREFIX = "[REPORT REVISION FAILED]"
+
+    @classmethod
+    def format_revision_failed_title(
+        cls, *, failed_draft_number: int, delivered_draft_number: int
+    ) -> str:
+        return (
+            f"{cls._REVISION_FAILED_PREFIX} writing draft {failed_draft_number} failed,"
+            f" delivering draft {delivered_draft_number} {_ERROR_EMOJI}"
+        )
+
+    @classmethod
+    def format_revision_failed_body(
+        cls, *, failed_draft_number: int, delivered_draft_number: int, error: str
+    ) -> str:
+        return "\n".join(
+            [
+                f"**Draft** {failed_draft_number} — not written",
+                "",
+                f"{_ERROR_EMOJI} **Error** the LLM report call failed ({error}), so no revised"
+                " draft exists.",
+                "",
+                f"**Delivered** draft {delivered_draft_number}, as it stood. The violations the"
+                " last review recorded may remain unaddressed.",
+            ]
+        )
+
 
 class DialStageReportReviewFormatter:
     """Renders one report review as a DIAL stage, and the closing stage of a draft the
@@ -161,12 +217,12 @@ class DialStageReportReviewFormatter:
         return "\n".join(lines)
 
     @classmethod
-    def format_unreviewed_title(cls, *, draft_number: int) -> str:
+    def format_budget_exhausted_title(cls, *, draft_number: int) -> str:
         # No duration: no call was made — the delivery decision is pure Python over the state.
         return f"{cls._PREFIX} draft {draft_number} - delivered without review {_WARNING_EMOJI}"
 
     @classmethod
-    def format_unreviewed_body(
+    def format_budget_exhausted_body(
         cls,
         *,
         draft_number: int,

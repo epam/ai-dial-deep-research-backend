@@ -116,7 +116,10 @@ def _build(
         max_report_words=max_report_words,
         max_report_versions=max_report_versions,
         emit_research_review_result_stage=lambda _outcome: None,
+        emit_research_budget_exhausted=lambda _outcome: None,
         emit_report_review_result_stage=stages.append,
+        emit_report_revision_failed=lambda _outcome: None,
+        emit_report_budget_exhausted=lambda _outcome: None,
         emit_activity=lambda _title: None,
     )
     return compiled, llm, stages

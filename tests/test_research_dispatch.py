@@ -20,6 +20,7 @@ from pytest import MonkeyPatch
 
 from dial_deep_research.app.history import Plan, PrepState
 from dial_deep_research.app.research import runner as runner_module
+from dial_deep_research.app.research.nodes import ReportBudgetExhausted
 from dial_deep_research.app.research.runner import ResearchRunner
 from dial_deep_research.app_properties import ApplicationProperties
 from tests.dial_spies import ChoiceSpy
@@ -124,13 +125,12 @@ def _values(
     messages: list[Any],
     ns: tuple[str, ...] = (),
     report: str | None = None,
-    report_version: int = 0,
 ) -> ValuesStreamPart[Any]:
     """A `stream_mode="values"` part as the graph emits it under `version="v2"`."""
     return ValuesStreamPart(
         type="values",
         ns=ns,
-        data={"messages": messages, "report": report, "report_version": report_version},
+        data={"messages": messages, "report": report},
         interrupts=(),
     )
 
@@ -214,35 +214,25 @@ async def test_step_budget_defaults_to_500(monkeypatch: MonkeyPatch) -> None:
     assert captured["config"]["recursion_limit"] == 500
 
 
-def test_budget_exhausted_delivery_emits_the_unreviewed_stage() -> None:
-    # Version 3 with a budget of 3: the last permitted version got no review call.
+def test_the_runner_renders_an_exhausted_report_budget() -> None:
+    """The router decides and measures; this renders. Whether it fires is tested with the router."""
     runner, choice = _make_runner()
-    runner._handle_part(_values([HumanMessage(content="q")], report="w1 w2", report_version=3))
-    runner._emit_unreviewed_delivery_stage(_properties(max_report_versions=3))
+
+    runner._emit_report_budget_exhausted_stage(
+        ReportBudgetExhausted(
+            draft_number=3,
+            word_count=2,
+            max_words=2750,
+            max_versions=3,
+            length_exemptions="the inline citations and the References section",
+        )
+    )
 
     [title] = choice.stage_titles
     assert "draft 3" in title
     assert "delivered without review" in title
     assert "budget (3)" in choice.stages[0].body
     assert "2 words" in choice.stages[0].body
-
-
-def test_reviewed_delivery_emits_no_unreviewed_stage() -> None:
-    # Version 2 within a budget of 3: the loop ended on an approving review instead.
-    runner, choice = _make_runner()
-    runner._handle_part(_values([HumanMessage(content="q")], report="fine", report_version=2))
-    runner._emit_unreviewed_delivery_stage(_properties(max_report_versions=3))
-
-    assert choice.stage_titles == []
-
-
-def test_budget_of_one_delivery_emits_no_unreviewed_stage() -> None:
-    # Review is off by configuration, not exhausted.
-    runner, choice = _make_runner()
-    runner._handle_part(_values([HumanMessage(content="q")], report="fine", report_version=1))
-    runner._emit_unreviewed_delivery_stage(_properties(max_report_versions=1))
-
-    assert choice.stage_titles == []
 
 
 def test_substituted_message_reaches_the_persisted_slice() -> None:
