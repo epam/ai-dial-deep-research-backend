@@ -20,7 +20,11 @@ from dial_deep_research.app.history import Plan, PrepState
 from dial_deep_research.app.research import graph as graph_module
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.graph import build_research_graph
-from dial_deep_research.app.research.nodes import ResearchBudgetExhausted, ResearchReviewOutcome
+from dial_deep_research.app.research.nodes import (
+    RESEARCH_REVIEW_ACTIVITY,
+    ResearchBudgetExhausted,
+    ResearchReviewOutcome,
+)
 from dial_deep_research.app.research.prompts import ResearchReview
 from dial_deep_research.app.research.runner import ResearchRunner
 from dial_deep_research.app.research.state import build_initial_state
@@ -164,7 +168,7 @@ async def test_a_failed_review_call_emits_nothing_and_ends_the_turn(
 async def test_the_runner_renders_the_outcome_beside_the_open_activity_stage() -> None:
     choice = ChoiceSpy()
     runner = ResearchRunner(choice)  # type: ignore[arg-type]
-    runner._set_activity("Reviewing research findings")
+    runner._set_activity(RESEARCH_REVIEW_ACTIVITY)
 
     runner._emit_research_review_result_stage(
         ResearchReviewOutcome(
