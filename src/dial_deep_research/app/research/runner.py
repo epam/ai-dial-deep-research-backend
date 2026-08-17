@@ -323,25 +323,6 @@ class ResearchRunner:
         with self._choice.create_stage(title) as result_stage:
             result_stage.append_content(body)
 
-    def _emit_report_budget_exhausted_stage(self, outcome: ReportBudgetExhausted) -> None:
-        """Announce a delivery whose draft the version budget left unreviewed.
-
-        Distinguishes "review approved the draft" from "the budget ran out, so the previous
-        review's findings may remain". The router decided it and measured the draft; this decides
-        how it looks. No model call was made, so the stage carries no elapsed time.
-        """
-        title = DialStageReportReviewFormatter.format_budget_exhausted_title(
-            draft_number=outcome.draft_number
-        )
-        body = DialStageReportReviewFormatter.format_budget_exhausted_body(
-            draft_number=outcome.draft_number,
-            word_count=outcome.word_count,
-            max_words=outcome.max_words,
-            length_exemptions=outcome.length_exemptions,
-            max_versions=outcome.max_versions,
-        )
-        with self._choice.create_stage(title) as stage:
-            stage.append_content(body)
 
     def _emit_research_review_result_stage(self, outcome: ResearchReviewOutcome) -> None:
         """Render one research review as a DIAL stage.
@@ -380,25 +361,6 @@ class ResearchRunner:
         with self._choice.create_stage(title) as stage:
             stage.append_content(body)
 
-    def _emit_report_revision_failed_stage(self, outcome: ReportRevisionFailure) -> None:
-        """Announce a revision the report call could not write, and the draft delivered instead.
-
-        Without it the run ends on a review stage asking for a revision that never arrives. The
-        body names draft numbers and the failure kind only: the draft being delivered is the
-        answer, and the one that was never written has no text to show.
-        """
-        title = DialStageReportFormatter.format_revision_failed_title(
-            failed_draft_number=outcome.failed_draft_number,
-            delivered_draft_number=outcome.delivered_draft_number,
-        )
-        body = DialStageReportFormatter.format_revision_failed_body(
-            failed_draft_number=outcome.failed_draft_number,
-            delivered_draft_number=outcome.delivered_draft_number,
-            error=outcome.error,
-        )
-        with self._choice.create_stage(title) as stage:
-            stage.append_content(body)
-
     def _emit_report_review_result_stage(self, outcome: ReportReviewOutcome) -> None:
         """Render one report review as a DIAL stage.
 
@@ -418,6 +380,45 @@ class ResearchRunner:
             max_words=outcome.max_words,
             length_exemptions=outcome.length_exemptions,
             violations=outcome.violations,
+            error=outcome.error,
+        )
+        with self._choice.create_stage(title) as stage:
+            stage.append_content(body)
+
+    def _emit_report_budget_exhausted_stage(self, outcome: ReportBudgetExhausted) -> None:
+        """Announce a delivery whose draft the version budget left unreviewed.
+
+        Distinguishes "review approved the draft" from "the budget ran out, so the previous
+        review's findings may remain". The router decided it and measured the draft; this decides
+        how it looks. No model call was made, so the stage carries no elapsed time.
+        """
+        title = DialStageReportReviewFormatter.format_budget_exhausted_title(
+            draft_number=outcome.draft_number
+        )
+        body = DialStageReportReviewFormatter.format_budget_exhausted_body(
+            draft_number=outcome.draft_number,
+            word_count=outcome.word_count,
+            max_words=outcome.max_words,
+            length_exemptions=outcome.length_exemptions,
+            max_versions=outcome.max_versions,
+        )
+        with self._choice.create_stage(title) as stage:
+            stage.append_content(body)
+
+    def _emit_report_revision_failed_stage(self, outcome: ReportRevisionFailure) -> None:
+        """Announce a revision the report call could not write, and the draft delivered instead.
+
+        Without it the run ends on a review stage asking for a revision that never arrives. The
+        body names draft numbers and the failure kind only: the draft being delivered is the
+        answer, and the one that was never written has no text to show.
+        """
+        title = DialStageReportFormatter.format_revision_failed_title(
+            failed_draft_number=outcome.failed_draft_number,
+            delivered_draft_number=outcome.delivered_draft_number,
+        )
+        body = DialStageReportFormatter.format_revision_failed_body(
+            failed_draft_number=outcome.failed_draft_number,
+            delivered_draft_number=outcome.delivered_draft_number,
             error=outcome.error,
         )
         with self._choice.create_stage(title) as stage:
