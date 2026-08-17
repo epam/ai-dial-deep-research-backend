@@ -156,11 +156,24 @@ This stage records a decision already taken, which is what separates it from the
 same node opens on entry: the activity stage is open while the review call runs and says what is
 happening now, and this one is closed the moment it appears and says what came of it.
 
-A review that ran SHALL be visible whichever verdict it reached. The last permitted iteration gets no
-review call (see the iteration-cap requirement), so it emits no stage; the INFO record for the
-exhausted iteration budget is the only trace of that hand-off (see **logging-policy**). A failed
-review call is not caught either — the turn ends as an error and the open activity stage closes as
-failed — so no findings stage is emitted for it.
+A review that ran SHALL be visible whichever verdict it reached. A failed review call is not caught —
+the turn ends as an error and the open activity stage closes as failed — so no findings stage is
+emitted for it.
+
+**An iteration the cap left unreviewed SHALL be announced too**, so that "the review found no gaps"
+and "nothing reviewed this" stay distinguishable, exactly as they do for a report the version budget
+left unreviewed (see **report-composition**). When the just-finished iteration is the last one the
+cap permits, the app SHALL emit one stage stating that the review budget is exhausted and the
+findings go to the report unreviewed, carrying the iteration number and the configured cap. It is
+rendered from the state alone, with no model call, and carries no elapsed time, no assessment and no
+next steps, there being no review to report. Because it announces a decision taken while research is
+still running, it SHALL be emitted at the moment the routing decision is made, so it appears among
+the stages of the run it belongs to rather than after the report's.
+
+A cap of **one** makes no review call and exhausts nothing — a coverage review could never be acted
+on, so review is off by configuration — and SHALL emit no stage at all, the same rule a version
+budget of one follows in the report loop. The exception covers the stage only: the INFO record SHALL
+still fire, the hand-off to the report having happened whatever the reason.
 
 The assessment and the next steps are LLM response text: they SHALL appear in the stage and SHALL NOT
 appear in any log record, where the research-review event carries the step count only. This is the
@@ -178,10 +191,26 @@ same asymmetry the report-review stage rests on, under **logging-policy**'s cont
 - **THEN** a stage SHALL still be emitted, carrying the assessment and stating in words that research
   is complete, and its title SHALL state that the report follows
 
-#### Scenario: An unreviewed last iteration emits no stage
+#### Scenario: An unreviewed last iteration is announced as such
 
-- **WHEN** the iteration cap is reached, so the router routes to the report node without a review call
-- **THEN** no research-review stage SHALL be emitted
+- **WHEN** an instance permits 10 iterations and the tenth finishes, so the router routes to the
+  report node without a review call
+- **THEN** a stage SHALL be emitted stating that the review budget is exhausted and that the run
+  proceeds to the report, carrying iteration 10 and the cap of 10, with no elapsed time and no
+  assessment
+
+#### Scenario: The announcement precedes the report's own stages
+
+- **WHEN** the iteration cap is reached and the report is then written and reviewed
+- **THEN** the exhausted-budget stage SHALL appear before the stages of the report and its review,
+  in the order the work happened
+
+#### Scenario: A cap of one emits no stage
+
+- **WHEN** an instance configures a cap of one iteration and that iteration finishes
+- **THEN** no research-review stage SHALL be emitted — not the exhausted-budget one either — because
+  no review call is made and nothing is exhausted, while the research-iteration-budget-exhausted INFO
+  record SHALL still fire
 
 #### Scenario: The assessment never reaches a log record
 

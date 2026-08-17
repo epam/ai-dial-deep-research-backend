@@ -61,8 +61,9 @@ usage when available including the cached-input-token count, owned by the `appro
 preparation tool; (7) research iteration reviewed — iteration number, duration, verdict
 (`continue`/`report`), next-plan step count, token usage when available including the
 cached-input-token count, owned by the research-review node; (7a) research iteration budget
-exhausted — iteration count, owned by the research router: the last permitted iteration gets no
-review call, so no research-iteration-reviewed event can carry the hand-off; (8) report generated — draft ordinal
+exhausted — iteration count and the configured cap, owned by the research router: the last permitted
+iteration gets no review call, so no research-iteration-reviewed event can carry the hand-off, and
+both numbers are needed to read the event without knowing the channel's configuration; (8) report generated — draft ordinal
 (1 for the first draft, incrementing per revision), duration, report length in characters and in
 measured words, token usage when available including the cached-input-token count, owned by the
 report node; (8a) report reviewed — draft ordinal, duration, the `outcome`
@@ -74,8 +75,9 @@ the app's own rule violations followed by the review model's — because that li
 revision acts on. The violations themselves are LLM response text and SHALL NOT appear in this
 record or any other, at any level — they are carried to the user in a DIAL stage instead (see
 **report-composition**); (8b) report delivered without review — draft ordinal, the configured
-version budget, the draft's measured word count, owned by the research runner: an exhausted budget
-makes no review call, so no report-reviewed event can carry it; (9) request completed — outcome
+version budget, the draft's measured word count, owned by the report router: an exhausted budget
+makes no review call, so no report-reviewed event can carry it, and the router that decides the
+hand-off is where its research counterpart (7a) is owned too; (9) request completed — outcome
 (`completed`/`failed`), total duration, and on failure the same `error_reference` as the ERROR
 record. Neither the `finish_iteration` sentinel tool nor the `update_status` tool SHALL produce a
 tool-call event above DEBUG: neither performs research, and `update_status` is surfaced to the user
@@ -142,6 +144,12 @@ allowlist.
 
 - **WHEN** a model response carries no usage metadata
 - **THEN** the event still fires, with its token-usage field marked unavailable
+
+#### Scenario: An exhausted iteration budget is readable without the configuration
+
+- **WHEN** an instance permits 10 iterations and the tenth finishes, so no review call is made
+- **THEN** one INFO record SHALL carry both the iteration reached and the cap of 10, and no
+  research-iteration-reviewed event SHALL fire for that iteration
 
 ### Requirement: Status-tool misuse is logged as a warning
 
