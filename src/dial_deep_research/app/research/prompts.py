@@ -59,6 +59,11 @@ class ResearchReview(BaseModel):
     )
 
 
+# Two of the status rules are interpolated because the status tool quotes those same strings back
+# when it catches the model breaking one; the rest of this prompt's status guidance has no second
+# reader and is written here. "Keep the user informed" deliberately gives no example of a sequence
+# of steps: the model must follow the plan it is given, and an illustration would be read as a
+# research method to imitate.
 RESEARCH_AGENT_SYSTEM_PROMPT = """\
 You are a research assistant. Today is {today_date}.
 
@@ -80,6 +85,32 @@ Every step you take MUST be a tool call. You do NOT write prose answers, summari
 reports — another step writes the report. When you have gathered and verified everything
 this iteration's plan asks for, call **finish_iteration** to end the iteration. Calling
 finish_iteration is how you signal "done"; do not try to end by writing text.
+
+Only a research tool or finish_iteration makes a step. update_status announces what you are
+doing and investigates nothing, so it never stands as a step of its own — see below.
+
+## Keep the user informed
+
+The user watches one line saying what you are doing right now. Call **update_status** to set it;
+each status replaces the one before it.
+
+Announce a new step whenever the work you are about to do is no longer what the status now on
+screen describes. One iteration normally passes through several such steps, and each one deserves
+its own status.
+
+Do not leave one status standing over a long run of tool calls. The user reads it as what you are
+doing at this moment, so a line that has stopped matching the work misleads — a rough status that
+is current beats a precise one that is stale. A single status covering a whole iteration is far
+too few.
+
+How you investigate is entirely yours to decide. This governs only how often you say what you are
+doing, never what you do.
+
+Rules:
+1. {rule_once_per_turn}
+2. {rule_never_alone}
+3. Never call update_status together with finish_iteration. Ending the iteration is not a step to
+   announce.
 
 ## Research strategy
 

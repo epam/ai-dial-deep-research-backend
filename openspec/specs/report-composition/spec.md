@@ -199,9 +199,11 @@ one INFO log record, so the loop's behavior is measurable without reading anyone
   as markdown). The list is everything the next revision must fix: the review model's violations,
   with the app-rendered length violation prepended when the measured count exceeds the ceiling.
 
-Its title SHALL follow the normalized shape the tool stages use, with its own prefix rather than
-`[TOOL]`, and SHALL carry the review's outcome and the elapsed time. The stage exists for the report
-review only; research review SHALL NOT emit one (out of scope here, and it MAY be added later).
+Its title SHALL carry its own prefix rather than `[TOOL]`, the draft number, the review's outcome and
+the elapsed time — the shape a result stage has, without the tool stages' start and end
+timestamps, which a single call inside one node does not need. The prefix SHALL name the report
+review specifically: the research review emits a stage of its own in the same title shape, and the two
+are told apart by their prefixes (see **research-execution**).
 
 A review that produced no violations SHALL still emit a stage, recording that the draft was approved.
 A review whose **call failed** SHALL emit one too, recording the failure — alongside the app-measured
@@ -214,7 +216,18 @@ draft" and "the budget ran out, so the previous review's violations may remain" 
 Both are rendered from the state alone, with no model call. The stage SHALL carry the draft number,
 the measured word count with the ceiling, and that the draft is delivered unreviewed, with the budget
 stated; the log record SHALL carry the same numbers. A version budget of one makes no review call
-and exhausts nothing — review is off by configuration — so no stage SHALL be emitted at all.
+and exhausts nothing — review is off by configuration — so no stage SHALL be emitted at all. The
+exception covers the stage only: the INFO record SHALL still fire, the delivery having gone
+unreviewed whatever the reason, so the loop's behavior stays measurable at every configured budget.
+
+**A revision whose own call fails SHALL be announced too.** When the report call for a revision
+fails and the previous draft is delivered in its place (see **research-execution**), the app SHALL
+emit one stage naming the draft that was not written, the draft delivered instead, and the kind of
+failure, and stating that violations the last review recorded may remain unaddressed. Its title SHALL
+carry its own prefix — this is the report step reporting, not a review — and the error mark. The
+stage SHALL NOT contain any draft text: a draft the loop did not settle on stays out of the response
+(see **research-execution**). No review ran, so the stage carries neither violations nor an elapsed
+review time.
 
 **The log record** SHALL carry the draft number, the measured word count, the configured ceiling, and
 the **number** of violations — counts and identifiers only.
@@ -267,7 +280,19 @@ the draft it judges.
 
 - **WHEN** an instance configures a version budget of one
 - **THEN** no report-review stage SHALL be emitted — not the unreviewed-delivery one either —
-  because no review call is made and nothing is exhausted
+  because no review call is made and nothing is exhausted, while the report-delivered-without-review
+  INFO record SHALL still fire
+
+#### Scenario: The two review stages are told apart by their prefixes
+
+- **WHEN** one turn emits both a research-review stage and a report-review stage
+- **THEN** each SHALL carry its own prefix, so a reader can tell which review produced which stage
+
+#### Scenario: A failed revision is visible as such
+
+- **WHEN** report-review asks for a revision of draft 1 and the report call writing draft 2 fails
+- **THEN** a stage SHALL be emitted naming draft 2 as unwritten, draft 1 as delivered and the failure
+  kind, marked with the error cross, and it SHALL contain no draft text
 
 ### Requirement: Reports respect a configured word ceiling without abrupt truncation
 

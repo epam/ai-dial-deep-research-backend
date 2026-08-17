@@ -4,7 +4,9 @@ from datetime import datetime, timedelta
 import pytest
 
 from dial_deep_research.utils.dial_stages import (
+    DialStageReportFormatter,
     DialStageReportReviewFormatter,
+    DialStageResearchReviewFormatter,
     DialStageToolCallFormatter,
     PendingToolCall,
     log_tool_call_completed,
@@ -23,7 +25,7 @@ def test_result_stage_title_success() -> None:
     end = datetime(2026, 4, 28, 14, 30, 6)
     assert (
         DialStageToolCallFormatter.format_title("search_docs", start, end)
-        == '[TOOL] "search_docs" - result ✅ (1.00s, start: 14:30:05, end: 14:30:06)'
+        == "[TOOL] search_docs ✅ (1.00s, start: 14:30:05, end: 14:30:06)"
     )
 
 
@@ -32,8 +34,92 @@ def test_result_stage_title_error() -> None:
     end = datetime(2026, 4, 28, 14, 30, 6)
     assert (
         DialStageToolCallFormatter.format_title("search_docs", start, end, is_error=True)
-        == '[TOOL] "search_docs" - error ❌ (1.00s, start: 14:30:05, end: 14:30:06)'
+        == "[TOOL] search_docs ❌ (1.00s, start: 14:30:05, end: 14:30:06)"
     )
+
+
+class TestResearchReviewStage:
+    """The research-review stage: the sibling title shape, and the one place findings are shown."""
+
+    def test_a_continuing_review_is_titled_as_work_in_progress(self) -> None:
+        title = DialStageResearchReviewFormatter.format_title(
+            research_iteration=1, will_continue=True, duration_seconds=8.2
+        )
+        # Another iteration is the loop working as designed, so the mark says "going round again"
+        # rather than warning about it.
+        assert title == "[RESEARCH REVIEW RESULT] iteration 1 - continue 🔄 (8.20s)"
+
+    def test_a_completing_review_is_titled_as_a_success(self) -> None:
+        title = DialStageResearchReviewFormatter.format_title(
+            research_iteration=2, will_continue=False, duration_seconds=6.1
+        )
+        assert title == "[RESEARCH REVIEW RESULT] iteration 2 - report ✅ (6.10s)"
+
+    def test_the_two_review_stages_are_told_apart_by_their_prefix(self) -> None:
+        research = DialStageResearchReviewFormatter.format_title(
+            research_iteration=1, will_continue=True, duration_seconds=1.0
+        )
+        report = DialStageReportReviewFormatter.format_title(
+            draft_number=1, revising=True, review_failed=False, duration_seconds=1.0
+        )
+        assert research.startswith("[RESEARCH REVIEW RESULT]")
+        assert report.startswith("[REPORT REVIEW RESULT]")
+
+    def test_a_skipped_review_states_the_budget_without_a_duration(self) -> None:
+        """No call was made, so there is nothing to time and no verdict to show."""
+        title = DialStageResearchReviewFormatter.format_budget_exhausted_title()
+        body = DialStageResearchReviewFormatter.format_budget_exhausted_body(
+            research_iteration=10, max_research_iterations=10
+        )
+
+        assert title == (
+            "[RESEARCH REVIEW RESULT] review budget is exhausted - proceeding to report ⚠️"
+        )
+        assert "s)" not in title
+        assert "**Iteration** 10 of at most 10" in body
+        assert "without a coverage review" in body
+
+    def test_body_carries_the_cap_the_assessment_and_the_steps(self) -> None:
+        body = DialStageResearchReviewFormatter.format_body(
+            research_iteration=2,
+            max_research_iterations=10,
+            assessment="The 2025 figure rests on a search summary, not on the source page.",
+            next_steps=["Open the source page.", "Confirm the figure there."],
+        )
+        assert "**Iteration** 2 of at most 10" in body
+        assert "The 2025 figure rests on a search summary, not on the source page." in body
+        assert "1. Open the source page." in body
+        assert "2. Confirm the figure there." in body
+
+    def test_an_empty_verdict_reads_as_a_verdict(self) -> None:
+        """An empty step list is the completion verdict, so it is stated rather than shown."""
+        body = DialStageResearchReviewFormatter.format_body(
+            research_iteration=3,
+            max_research_iterations=10,
+            assessment="Every plan item is supported by a source page.",
+            next_steps=[],
+        )
+        assert "**Next steps** none" in body
+        assert "research is complete" in body
+
+
+class TestReportStage:
+    """The one stage the report step emits, reporting on itself rather than on a review."""
+
+    def test_a_failed_revision_names_both_drafts_and_the_failure(self) -> None:
+        title = DialStageReportFormatter.format_revision_failed_title(
+            failed_draft_number=2, delivered_draft_number=1
+        )
+        body = DialStageReportFormatter.format_revision_failed_body(
+            failed_draft_number=2, delivered_draft_number=1, error="APIError"
+        )
+
+        # Its own prefix: a prefix names the step the stage speaks for, and this one is the report.
+        assert title == "[REPORT REVISION FAILED] writing draft 2 failed, delivering draft 1 ❌"
+        assert "**Draft** 2 — not written" in body
+        assert "APIError" in body
+        assert "**Delivered** draft 1" in body
+        assert "may remain unaddressed" in body
 
 
 class TestReportReviewStage:
@@ -43,15 +129,16 @@ class TestReportReviewStage:
         title = DialStageReportReviewFormatter.format_title(
             draft_number=2, revising=True, review_failed=False, duration_seconds=1.5
         )
-        # Its own prefix, not the tool-call one: a review is not a tool call. A revision is
-        # the loop working, not an error — the cross is reserved for a failed review call.
-        assert title == "[REPORT REVIEW] draft 2 - revise ⚠️ (1.50s)"
+        # Its own prefix, not the tool-call one: a review is not a tool call. A revision is the
+        # loop going round again, so it carries the in-progress mark; the cross is reserved for a
+        # failed review call.
+        assert title == "[REPORT REVIEW RESULT] draft 2 - revise 🔄 (1.50s)"
 
     def test_delivered_draft_is_titled_as_a_success(self) -> None:
         title = DialStageReportReviewFormatter.format_title(
             draft_number=1, revising=False, review_failed=False, duration_seconds=0.5
         )
-        assert title == "[REPORT REVIEW] draft 1 - deliver ✅ (0.50s)"
+        assert title == "[REPORT REVIEW RESULT] draft 1 - deliver ✅ (0.50s)"
 
     def test_failed_review_titles_carry_the_cross_whatever_the_action(self) -> None:
         deliver = DialStageReportReviewFormatter.format_title(
@@ -60,8 +147,8 @@ class TestReportReviewStage:
         revise = DialStageReportReviewFormatter.format_title(
             draft_number=1, revising=True, review_failed=True, duration_seconds=0.5
         )
-        assert deliver == "[REPORT REVIEW] draft 1 - deliver ❌ (0.50s)"
-        assert revise == "[REPORT REVIEW] draft 1 - revise ❌ (0.50s)"
+        assert deliver == "[REPORT REVIEW RESULT] draft 1 - deliver ❌ (0.50s)"
+        assert revise == "[REPORT REVIEW RESULT] draft 1 - revise ❌ (0.50s)"
 
     def test_body_carries_both_counts_and_the_violations(self) -> None:
         body = DialStageReportReviewFormatter.format_body(
@@ -117,12 +204,12 @@ class TestReportReviewStage:
         assert "❌ **Error** the LLM review call failed (RuntimeError)" in body
         assert "1. The draft is 3910 words" in body
 
-    def test_unreviewed_delivery_has_its_own_title_without_a_duration(self) -> None:
-        title = DialStageReportReviewFormatter.format_unreviewed_title(draft_number=3)
-        assert title == "[REPORT REVIEW] draft 3 - delivered without review ⚠️"
+    def test_an_exhausted_budget_has_its_own_title_without_a_duration(self) -> None:
+        title = DialStageReportReviewFormatter.format_budget_exhausted_title(draft_number=3)
+        assert title == "[REPORT REVIEW RESULT] draft 3 - delivered without review ⚠️"
 
-    def test_unreviewed_delivery_body_names_the_exhausted_budget(self) -> None:
-        body = DialStageReportReviewFormatter.format_unreviewed_body(
+    def test_the_exhausted_budget_body_names_the_draft_and_the_budget(self) -> None:
+        body = DialStageReportReviewFormatter.format_budget_exhausted_body(
             draft_number=3,
             word_count=2100,
             max_words=2750,

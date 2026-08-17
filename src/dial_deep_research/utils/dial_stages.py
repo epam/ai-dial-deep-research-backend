@@ -9,6 +9,9 @@ from pydantic import BaseModel
 _RESULT_EMOJI = "✅"
 _ERROR_EMOJI = "❌"
 _WARNING_EMOJI = "⚠️"
+# An outcome that sends a review loop round again. Not a warning: more work following is the loop
+# working as designed, and a warning icon would claim a problem where there is none.
+_IN_PROGRESS_EMOJI = "🔄"
 
 
 class PendingToolCall(BaseModel):
@@ -49,25 +52,134 @@ def timed_stage_title(base_name: str, start: datetime, end: datetime) -> str:
     return f"{base_name} ({elapsed:.2f}s, start: {start:%H:%M:%S}, end: {end:%H:%M:%S})"
 
 
+class DialStageResearchReviewFormatter:
+    """Renders one research review as a DIAL stage: what the reviewer judged, and what follows.
+
+    The title shape and the `RESULT` prefix are the report-review formatter's, so the two review
+    stages read as siblings and are told apart by their prefix alone. The body carries the
+    assessment and the next steps, which is the one place they appear — the logs get the step count.
+    """
+
+    _PREFIX = "[RESEARCH REVIEW RESULT]"
+
+    @classmethod
+    def format_title(
+        cls, *, research_iteration: int, will_continue: bool, duration_seconds: float
+    ) -> str:
+        action = "continue" if will_continue else "report"
+        emoji = _IN_PROGRESS_EMOJI if will_continue else _RESULT_EMOJI
+        return (
+            f"{cls._PREFIX} iteration {research_iteration} - {action} {emoji}"
+            f" ({duration_seconds:.2f}s)"
+        )
+
+    @classmethod
+    def format_body(
+        cls,
+        *,
+        research_iteration: int,
+        max_research_iterations: int,
+        assessment: str,
+        next_steps: Sequence[str],
+    ) -> str:
+        lines = [
+            f"**Iteration** {research_iteration} of at most {max_research_iterations}",
+            "",
+            "**Assessment**",
+            "",
+            assessment,
+            "",
+        ]
+        if next_steps:
+            lines.append("**Next steps**")
+            lines.append("")
+            # Stage content renders as markdown, so the numbered lines render as a list.
+            lines.extend(f"{i}. {step}" for i, step in enumerate(next_steps, start=1))
+        else:
+            lines.append(
+                "**Next steps** none — every plan item is covered, so research is complete."
+            )
+        return "\n".join(lines)
+
+    @classmethod
+    def format_budget_exhausted_title(cls) -> str:
+        # No duration: no call was made — the skip is pure Python over the iteration count.
+        return f"{cls._PREFIX} review budget is exhausted - proceeding to report {_WARNING_EMOJI}"
+
+    @classmethod
+    def format_budget_exhausted_body(
+        cls, *, research_iteration: int, max_research_iterations: int
+    ) -> str:
+        return "\n".join(
+            [
+                f"**Iteration** {research_iteration} of at most {max_research_iterations}",
+                "",
+                f"**Verdict** none — the iteration budget ({max_research_iterations}) is exhausted,"
+                " so the findings go to the report without a coverage review. Any gap a review"
+                " would have named remains.",
+            ]
+        )
+
+
+class DialStageReportFormatter:
+    """Renders what becomes of a report draft when the report step cannot write the next one.
+
+    Its own prefix, because a prefix names the step a stage speaks for: this is the report step
+    reporting on itself, where the two exhausted-budget stages are each a review step reporting
+    that it did not run, which is why those keep their review prefixes. The prefix names the
+    failure, so the outcome is legible before the numbers are read. The stage names draft numbers
+    and a failure kind only — a draft the loop did not settle on stays out of the response.
+    """
+
+    _REVISION_FAILED_PREFIX = "[REPORT REVISION FAILED]"
+
+    @classmethod
+    def format_revision_failed_title(
+        cls, *, failed_draft_number: int, delivered_draft_number: int
+    ) -> str:
+        return (
+            f"{cls._REVISION_FAILED_PREFIX} writing draft {failed_draft_number} failed,"
+            f" delivering draft {delivered_draft_number} {_ERROR_EMOJI}"
+        )
+
+    @classmethod
+    def format_revision_failed_body(
+        cls, *, failed_draft_number: int, delivered_draft_number: int, error: str
+    ) -> str:
+        return "\n".join(
+            [
+                f"**Draft** {failed_draft_number} — not written",
+                "",
+                f"{_ERROR_EMOJI} **Error** the LLM report call failed ({error}), so no revised"
+                " draft exists.",
+                "",
+                f"**Delivered** draft {delivered_draft_number}, as it stood. The violations the"
+                " last review recorded may remain unaddressed.",
+            ]
+        )
+
+
 class DialStageReportReviewFormatter:
     """Renders one report review as a DIAL stage, and the closing stage of a draft the
     revision budget left unreviewed.
 
     Its own title shape rather than the tool-call one: a review is not a tool call, and the
-    `[TOOL] "<name>"` form would read as one. The body carries the review's violations, which is
-    the one place they appear — the logs get counts only.
+    `[TOOL] <name>` form would read as one. `RESULT` in the prefix separates it from the activity
+    stage, which names work that has not happened yet. The body carries the review's violations,
+    which is the one place they appear — the logs get counts only.
     """
 
-    _PREFIX = "[REPORT REVIEW]"
+    _PREFIX = "[REPORT REVIEW RESULT]"
 
     @classmethod
     def format_title(
         cls, *, draft_number: int, revising: bool, review_failed: bool, duration_seconds: float
     ) -> str:
         action = "revise" if revising else "deliver"
-        # The cross marks a real error — the review call failed — and outranks the action in
-        # the title; a revision is the loop working as designed, so it gets a warning only.
-        emoji = _ERROR_EMOJI if review_failed else _WARNING_EMOJI if revising else _RESULT_EMOJI
+        # The cross marks a real error — the review call failed — and outranks the action in the
+        # title; a revision is the loop going round again, which the in-progress mark says without
+        # claiming anything is wrong.
+        emoji = _ERROR_EMOJI if review_failed else _IN_PROGRESS_EMOJI if revising else _RESULT_EMOJI
         return f"{cls._PREFIX} draft {draft_number} - {action} {emoji} ({duration_seconds:.2f}s)"
 
     @classmethod
@@ -106,12 +218,12 @@ class DialStageReportReviewFormatter:
         return "\n".join(lines)
 
     @classmethod
-    def format_unreviewed_title(cls, *, draft_number: int) -> str:
+    def format_budget_exhausted_title(cls, *, draft_number: int) -> str:
         # No duration: no call was made — the delivery decision is pure Python over the state.
         return f"{cls._PREFIX} draft {draft_number} - delivered without review {_WARNING_EMOJI}"
 
     @classmethod
-    def format_unreviewed_body(
+    def format_budget_exhausted_body(
         cls,
         *,
         draft_number: int,
@@ -141,8 +253,9 @@ class DialStageToolCallFormatter:
     def format_title(
         cls, tool_name: str, start: datetime, end: datetime, is_error: bool = False
     ) -> str:
-        action = f"error {_ERROR_EMOJI}" if is_error else f"result {_RESULT_EMOJI}"
-        return timed_stage_title(f'{cls._PREFIX} "{tool_name}" - {action}', start, end)
+        # The mark carries the outcome on its own, so the title spends no width on a word for it.
+        emoji = _ERROR_EMOJI if is_error else _RESULT_EMOJI
+        return timed_stage_title(f"{cls._PREFIX} {tool_name} {emoji}", start, end)
 
     @classmethod
     def format_body(cls, *, args_json: str, content: object, is_error: bool) -> str:

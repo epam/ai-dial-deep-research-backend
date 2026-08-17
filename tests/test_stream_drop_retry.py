@@ -101,7 +101,13 @@ def _report_state(**overrides: Any) -> dict[str, Any]:
 
 
 def _make_report_node() -> Any:
-    return nodes.make_report_node("2026-07-16", DEFAULT_REPORT_STRUCTURE, 2750)
+    return nodes.make_report_node(
+        "2026-07-16",
+        DEFAULT_REPORT_STRUCTURE,
+        2750,
+        emit_revision_failed_stage=lambda _outcome: None,
+        emit_activity=lambda _title: None,
+    )
 
 
 class _FlakyReportLLM:

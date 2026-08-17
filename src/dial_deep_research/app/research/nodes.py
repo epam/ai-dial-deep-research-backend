@@ -71,12 +71,23 @@ from .prompts import (
 from .report_length import count_report_words
 from .report_rules import build_report_rules, render_writer_instructions
 from .state import ResearchState
+from .tools import RULE_NEVER_ALONE, RULE_ONCE_PER_TURN, UPDATE_STATUS_TOOL_NAME
 
 logger = logging.getLogger(__name__)
 
 ResearchReviewNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
 ReportNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
 ReportReviewNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
+
+# Names the work a node is starting. The runner renders it as the open activity stage; a node
+# never touches DIAL itself.
+ActivityEmitter = Callable[[str], None]
+
+# What each node calls itself while it runs. Written like research-agent's own statuses — short,
+# present tense, no prefix — so the one live line reads the same whoever set it.
+RESEARCH_REVIEW_ACTIVITY = "Reviewing the research findings"
+REPORT_ACTIVITY = "Writing the report"
+REPORT_REVIEW_ACTIVITY = "Reviewing the report"
 
 
 def build_research_agent(tools: list[BaseTool], today_date: str, client_name: str) -> Any:
@@ -87,6 +98,11 @@ def build_research_agent(tools: list[BaseTool], today_date: str, client_name: st
         system_prompt=RESEARCH_AGENT_SYSTEM_PROMPT.format(
             today_date=today_date,
             client_name=client_name,
+            # The two rules the status tool quotes back when it catches one being broken, so the
+            # correction repeats the instruction word for word. The prompt writes its other status
+            # rules itself.
+            rule_once_per_turn=RULE_ONCE_PER_TURN,
+            rule_never_alone=RULE_NEVER_ALONE,
         ),
         middleware=[
             *agent_logging_middleware("research-agent"),
@@ -120,6 +136,57 @@ def _render_findings(messages: list[BaseMessage]) -> str:
     return "\n\n".join(lines)
 
 
+def _drop_tool_calls(message: AIMessage, ids: set[str]) -> AIMessage | None:
+    """`message` without the tool calls in `ids`, or `None` if nothing of it is left.
+
+    `additional_kwargs["tool_calls"]` is cleaned alongside the parsed list because
+    langchain_openai falls back to it whenever the parsed list is empty, which would put the
+    removed call straight back on the wire.
+    """
+    tool_calls = [tc for tc in message.tool_calls if tc["id"] not in ids]
+    additional = {k: v for k, v in message.additional_kwargs.items() if k != "tool_calls"}
+    raw = message.additional_kwargs.get("tool_calls") or []
+    if remaining := [tc for tc in raw if tc.get("id") not in ids]:
+        additional["tool_calls"] = remaining
+    if not tool_calls and not extract_text_from_content(message.content).strip():
+        return None
+    return message.model_copy(update={"tool_calls": tool_calls, "additional_kwargs": additional})
+
+
+def _strip_status_calls(messages: list[BaseMessage]) -> list[BaseMessage]:
+    """The transcript without research-agent's status announcements.
+
+    What the agent told the user it was doing is not evidence: it must not be weighed as a
+    search when coverage is judged, nor sit in the context of the model writing the report. A
+    status usually shares its message with real tool calls, so the call is removed from the
+    message rather than the message from the transcript, and its result is removed with it —
+    every remaining call keeps its own result, which providers require.
+
+    Being deterministic, this preserves the byte prefix successive calls share (see the
+    prompt-caching spec).
+    """
+    dropped_ids: set[str] = set()
+    kept: list[BaseMessage] = []
+    for message in messages:
+        if isinstance(message, ToolMessage):
+            if message.tool_call_id not in dropped_ids:
+                kept.append(message)
+            continue
+        if isinstance(message, AIMessage) and message.tool_calls:
+            status_ids = {
+                tc["id"]
+                for tc in message.tool_calls
+                if tc["name"] == UPDATE_STATUS_TOOL_NAME and tc["id"]
+            }
+            if status_ids:
+                dropped_ids |= status_ids
+                if (stripped := _drop_tool_calls(message, status_ids)) is not None:
+                    kept.append(stripped)
+                continue
+        kept.append(message)
+    return kept
+
+
 def _should_continue_research(*, plans_count: int, research_iteration: int) -> bool:
     """One more research-agent iteration iff research-review recorded a plan for a not-yet-run
     iteration. The iteration cap needs no check here: it is enforced before the review runs
@@ -131,16 +198,64 @@ def research_budget_exhausted(*, research_iteration: int, max_research_iteration
     """True iff the just-finished iteration is the last permitted one, so no further one may run.
 
     Both numbers count iterations, 1-based — the research loop's mirror of
-    `review_budget_exhausted`: a "continue" verdict on the last permitted iteration could not
+    `report_review_budget_exhausted`: a "continue" verdict on the last permitted iteration could not
     be acted on, so the router skips the review call when this holds.
     """
     return research_iteration >= max_research_iterations
 
 
-def make_research_review_node(today_date: str) -> ResearchReviewNode:
-    """Build the research-review node over the given date."""
+class ResearchReviewOutcome(BaseModel):
+    """One research review's result, handed to the runner so it can render a DIAL stage.
+
+    Carries no DIAL types: the node decides what to report, the runner decides how it is rendered.
+    `max_research_iterations` accompanies the iteration number so the stage can say how much further
+    research may go. `will_continue` comes from the same function the router calls, so the stage
+    cannot announce one route while the graph takes the other. There is no error field, unlike
+    `ReportReviewOutcome`: research-review re-raises a failed call instead of absorbing it, so a
+    failure ends the turn and shows as the activity stage closing failed. The assessment and the
+    next steps belong in the stage only — never in a log record, per the logging-policy content
+    allowlist.
+    """
+
+    research_iteration: int
+    max_research_iterations: int
+    assessment: str
+    next_steps: list[str]
+    will_continue: bool
+    duration_seconds: float
+
+
+ResearchReviewResultStageEmitter = Callable[[ResearchReviewOutcome], None]
+
+
+class ResearchBudgetExhausted(BaseModel):
+    """The iteration cap skipping a coverage review, handed to the runner to render as a stage.
+
+    Both numbers travel because the stage states the cap beside the iteration: a reader who does not
+    know the channel's configuration cannot tell an exhausted budget from an early stop otherwise.
+    """
+
+    research_iteration: int
+    max_research_iterations: int
+
+
+ResearchBudgetExhaustedEmitter = Callable[[ResearchBudgetExhausted], None]
+
+
+def make_research_review_node(
+    today_date: str,
+    max_research_iterations: int,
+    emit_result_stage: ResearchReviewResultStageEmitter,
+    emit_activity: ActivityEmitter,
+) -> ResearchReviewNode:
+    """Build the research-review node: judge coverage, emit its result stage, plan what remains.
+
+    `max_research_iterations` is not a bound this node enforces — the router does that before the
+    node is reached. It is here for the stage, which states the cap beside the iteration number.
+    """
 
     async def research_review(state: ResearchState) -> dict[str, Any]:
+        emit_activity(RESEARCH_REVIEW_ACTIVITY)
         start = time.monotonic()
         # include_raw keeps the raw AIMessage alongside the parsed verdict so we can log the
         # call's token usage (including cached input tokens); with it, parse failures surface
@@ -160,7 +275,7 @@ def make_research_review_node(today_date: str) -> ResearchReviewNode:
                 HumanMessage(
                     content=RESEARCH_REVIEW_HUMAN_MESSAGE.format(
                         query=state["original_query"],
-                        findings=_render_findings(state["messages"]),
+                        findings=_render_findings(_strip_status_calls(state["messages"])),
                         plans=plans_text,
                     )
                 ),
@@ -182,16 +297,27 @@ def make_research_review_node(today_date: str) -> ResearchReviewNode:
             update["plans"] = plans
             update["messages"] = [HumanMessage(content=render_next_instruction(review.next_steps))]
 
-        # Verdict mirrors `route_after_research_review` over the post-update state, so the
-        # skeleton event never disagrees with the actual routing.
+        # Verdict mirrors `route_after_research_review` over the post-update state, so neither the
+        # skeleton event nor the stage disagrees with the actual routing.
         will_continue = _should_continue_research(
             plans_count=len(plans), research_iteration=state["research_iteration"]
+        )
+        duration = time.monotonic() - start
+        emit_result_stage(
+            ResearchReviewOutcome(
+                research_iteration=state["research_iteration"],
+                max_research_iterations=max_research_iterations,
+                assessment=review.assessment,
+                next_steps=list(review.next_steps or []),
+                will_continue=will_continue,
+                duration_seconds=duration,
+            )
         )
         logger.info(
             "Research iteration reviewed: research_iteration=%d duration=%.1fs verdict=%s "
             "next_plan_steps=%d tokens=%s",
             state["research_iteration"],
-            time.monotonic() - start,
+            duration,
             "continue" if will_continue else "report",
             len(review.next_steps or []),
             format_token_usage(usage),
@@ -236,25 +362,64 @@ class ReportReviewOutcome(BaseModel):
         )
 
 
-ReportReviewStageEmitter = Callable[[ReportReviewOutcome], None]
+ReportReviewResultStageEmitter = Callable[[ReportReviewOutcome], None]
 
 
-def review_budget_exhausted(*, report_version: int, max_versions: int) -> bool:
+class ReportBudgetExhausted(BaseModel):
+    """The version budget skipping a report review, handed to the runner to render as a stage.
+
+    `length_exemptions` names what `word_count` leaves out, so the stage can state the measure it
+    shows. The counterpart of `ResearchBudgetExhausted` on the report side: both are reported by the
+    router that decides the hand-off, and both carry the budget beside the number it bounds.
+    """
+
+    draft_number: int
+    word_count: int
+    max_words: int
+    max_versions: int
+    length_exemptions: str
+
+
+ReportBudgetExhaustedEmitter = Callable[[ReportBudgetExhausted], None]
+
+
+def report_review_budget_exhausted(*, report_version: int, max_versions: int) -> bool:
     """True iff the current draft is the last permitted version, so no rewrite may follow it.
 
-    Both numbers count report versions, 1-based, which keeps the comparison plain. Shared by
-    the router (which skips the review when it holds) and the runner (which then announces the
-    unreviewed delivery), so the two cannot disagree.
+    Both numbers count report versions, 1-based, which keeps the comparison plain. The report
+    loop's mirror of `research_budget_exhausted`: a verdict on the last permitted version could
+    not be acted on, so the router skips the review call when this holds.
     """
     return report_version >= max_versions
 
 
+class ReportRevisionFailure(BaseModel):
+    """A revision the report call could not write, handed to the runner to render as a stage.
+
+    Carries numbers and the exception kind, never draft text: the draft the loop settles on is the
+    only one that reaches the response. The exception kind is known here and nowhere else — the
+    graph state records only that a revision failed.
+    """
+
+    failed_draft_number: int
+    delivered_draft_number: int
+    error: str
+
+
+ReportRevisionFailureEmitter = Callable[[ReportRevisionFailure], None]
+
+
 def make_report_node(
-    today_date: str, sections: Sequence[ReportSection], max_words: int
+    today_date: str,
+    sections: Sequence[ReportSection],
+    max_words: int,
+    emit_revision_failed_stage: ReportRevisionFailureEmitter,
+    emit_activity: ActivityEmitter,
 ) -> ReportNode:
     """Build the report node: it writes the first draft, and every revision after it."""
 
     async def report(state: ResearchState) -> dict[str, Any]:
+        emit_activity(REPORT_ACTIVITY)
         start = time.monotonic()
         llm = with_stream_drop_retry(get_chat_model(LLMModelConfig()))
         plans_text = "\n\n".join(
@@ -271,7 +436,7 @@ def make_report_node(
                     protected_sections=render_protected_section_names(sections),
                 )
             ),
-            *state["messages"],
+            *_strip_status_calls(state["messages"]),
             HumanMessage(
                 content=REPORT_REQUEST.format(query=state["original_query"], plans=plans_text)
             ),
@@ -298,12 +463,20 @@ def make_report_node(
             # and leave the loop. The first draft has nothing to fall back to, so it propagates.
             if previous_draft is None:
                 raise
+            error = type(exc).__name__
             logger.warning(
                 "Report revision failed, delivering the previous draft: "
                 "failed_draft=%d delivered_draft=%d error=%s",
                 draft_number,
                 draft_number - 1,
-                type(exc).__name__,
+                error,
+            )
+            emit_revision_failed_stage(
+                ReportRevisionFailure(
+                    failed_draft_number=draft_number,
+                    delivered_draft_number=draft_number - 1,
+                    error=error,
+                )
             )
             return {"report_revision_failed": True}
 
@@ -328,9 +501,10 @@ def make_report_review_node(
     today_date: str,
     sections: Sequence[ReportSection],
     max_words: int,
-    emit_stage: ReportReviewStageEmitter,
+    emit_result_stage: ReportReviewResultStageEmitter,
+    emit_activity: ActivityEmitter,
 ) -> ReportReviewNode:
-    """Build the report-review node: judge the draft, emit its stage, decide the next step.
+    """Build the report-review node: judge the draft, emit its result stage, decide the next step.
 
     Two judgements meet here. The app's own rules (`report_rules`) are checked in Python over the
     draft text, and the review model judges what needs a reader — padding, banned annotations,
@@ -341,6 +515,7 @@ def make_report_review_node(
     rules = build_report_rules(sections=sections, max_words=max_words)
 
     async def report_review(state: ResearchState) -> dict[str, Any]:
+        emit_activity(REPORT_REVIEW_ACTIVITY)
         start = time.monotonic()
         draft = state["report"] or ""
         word_count = count_report_words(draft, sections=sections)
@@ -402,7 +577,7 @@ def make_report_review_node(
             error=error,
             duration_seconds=duration,
         )
-        emit_stage(outcome)
+        emit_result_stage(outcome)
         logger.info(
             "Report reviewed: draft=%d duration=%.1fs outcome=%s error=%s words=%d "
             "ceiling=%d violations=%d tokens=%s",
@@ -420,24 +595,41 @@ def make_report_review_node(
     return report_review
 
 
-def route_after_research_agent(max_research_iterations: int) -> Callable[[ResearchState], str]:
+def route_after_research_agent(
+    max_research_iterations: int, emit_budget_exhausted: ResearchBudgetExhaustedEmitter
+) -> Callable[[ResearchState], str]:
     """Decide the edge out of the research-agent node.
 
     An iteration is reviewed only while another iteration may still run: a "continue" verdict
     on the last permitted iteration could not be acted on, so the call is not made and the
-    findings go straight to the report. Logged here — no node sits on that path.
+    findings go straight to the report. Reported here — no node sits on that path, and announcing
+    the skip from anywhere later would place it after the report's own stages.
+
+    A cap of one exhausts nothing: with a single permitted iteration a review could never be acted
+    on, so review is off by configuration and the user is told nothing. The log record still fires,
+    the hand-off having happened either way.
     """
 
     def route(state: ResearchState) -> str:
         research_iteration = state["research_iteration"]
-        if research_budget_exhausted(
+        if not research_budget_exhausted(
             research_iteration=research_iteration, max_research_iterations=max_research_iterations
         ):
-            logger.info(
-                "Research iteration budget exhausted: research_iteration=%d", research_iteration
+            return "research-review"
+        logger.info(
+            "Research iteration budget exhausted: research_iteration=%d "
+            "max_research_iterations=%d",
+            research_iteration,
+            max_research_iterations,
+        )
+        if max_research_iterations > 1:
+            emit_budget_exhausted(
+                ResearchBudgetExhausted(
+                    research_iteration=research_iteration,
+                    max_research_iterations=max_research_iterations,
+                )
             )
-            return "report"
-        return "research-review"
+        return "report"
 
     return route
 
@@ -459,25 +651,52 @@ def route_after_research_review() -> Callable[[ResearchState], str]:
     return route
 
 
-def route_after_report(max_versions: int) -> Callable[[ResearchState], str]:
-    """Decide the edge out of the report node.
+def route_after_report(
+    max_versions: int,
+    max_words: int,
+    sections: Sequence[ReportSection],
+    emit_budget_exhausted: ReportBudgetExhaustedEmitter,
+) -> Callable[[ResearchState], str]:
+    """Decide the edge out of the report node, and report the hand-off it decides on.
 
     Three exits. A revision whose own call failed leaves the loop immediately with the previous
     draft: returning to review would re-judge an unchanged draft and route straight back to a
     call that fails again, and since a failed revision writes nothing, no counter would bound
-    that cycle. The last permitted version is delivered without a review call — a verdict that
-    cannot be acted on is not worth one; the runner announces the unreviewed delivery. A budget
-    of one is the same gate failing already for the first draft. Otherwise the draft is
-    reviewed.
+    that cycle — the report node has already announced that one. The last permitted version is
+    delivered without a review call — a verdict that cannot be acted on is not worth one — and this
+    router announces it, the way its research counterpart announces the review the iteration cap
+    skipped. Otherwise the draft is reviewed.
+
+    A budget of one exhausts nothing: review is off by configuration, so the user is told nothing.
+    The log record still fires, the delivery having gone unreviewed either way.
     """
 
     def route(state: ResearchState) -> str:
         if state.get("report_revision_failed"):
             return "end"
-        exhausted = review_budget_exhausted(
-            report_version=state.get("report_version", 0), max_versions=max_versions
+        draft_number = state.get("report_version", 0)
+        if not report_review_budget_exhausted(
+            report_version=draft_number, max_versions=max_versions
+        ):
+            return "report-review"
+        word_count = count_report_words(state.get("report") or "", sections=sections)
+        logger.info(
+            "Report delivered without review: draft=%d max_versions=%d words=%d",
+            draft_number,
+            max_versions,
+            word_count,
         )
-        return "end" if exhausted else "report-review"
+        if max_versions > 1:
+            emit_budget_exhausted(
+                ReportBudgetExhausted(
+                    draft_number=draft_number,
+                    word_count=word_count,
+                    max_words=max_words,
+                    max_versions=max_versions,
+                    length_exemptions=render_length_exemptions(sections),
+                )
+            )
+        return "end"
 
     return route
 

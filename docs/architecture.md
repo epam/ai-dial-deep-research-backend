@@ -129,19 +129,21 @@ flowchart TD
         model --> which{"which tool<br/>did it call?"}
         which -->|"an MCP tool"| mcp["The tool runs; its result is<br/>appended to the transcript"]
         mcp --> model
+        which -->|"update_status, alongside<br/>the step's first real tool call"| status["The runner replaces the open<br/>activity stage with this title;<br/>no result stage, no research done"]
+        status --> model
         which -->|"finish_iteration"| fin["finish_iteration is declared<br/>return_direct = True:<br/>the loop returns as soon as this tool<br/>runs, with no further model call"]
         which -.->|"a message with no tool call —<br/>the loop's other exit"| blocked["unreachable:<br/>tool_choice = any forbids it"]
     end
 
     fin -->|"the only way a research-agent<br/>iteration can end"| itgate{"another iteration<br/>permitted by the cap?"}
-    itgate -->|yes| research_review["research-review node<br/>independent structured LLM call<br/>→ assessment + next_steps"]
-    itgate -->|"no — a 'continue' verdict could<br/>not be acted on, so the last<br/>iteration is not reviewed"| report
+    itgate -->|yes| research_review["research-review node<br/>independent structured LLM call<br/>→ assessment + next_steps,<br/>and one DIAL stage"]
+    itgate -->|"no — a 'continue' verdict could<br/>not be acted on, so the last<br/>iteration is not reviewed,<br/>announced by a closing stage"| report
     research_review --> route{"next_steps non-empty?"}
     route -->|yes| nextplan["Record the plan and inject it as<br/>the next iteration's instruction"]
     nextplan --> model
     route -->|no| report["report node<br/>LLM call over the whole findings<br/>transcript → the first draft, or a<br/>revision when a draft already exists"]
     report --> afterreport{"deliver now,<br/>or review the draft?"}
-    afterreport -->|"this call was a revision whose<br/>own model call failed —<br/>the previous draft stands"| finaldone(["END"])
+    afterreport -->|"this call was a revision whose<br/>own model call failed —<br/>the previous draft stands,<br/>announced by a closing stage"| finaldone(["END"])
     afterreport -->|"the last version the budget<br/>permits — delivered without review,<br/>announced by a closing stage"| finaldone
     afterreport -->|"otherwise"| report_review["report-review node<br/>structured LLM call over the draft and<br/>the configured sections → violations<br/>(the app adds the length one itself),<br/>and one DIAL stage"]
     report_review --> reroute{"over the word ceiling,<br/>or a revision asked for?"}
@@ -219,14 +221,47 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   it stands, without another review call: its verdict could not be acted on. A failed
   report-review call or a failed revision is absorbed rather than failing the turn. `1` skips
   report-review entirely.
-- **Report-review stage**: each report-review call emits one DIAL stage carrying the draft number,
+- **Research-review stage**: each research-review call emits one DIAL stage, titled
+  `[RESEARCH REVIEW RESULT]`, carrying the reviewed iteration with the iteration cap, the
+  reviewer's assessment, and the next steps as a numbered list — or a line stating that research is
+  complete, which is what an empty step list means. Its title names the route the graph then takes,
+  `continue` or `report`, taken from the same function the router calls. The assessment and the
+  steps are LLM response text, so the matching INFO record carries the step *count* only. A failed
+  review call emits no stage: research-review re-raises, so the turn ends and the open activity
+  stage closes as failed. An iteration the cap left unreviewed is announced by a stage of its own,
+  emitted by the router as it hands over so that it precedes the report's stages: it states that the
+  review budget is exhausted and carries the iteration with the cap, without a duration — no call
+  was made, so it has no findings and no elapsed time. A cap of one emits nothing — one permitted
+  iteration means review is off by configuration, not exhausted, the same rule a version budget of
+  one follows.
+- **Report stage**: the report step emits one stage in a single case — a revision whose own model
+  call failed, where the previous draft is delivered instead. It carries its own
+  `[REPORT REVISION FAILED]` prefix, because a prefix names the step the stage speaks for and this
+  one is the report step reporting on itself, and names the draft that was not written, the draft
+  delivered, and the failure kind. No draft text: only the draft the loop settles on reaches the
+  response.
+- **Report-review stage**: each report-review call emits one DIAL stage, titled
+  `[REPORT REVIEW RESULT]`, carrying the draft number,
   the measured word count with the ceiling, and the violations as a list — the review model's
   violations, with the app-measured length violation prepended when the draft exceeds the ceiling.
   The matching INFO record carries the same numbers and only the *count* of violations — their
   text is LLM response content, which the logging content allowlist keeps out of log records at
   any level. A delivery whose draft the budget left unreviewed gets a closing stage and INFO
   record of its own, rendered without any model call, so "review approved the draft" and "the
-  budget ran out, violations may remain" stay distinguishable. Research review emits no stage.
+  budget ran out, violations may remain" stay distinguishable.
+- **Activity stage**: one DIAL stage is open at every moment of the research run, titled with what
+  is happening right now. The runner opens the first before the graph starts; each later one
+  replaces the one before it, which is what closes it — a stage name can only be appended to, never
+  rewritten. research-agent sets the title by calling `update_status`, and research-review, report
+  and report-review each set it on entry, so no LLM call in the graph runs behind a silent screen.
+  The stage carries a title only: no body, no `[TOOL]`-style prefix, and no elapsed time — it ends
+  because a new step started, not because the announced work finished, so a duration would claim
+  something untrue. Several statuses in one assistant message are joined into one title rather than
+  opening a stage that closes an instant later and so reads as a finished step; a status sent
+  together with `finish_iteration` is ignored. `update_status` gets no result stage of its own and
+  no INFO tool-call event, and its text never enters a log record, being a tool-call argument value.
+  The announcements are stripped from the transcripts research-review and the report node receive,
+  and kept in the one the app persists.
 - **Step budget**: `max_research_graph_steps` (an application property, default 500) is passed as
   LangGraph's `recursion_limit` — the most node executions one graph run may make, counted afresh
   for each nested run. The research-agent node is a compiled graph, so every iteration gets its own
