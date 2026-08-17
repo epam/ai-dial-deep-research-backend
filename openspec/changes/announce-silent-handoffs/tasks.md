@@ -60,6 +60,6 @@
       the one leaving the report node on a failed revision — neither of which says the hand-off is
       announced.
 - [x] 5.2 Run `make format` and `make lint`, then the full test suite.
-- [ ] 5.3 Drive a real query end to end with `scripts/send_conversation.py` against a running server
+- [x] 5.3 Drive a real query end to end with `scripts/send_conversation.py` against a running server
       configured with a low `max_research_iterations`, and confirm in the DIAL UI that the stage
       appears once, before the report's stages.

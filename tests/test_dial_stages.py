@@ -104,7 +104,7 @@ class TestResearchReviewStage:
 
 
 class TestReportStage:
-    """The report step reporting on itself: the one case where no review took place."""
+    """The one stage the report step emits, reporting on itself rather than on a review."""
 
     def test_a_failed_revision_names_both_drafts_and_the_failure(self) -> None:
         title = DialStageReportFormatter.format_revision_failed_title(
@@ -114,7 +114,7 @@ class TestReportStage:
             failed_draft_number=2, delivered_draft_number=1, error="APIError"
         )
 
-        # Its own prefix: borrowing the review's would say a review took place.
+        # Its own prefix: a prefix names the step the stage speaks for, and this one is the report.
         assert title == "[REPORT REVISION FAILED] writing draft 2 failed, delivering draft 1 ❌"
         assert "**Draft** 2 — not written" in body
         assert "APIError" in body

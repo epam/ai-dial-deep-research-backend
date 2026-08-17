@@ -89,8 +89,10 @@ could not name the failure kind, and naming it is the point. **Carrying the exce
 graph state** so the runner could read it — a field on the state for no other reader, where a
 callback already exists for this exact purpose.
 
-Its prefix is the report step's own, not `[REPORT REVIEW RESULT]`: no review took place, and
-borrowing the review's prefix would say one did.
+Its prefix is the report step's own, not `[REPORT REVIEW RESULT]`, because a prefix names the step
+the stage speaks for. The two exhausted-budget stages keep their review prefixes on the same rule:
+each is a review step reporting that it did not run, while this one is the report step reporting on
+itself.
 
 ### The stage carries no elapsed time and no findings
 

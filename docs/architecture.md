@@ -236,9 +236,10 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   one follows.
 - **Report stage**: the report step emits one stage in a single case — a revision whose own model
   call failed, where the previous draft is delivered instead. It carries its own
-  `[REPORT REVISION FAILED]` prefix, since no review took place, and names the draft that was not
-  written, the draft delivered, and the failure kind. No draft text: only the draft the loop settles
-  on reaches the response.
+  `[REPORT REVISION FAILED]` prefix, because a prefix names the step the stage speaks for and this
+  one is the report step reporting on itself, and names the draft that was not written, the draft
+  delivered, and the failure kind. No draft text: only the draft the loop settles on reaches the
+  response.
 - **Report-review stage**: each report-review call emits one DIAL stage, titled
   `[REPORT REVIEW RESULT]`, carrying the draft number,
   the measured word count with the ceiling, and the violations as a list — the review model's

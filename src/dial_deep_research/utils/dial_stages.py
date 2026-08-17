@@ -124,10 +124,11 @@ class DialStageResearchReviewFormatter:
 class DialStageReportFormatter:
     """Renders what becomes of a report draft when the report step cannot write the next one.
 
-    Its own prefix, not the review's: no review took place, and borrowing the review's prefix would
-    say one did. The prefix names the failure itself, so the outcome is legible before the numbers
-    are read. The stage names draft numbers and a failure kind only — a draft the loop did not
-    settle on stays out of the response.
+    Its own prefix, because a prefix names the step a stage speaks for: this is the report step
+    reporting on itself, where the two exhausted-budget stages are each a review step reporting
+    that it did not run, which is why those keep their review prefixes. The prefix names the
+    failure, so the outcome is legible before the numbers are read. The stage names draft numbers
+    and a failure kind only — a draft the loop did not settle on stays out of the response.
     """
 
     _REVISION_FAILED_PREFIX = "[REPORT REVISION FAILED]"
