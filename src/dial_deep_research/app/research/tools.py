@@ -40,9 +40,6 @@ Write the step you are starting in five to eight words, and never more than twen
 reads it on one narrow line. Good statuses look like "Looking for US GDP forecasts" or "Searching
 for latest risks to economic outlook"."""
 
-_UPDATE_STATUS_DESCRIPTION = """\
-Tell the user what you are working on right now. Each status replaces the one before it."""
-
 
 def build_finish_iteration_tool() -> BaseTool:
     """A no-op sentinel: research-agent calls it to end the current iteration.
@@ -52,7 +49,7 @@ def build_finish_iteration_tool() -> BaseTool:
     completion — the graph (not this tool) decides whether to review or report.
     """
 
-    @tool(return_direct=True)
+    @tool(FINISH_TOOL_NAME, return_direct=True)
     def finish_iteration() -> str:
         """Call this when you have finished researching the current plan.
 
@@ -95,11 +92,14 @@ def build_update_status_tool() -> BaseTool:
     holds the assistant message carrying this call, so the call's siblings are visible here.
     """
 
-    @tool(UPDATE_STATUS_TOOL_NAME, description=_UPDATE_STATUS_DESCRIPTION)
+    @tool(UPDATE_STATUS_TOOL_NAME)
     def update_status(
         status: Annotated[str, HOW_TO_WRITE_STATUS],
         state: Annotated[dict[str, Any], InjectedState],
     ) -> str:
+        """Tell the user what you are working on right now. Each status replaces the one
+        before it.
+        """
         broken = _broken_rules(state.get("messages") or [])
         if not broken:
             return UPDATE_STATUS_RESULT
