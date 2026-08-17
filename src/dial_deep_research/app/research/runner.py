@@ -323,7 +323,6 @@ class ResearchRunner:
         with self._choice.create_stage(title) as result_stage:
             result_stage.append_content(body)
 
-
     def _emit_research_review_result_stage(self, outcome: ResearchReviewOutcome) -> None:
         """Render one research review as a DIAL stage.
 
