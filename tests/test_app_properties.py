@@ -33,7 +33,7 @@ VALID_PROPERTIES: dict = {
 
 def test_valid_properties_load_with_default_iterations() -> None:
     properties = ApplicationProperties.model_validate(VALID_PROPERTIES)
-    assert properties.max_research_iterations == 10
+    assert properties.max_research_iterations == 5
     assert properties.max_research_graph_steps == 500
     assert properties.prompts.client_name == "Test Corp"
 

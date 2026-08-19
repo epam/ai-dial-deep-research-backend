@@ -245,7 +245,7 @@ class ApplicationProperties(BaseModel):
     """One application instance's configuration ("channel")."""
 
     max_research_iterations: int = Field(
-        default=10,
+        default=5,
         ge=1,
         description="Max number of research iterations (research-agent → research-review loops)"
         " before the report is forced",

@@ -6,7 +6,7 @@
   "description": "One application instance's configuration (\"channel\").",
   "properties": {
     "max_research_iterations": {
-      "default": 10,
+      "default": 5,
       "description": "Max number of research iterations (research-agent → research-review loops) before the report is forced",
       "minimum": 1,
       "title": "Max Research Iterations",
