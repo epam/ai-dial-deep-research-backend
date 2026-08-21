@@ -469,12 +469,14 @@ def make_report_node(
             error = type(exc).__name__
             logger.warning(
                 "Report revision failed, delivering the previous draft: "
-                "failed_draft=%d delivered_draft=%d duration=%.1fs messages=%d error=%s",
+                "failed_draft=%d delivered_draft=%d duration=%.1fs messages=%d error=%s "
+                "tokens=%s",
                 draft_number,
                 draft_number - 1,
                 llm_duration,
                 len(report_messages),
                 error,
+                format_token_usage(None),
             )
             emit_revision_failed_stage(
                 ReportRevisionFailure(

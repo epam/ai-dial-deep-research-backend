@@ -270,6 +270,7 @@ async def test_a_failed_revision_keeps_the_previous_draft(
     text = record.getMessage()
     assert "duration=" in text
     assert "messages=4" in text  # system, transcript, report request, revision request
+    assert "tokens=n/a" in text  # no response to read usage from, marked unavailable like elsewhere
 
 
 async def test_a_failed_first_draft_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
