@@ -18,6 +18,8 @@ Routing itself lives in `test_research_routing.py`; the stage's rendering in `te
 from __future__ import annotations
 
 import logging
+import re
+from itertools import count
 from typing import Any
 
 import pytest
@@ -143,6 +145,20 @@ async def test_first_draft_asks_for_the_report_over_the_transcript(
     assert "what happened to inflation?" in messages[2].content
 
 
+async def test_report_generated_logs_the_message_count(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    llm = _RecordingReportLLM("the report")
+    node = _report_node(llm, monkeypatch)
+    caplog.set_level(logging.INFO, logger=nodes.__name__)
+
+    await node(_state())
+
+    [messages] = llm.calls
+    records = [record.getMessage() for record in caplog.records]
+    assert any(f"messages={len(messages)}" in record for record in records)
+
+
 async def test_first_draft_system_prompt_carries_the_configured_structure_and_ceiling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -230,11 +246,12 @@ async def test_each_draft_records_the_next_version(
 
 
 async def test_a_failed_revision_keeps_the_previous_draft(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     llm = _FailingReportLLM()
     failures: list[nodes.ReportRevisionFailure] = []
     node = _report_node(llm, monkeypatch, failures=failures)
+    caplog.set_level(logging.WARNING, logger=nodes.__name__)
 
     # `report_version` counts the draft that exists, as it does when the graph reaches a revision.
     result = await node(
@@ -248,6 +265,12 @@ async def test_a_failed_revision_keeps_the_previous_draft(
     [failure] = failures
     assert (failure.failed_draft_number, failure.delivered_draft_number) == (2, 1)
     assert failure.error == "ValueError"
+    # The failed call still gets a duration and a message count, even though it produced no draft.
+    [record] = caplog.records
+    text = record.getMessage()
+    assert "duration=" in text
+    assert "messages=4" in text  # system, transcript, report request, revision request
+    assert "tokens=n/a" in text  # no response to read usage from, marked unavailable like elsewhere
 
 
 async def test_a_failed_first_draft_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -463,6 +486,33 @@ async def test_an_unparseable_verdict_is_absorbed_like_a_failed_call(
     assert outcome.violations == []
 
 
+async def test_the_logged_duration_is_the_call_only_not_the_whole_node(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The stage may report the whole node's time; the log reports a narrower measurement.
+
+    A real clock (an infinite, monotonically increasing fake) is used rather than a fixed
+    sequence: `time.monotonic` is the same global function LangChain's own retry and callback
+    machinery calls too, so a short canned sequence undercounts and raises `StopIteration`.
+    """
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
+    tick = count()
+    monkeypatch.setattr(nodes.time, "monotonic", lambda: next(tick) * 1.0)
+    caplog.set_level(logging.INFO, logger=nodes.__name__)
+
+    await node(_state(report=_conforming_draft("a short draft")))
+
+    [stage] = stages
+    records = [record.getMessage() for record in caplog.records]
+    [logged] = [r for r in records if r.startswith("Report reviewed")]
+    logged_duration = float(re.search(r"duration=(\d+\.\d+)s", logged)[1])
+    # The call starts strictly after the node does and the node's own duration is computed
+    # strictly after the call returns, so the logged (call-only) duration is always the smaller
+    # of the two, however many extra ticks LangChain's internals consume in between.
+    assert logged_duration < stage.duration_seconds
+
+
 async def test_violations_reach_the_stage_but_never_a_log_record(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -477,6 +527,7 @@ async def test_violations_reach_the_stage_but_never_a_log_record(
     assert stages[0].violations == [violation]
     records = [record.getMessage() for record in caplog.records]
     assert any("violations=1" in record for record in records)
+    assert any("messages=2" in record for record in records)
     assert not any(violation in record for record in records)
     # Nor does the draft it judges.
     assert not any("a short draft" in record for record in records)

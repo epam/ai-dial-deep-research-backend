@@ -269,18 +269,19 @@ def make_research_review_node(
         plans_text = "\n\n".join(
             f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
         )
-        result: dict[str, Any] = await llm.ainvoke(
-            [
-                SystemMessage(content=RESEARCH_REVIEW_SYSTEM_PROMPT.format(today_date=today_date)),
-                HumanMessage(
-                    content=RESEARCH_REVIEW_HUMAN_MESSAGE.format(
-                        query=state["original_query"],
-                        findings=_render_findings(_strip_status_calls(state["messages"])),
-                        plans=plans_text,
-                    )
-                ),
-            ]
-        )
+        review_messages = [
+            SystemMessage(content=RESEARCH_REVIEW_SYSTEM_PROMPT.format(today_date=today_date)),
+            HumanMessage(
+                content=RESEARCH_REVIEW_HUMAN_MESSAGE.format(
+                    query=state["original_query"],
+                    findings=_render_findings(_strip_status_calls(state["messages"])),
+                    plans=plans_text,
+                )
+            ),
+        ]
+        llm_start = time.monotonic()
+        result: dict[str, Any] = await llm.ainvoke(review_messages)
+        llm_duration = time.monotonic() - llm_start
 
         if result["parsing_error"] is not None:
             raise result["parsing_error"]
@@ -314,10 +315,11 @@ def make_research_review_node(
             )
         )
         logger.info(
-            "Research iteration reviewed: research_iteration=%d duration=%.1fs verdict=%s "
-            "next_plan_steps=%d tokens=%s",
+            "Research iteration reviewed: research_iteration=%d duration=%.1fs messages=%d "
+            "verdict=%s next_plan_steps=%d tokens=%s",
             state["research_iteration"],
-            duration,
+            llm_duration,
+            len(review_messages),
             "continue" if will_continue else "report",
             len(review.next_steps or []),
             format_token_usage(usage),
@@ -420,7 +422,6 @@ def make_report_node(
 
     async def report(state: ResearchState) -> dict[str, Any]:
         emit_activity(REPORT_ACTIVITY)
-        start = time.monotonic()
         llm = with_stream_drop_retry(get_chat_model(LLMModelConfig()))
         plans_text = "\n\n".join(
             f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
@@ -456,9 +457,11 @@ def make_report_node(
                 )
             )
         draft_number = state.get("report_version", 0) + 1
+        llm_start = time.monotonic()
         try:
             response = await llm.ainvoke(report_messages)
         except Exception as exc:
+            llm_duration = time.monotonic() - llm_start
             # Once a draft exists, no later failure may discard it: deliver the previous draft
             # and leave the loop. The first draft has nothing to fall back to, so it propagates.
             if previous_draft is None:
@@ -466,10 +469,14 @@ def make_report_node(
             error = type(exc).__name__
             logger.warning(
                 "Report revision failed, delivering the previous draft: "
-                "failed_draft=%d delivered_draft=%d error=%s",
+                "failed_draft=%d delivered_draft=%d duration=%.1fs messages=%d error=%s "
+                "tokens=%s",
                 draft_number,
                 draft_number - 1,
+                llm_duration,
+                len(report_messages),
                 error,
+                format_token_usage(None),
             )
             emit_revision_failed_stage(
                 ReportRevisionFailure(
@@ -480,11 +487,13 @@ def make_report_node(
             )
             return {"report_revision_failed": True}
 
+        llm_duration = time.monotonic() - llm_start
         text = extract_text_from_content(response.content)
         logger.info(
-            "Report generated: draft=%d duration=%.1fs length=%d words=%d tokens=%s",
+            "Report generated: draft=%d duration=%.1fs messages=%d length=%d words=%d tokens=%s",
             draft_number,
-            time.monotonic() - start,
+            llm_duration,
+            len(report_messages),
             len(text),
             count_report_words(text, sections=sections),
             format_token_usage(response.usage_metadata),
@@ -521,31 +530,30 @@ def make_report_review_node(
         word_count = count_report_words(draft, sections=sections)
         draft_number = state.get("report_version", 0)
 
+        review_messages = [
+            SystemMessage(content=REPORT_REVIEW_SYSTEM_PROMPT.format(today_date=today_date)),
+            HumanMessage(
+                content=REPORT_REVIEW_REQUEST.format(
+                    report_structure=render_report_structure(sections),
+                    protected_sections=render_protected_section_names(sections),
+                    query=state["original_query"],
+                    plan=render_plan(state["plans"][0]) if state["plans"] else "(none)",
+                    draft=draft,
+                )
+            ),
+        ]
         violations: list[str] = []
         error: str | None = None
         usage: UsageMetadata | None = None
+        llm_start = time.monotonic()
         try:
             llm = with_stream_drop_retry(
                 get_chat_model(LLMModelConfig()).with_structured_output(
                     ReportReview, include_raw=True
                 )
             )
-            result: dict[str, Any] = await llm.ainvoke(
-                [
-                    SystemMessage(
-                        content=REPORT_REVIEW_SYSTEM_PROMPT.format(today_date=today_date)
-                    ),
-                    HumanMessage(
-                        content=REPORT_REVIEW_REQUEST.format(
-                            report_structure=render_report_structure(sections),
-                            protected_sections=render_protected_section_names(sections),
-                            query=state["original_query"],
-                            plan=render_plan(state["plans"][0]) if state["plans"] else "(none)",
-                            draft=draft,
-                        )
-                    ),
-                ]
-            )
+            result: dict[str, Any] = await llm.ainvoke(review_messages)
+            llm_duration = time.monotonic() - llm_start
             if result["parsing_error"] is not None:
                 raise result["parsing_error"]
             review: ReportReview = result["parsed"]
@@ -554,6 +562,7 @@ def make_report_review_node(
         except Exception as exc:
             # A failed review must not cost the report. The measured count still applies, so
             # the loop can still shorten an over-long draft on its own instruction.
+            llm_duration = time.monotonic() - llm_start
             error = type(exc).__name__
             logger.warning(
                 "Report review failed, falling back to the measured length: draft=%d error=%s",
@@ -579,10 +588,11 @@ def make_report_review_node(
         )
         emit_result_stage(outcome)
         logger.info(
-            "Report reviewed: draft=%d duration=%.1fs outcome=%s error=%s words=%d "
+            "Report reviewed: draft=%d duration=%.1fs messages=%d outcome=%s error=%s words=%d "
             "ceiling=%d violations=%d tokens=%s",
             draft_number,
-            duration,
+            llm_duration,
+            len(review_messages),
             "revise" if outcome.revision_instruction else "deliver",
             error,
             word_count,

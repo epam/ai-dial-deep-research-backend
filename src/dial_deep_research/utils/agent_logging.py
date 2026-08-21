@@ -41,6 +41,7 @@ class ModelCallLoggingMiddleware(AgentMiddleware):
         request: ModelRequest,
         handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
     ) -> ModelResponse:
+        message_count = len(request.messages) + (1 if request.system_message else 0)
         start = time.monotonic()
         response = await handler(request)
         duration = time.monotonic() - start
@@ -49,10 +50,11 @@ class ModelCallLoggingMiddleware(AgentMiddleware):
         tool_names = [tc["name"] for tc in message.tool_calls] if message else []
         usage = message.usage_metadata if message else None
         logger.info(
-            "Model call completed: agent=%s duration=%.1fs finish=%s tools=%s "
+            "Model call completed: agent=%s duration=%.1fs messages=%d finish=%s tools=%s "
             "content_length=%d tokens=%s",
             self._agent_name,
             duration,
+            message_count,
             "tool_calls" if tool_names else "final_answer",
             tool_names,
             len(extract_text_from_content(message.content)) if message else 0,

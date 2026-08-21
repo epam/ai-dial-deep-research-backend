@@ -58,10 +58,28 @@ async def test_model_call_event_for_final_answer(caplog: pytest.LogCaptureFixtur
     text = record.getMessage()
     assert record.levelno == logging.INFO
     assert "agent=research-agent" in text
+    assert "messages=1" in text  # the one HumanMessage from _request(), no system message
     assert "finish=final_answer" in text
     assert f"content_length={len(message.content)}" in text
     assert "tokens=in:10, out:5, cache_read:0" in text  # cache_read 0 when provider reports none
     assert "confidential" not in text  # metadata only — never the content itself
+
+
+async def test_model_call_event_message_count_includes_the_system_message(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
+    request = _request(
+        messages=[HumanMessage(content="a"), AIMessage(content="b"), HumanMessage(content="c")],
+        system_text="sys",
+    )
+
+    await ModelCallLoggingMiddleware(agent_name="research-agent").awrap_model_call(
+        request, _handler_returning(AIMessage(content="ok"))
+    )
+
+    [record] = caplog.records
+    assert "messages=4" in record.getMessage()  # system message plus the three conversation ones
 
 
 async def test_model_call_event_reports_cached_tokens(caplog: pytest.LogCaptureFixture) -> None:

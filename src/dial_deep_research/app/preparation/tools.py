@@ -101,7 +101,6 @@ class PrepTools:
             Replacing the query discards any existing plan and approval.
             """
             conversation = _format_conversation(runtime.state["messages"])
-            start = time.monotonic()
             # include_raw exposes the call's token usage (incl. cached input) alongside the
             # parsed result; with it, parse failures surface as `parsing_error` instead of
             # raising inside the chain, so we re-raise below to keep fail-loud behavior.
@@ -110,28 +109,30 @@ class PrepTools:
                     QueryReviewResponse, include_raw=True
                 )
             )
-            result: dict[str, Any] = await llm.ainvoke(
-                [
-                    (
-                        "system",
-                        prompts.QUERY_REVIEW_SYSTEM.format(
-                            today_date=self._today,
-                            data_sources_descriptions=self._data_sources_descriptions,
-                        ),
+            query_review_messages = [
+                (
+                    "system",
+                    prompts.QUERY_REVIEW_SYSTEM.format(
+                        today_date=self._today,
+                        data_sources_descriptions=self._data_sources_descriptions,
                     ),
-                    (
-                        "human",
-                        f"Conversation so far:\n{conversation or '(none yet)'}\n\n"
-                        f"Current restatement of the request:\n{query}",
-                    ),
-                ]
-            )
+                ),
+                (
+                    "human",
+                    f"Conversation so far:\n{conversation or '(none yet)'}\n\n"
+                    f"Current restatement of the request:\n{query}",
+                ),
+            ]
+            start = time.monotonic()
+            result: dict[str, Any] = await llm.ainvoke(query_review_messages)
+            duration = time.monotonic() - start
             if result["parsing_error"] is not None:
                 raise result["parsing_error"]
             check: QueryReviewResponse = result["parsed"]
             logger.info(
-                "Query clarity checked: duration=%.1fs questions=%d tokens=%s",
-                time.monotonic() - start,
+                "Query clarity checked: duration=%.1fs messages=%d questions=%d tokens=%s",
+                duration,
+                len(query_review_messages),
                 len(check.questions),
                 format_token_usage(result["raw"].usage_metadata),
             )
@@ -182,7 +183,6 @@ class PrepTools:
             if self.state.plan is None:
                 raise ToolException(prompts.APPROVE_NO_PLAN)
             conversation = _format_conversation(runtime.state["messages"])
-            start = time.monotonic()
             # include_raw exposes the call's token usage (incl. cached input) alongside the
             # parsed result; with it, parse failures surface as `parsing_error` instead of
             # raising inside the chain, so we re-raise below to keep fail-loud behavior.
@@ -191,22 +191,24 @@ class PrepTools:
                     PlanReviewResponse, include_raw=True
                 )
             )
-            result: dict[str, Any] = await llm.ainvoke(
-                [
-                    ("system", prompts.PLAN_REVIEW_SYSTEM.format(today_date=self._today)),
-                    (
-                        "human",
-                        f"Recorded plan:\n{_numbered(self.state.plan.steps)}\n\n"
-                        f"Conversation:\n{conversation}",
-                    ),
-                ]
-            )
+            plan_review_messages = [
+                ("system", prompts.PLAN_REVIEW_SYSTEM.format(today_date=self._today)),
+                (
+                    "human",
+                    f"Recorded plan:\n{_numbered(self.state.plan.steps)}\n\n"
+                    f"Conversation:\n{conversation}",
+                ),
+            ]
+            start = time.monotonic()
+            result: dict[str, Any] = await llm.ainvoke(plan_review_messages)
+            duration = time.monotonic() - start
             if result["parsing_error"] is not None:
                 raise result["parsing_error"]
             check: PlanReviewResponse = result["parsed"]
             logger.info(
-                "Plan approval checked: duration=%.1fs approved=%s tokens=%s",
-                time.monotonic() - start,
+                "Plan approval checked: duration=%.1fs messages=%d approved=%s tokens=%s",
+                duration,
+                len(plan_review_messages),
                 check.approved,
                 format_token_usage(result["raw"].usage_metadata),
             )
