@@ -10,6 +10,8 @@ precede the report's own stages.
 from __future__ import annotations
 
 import logging
+import re
+from itertools import count
 from typing import Any
 
 import pytest
@@ -126,6 +128,33 @@ async def test_full_coverage_reports_the_report_verdict(monkeypatch: MonkeyPatch
     assert nodes.route_after_research_review()({**_reviewed_state(), **update}) == "report"
 
 
+async def test_the_logged_duration_is_the_call_only_not_the_whole_node(
+    monkeypatch: MonkeyPatch, caplog: LogCaptureFixture
+) -> None:
+    """The stage may report the whole node's time; the log reports a narrower measurement.
+
+    A real clock (an infinite, monotonically increasing fake) is used rather than a fixed
+    sequence: `time.monotonic` is the same global function LangChain's own retry and callback
+    machinery calls too, so a short canned sequence undercounts and raises `StopIteration`.
+    """
+    node, outcomes = _review_node(
+        monkeypatch, ResearchReview(assessment=_ASSESSMENT, next_steps=[])
+    )
+    tick = count()
+    monkeypatch.setattr(nodes.time, "monotonic", lambda: next(tick) * 1.0)
+    caplog.set_level(logging.INFO, logger=nodes.__name__)
+
+    await node(_reviewed_state())
+
+    [outcome] = outcomes
+    [record] = caplog.records
+    logged_duration = float(re.search(r"duration=(\d+\.\d+)s", record.getMessage())[1])
+    # The call starts strictly after the node does and the node's own duration is computed
+    # strictly after the call returns, so the logged (call-only) duration is always the smaller
+    # of the two, however many extra ticks LangChain's internals consume in between.
+    assert logged_duration < outcome.duration_seconds
+
+
 async def test_the_findings_never_reach_a_log_record(
     monkeypatch: MonkeyPatch, caplog: LogCaptureFixture
 ) -> None:
@@ -139,6 +168,7 @@ async def test_the_findings_never_reach_a_log_record(
     assert _ASSESSMENT not in logged
     assert all(step not in logged for step in _STEPS)
     assert "next_plan_steps=2" in logged
+    assert "messages=2" in logged
 
 
 async def test_a_failed_review_call_emits_nothing_and_ends_the_turn(
