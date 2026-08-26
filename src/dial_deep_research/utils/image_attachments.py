@@ -11,7 +11,9 @@ endpoints receive base64 image blocks, not DIAL-internal URLs) is preserved.
 
 Fail-closed on upload error: we replace the failing block with a
 `TextContentBlock` placeholder (rather than keeping the inline base64) so
-`set_state` never re-encounters the size limit.
+`set_state` never re-encounters the size limit. A download that fails is
+replaced the same way, and a download that returns no bytes counts as a
+failure — see `EmptyDownloadError`.
 """
 
 import asyncio
@@ -32,6 +34,19 @@ logger = logging.getLogger(__name__)
 
 _BUCKET_PREFIX = "dial-deep-research"
 _PLACEHOLDER_TEMPLATE = "[image {direction} failed: {mime_type}, ~{size_kb} KB ({reason})]"
+
+
+class EmptyDownloadError(Exception):
+    """A DIAL files download answered successfully but carried no bytes.
+
+    Counted as a failure rather than as an empty image. DIAL core answers `HTTP 200` with an
+    empty body for a stored file whose content is gone, so trusting the status would put
+    `base64: ""` on the block and send an empty image to the model — a silent loss, where every
+    other download failure leaves a visible placeholder and a log record.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("the stored file is empty")
 
 
 def _ext_for_mime(mime_type: str | None) -> str:
@@ -196,6 +211,8 @@ async def _download_one(dial: AsyncDial, block: dict[str, Any]) -> Exception | N
     try:
         download = await dial.files.download(block["url"])
         raw = await download.aget_content()
+        if not raw:
+            raise EmptyDownloadError
         block.pop("url", None)
         block["base64"] = base64.b64encode(raw).decode()
     except Exception as exc:  # noqa: BLE001

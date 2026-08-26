@@ -22,6 +22,7 @@ from langchain_core.messages import (
 )
 
 from dial_deep_research.utils.image_attachments import (
+    EmptyDownloadError,
     rehydrate_image_blocks,
     upload_image_blocks,
 )
@@ -224,6 +225,42 @@ async def test_rehydration_failure_replaces_block_with_text_placeholder() -> Non
     assert "image/png" in block["text"]
     assert "download" in block["text"]
     assert "base64" not in block
+
+
+async def test_an_empty_download_is_treated_as_a_failure() -> None:
+    """DIAL core answers `HTTP 200` with an empty body for a stored file whose content is gone.
+    Without this the block would carry `base64: ""` and an empty image would reach the model."""
+    url = "https://dial/v1/files/ub/dial-deep-research/call_1-0.png"
+    tool_msg = ToolMessage(
+        content=[{"type": "image", "url": url, "mime_type": "image/png"}],
+        tool_call_id="call_1",
+    )
+    dial = _make_dial(download_payloads={url: b""})
+
+    await rehydrate_image_blocks([tool_msg], dial)  # type: ignore[arg-type]
+
+    block = tool_msg.content[0]
+    assert block["type"] == "text"
+    assert "base64" not in block
+    # The reason reaches the placeholder, which the sibling failure test does not cover: it
+    # asserts the mime type and the direction only. Compared against the error's own message so
+    # the wording lives in one place.
+    assert str(EmptyDownloadError()) in block["text"]
+
+
+async def test_an_empty_download_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """The loss is silent otherwise: the download itself reports success."""
+    caplog.set_level(logging.WARNING, logger="dial_deep_research.utils.image_attachments")
+    url = "https://dial/v1/files/ub/dial-deep-research/call_1-0.png"
+    tool_msg = ToolMessage(
+        content=[{"type": "image", "url": url, "mime_type": "image/png"}],
+        tool_call_id="call_1",
+    )
+    dial = _make_dial(download_payloads={url: b""})
+
+    await rehydrate_image_blocks([tool_msg], dial)  # type: ignore[arg-type]
+
+    assert [record for record in caplog.records if record.levelno == logging.WARNING]
 
 
 async def test_rehydration_failure_logs_url_without_query(
