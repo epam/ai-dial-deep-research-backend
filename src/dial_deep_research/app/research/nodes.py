@@ -39,8 +39,8 @@ from dial_deep_research.app_properties import ReportSection
 from dial_deep_research.settings import settings
 from dial_deep_research.utils.agent_logging import agent_logging_middleware
 from dial_deep_research.utils.content import (
-    count_image_blocks,
     extract_text_from_content,
+    is_image_block,
 )
 from dial_deep_research.utils.llm import (
     LLMModelConfig,
@@ -58,7 +58,8 @@ from .prompts import (
     REPORT_REVISION_REQUEST,
     REPORT_SYSTEM_PROMPT,
     RESEARCH_AGENT_SYSTEM_PROMPT,
-    RESEARCH_REVIEW_HUMAN_MESSAGE,
+    RESEARCH_REVIEW_HUMAN_MESSAGE_HEAD,
+    RESEARCH_REVIEW_HUMAN_MESSAGE_TAIL,
     RESEARCH_REVIEW_SYSTEM_PROMPT,
     ReportReview,
     ResearchReview,
@@ -114,13 +115,29 @@ def build_research_agent(tools: list[BaseTool], today_date: str, client_name: st
     )
 
 
-def _render_findings(messages: list[BaseMessage]) -> str:
-    """Render the research transcript as a readable findings log for research-review.
+def _text_block(text: str) -> dict[str, Any]:
+    """One LangChain text content block, for assembling a multimodal `HumanMessage` by hand."""
+    return {"type": "text", "text": text}
 
-    Images are noted but not embedded; research-review judges coverage from the text the
-    tools returned, the searches research-agent ran, and the instructions it followed.
+
+def _render_findings(messages: list[BaseMessage]) -> list[Any]:
+    """Render the research transcript as findings content blocks for research-review.
+
+    Each tool result's own image content blocks are placed right after its rendered text, so
+    research-review sees the same visual evidence research-agent gathered, not a marker noting
+    one exists. Consecutive text lines are grouped into one text block; a `ToolMessage`'s images
+    interrupt that grouping and are appended as their own blocks. Grouping is deterministic and
+    only ever appends as the transcript grows, keeping the byte prefix stable across a run (see
+    the prompt-caching spec).
     """
+    blocks: list[Any] = []
     lines: list[str] = []
+
+    def flush_lines() -> None:
+        if lines:
+            blocks.append(_text_block("\n\n".join(lines)))
+            lines.clear()
+
     for message in messages:
         if isinstance(message, HumanMessage):
             lines.append(f"INSTRUCTION:\n{extract_text_from_content(message.content)}")
@@ -131,9 +148,17 @@ def _render_findings(messages: list[BaseMessage]) -> str:
                 lines.append(f"NOTE: {text}")
         elif isinstance(message, ToolMessage):
             text = extract_text_from_content(message.content).strip()
-            suffix = " [+image]" if count_image_blocks(message.content) else ""
-            lines.append(f"RESULT:{suffix}\n{text or '(no text content)'}")
-    return "\n\n".join(lines)
+            lines.append(f"RESULT:\n{text or '(no text content)'}")
+            images = (
+                [block for block in message.content if is_image_block(block)]
+                if isinstance(message.content, list)
+                else []
+            )
+            if images:
+                flush_lines()
+                blocks.extend(images)
+    flush_lines()
+    return blocks
 
 
 def _drop_tool_calls(message: AIMessage, ids: set[str]) -> AIMessage | None:
@@ -273,11 +298,13 @@ def make_research_review_node(
             [
                 SystemMessage(content=RESEARCH_REVIEW_SYSTEM_PROMPT.format(today_date=today_date)),
                 HumanMessage(
-                    content=RESEARCH_REVIEW_HUMAN_MESSAGE.format(
-                        query=state["original_query"],
-                        findings=_render_findings(_strip_status_calls(state["messages"])),
-                        plans=plans_text,
-                    )
+                    content=[
+                        _text_block(
+                            RESEARCH_REVIEW_HUMAN_MESSAGE_HEAD.format(query=state["original_query"])
+                        ),
+                        *_render_findings(_strip_status_calls(state["messages"])),
+                        _text_block(RESEARCH_REVIEW_HUMAN_MESSAGE_TAIL.format(plans=plans_text)),
+                    ]
                 ),
             ]
         )

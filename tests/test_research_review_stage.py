@@ -13,7 +13,7 @@ import logging
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from pytest import LogCaptureFixture, MonkeyPatch
 
 from dial_deep_research.app.history import Plan, PrepState
@@ -25,7 +25,7 @@ from dial_deep_research.app.research.nodes import (
     ResearchBudgetExhausted,
     ResearchReviewOutcome,
 )
-from dial_deep_research.app.research.prompts import ResearchReview
+from dial_deep_research.app.research.prompts import RESEARCH_REVIEW_SYSTEM_PROMPT, ResearchReview
 from dial_deep_research.app.research.runner import ResearchRunner
 from dial_deep_research.app.research.state import build_initial_state
 from dial_deep_research.app_properties import ReportSection
@@ -47,6 +47,7 @@ class _FakeReviewModel:
     def __init__(self, review: ResearchReview) -> None:
         self._review = review
         self.calls = 0
+        self.last_messages: list[BaseMessage] | None = None
 
     def with_structured_output(self, schema: Any, include_raw: bool = False) -> _FakeReviewModel:
         return self
@@ -56,6 +57,7 @@ class _FakeReviewModel:
 
     async def ainvoke(self, messages: list[BaseMessage]) -> dict[str, Any]:
         self.calls += 1
+        self.last_messages = messages
         return {"parsed": self._review, "raw": AIMessage(content=""), "parsing_error": None}
 
 
@@ -71,8 +73,9 @@ def _reviewed_state() -> dict[str, Any]:
 
 def _review_node(
     monkeypatch: MonkeyPatch, review: ResearchReview, max_research_iterations: int = 10
-) -> tuple[Any, list[ResearchReviewOutcome]]:
-    monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: _FakeReviewModel(review))
+) -> tuple[Any, list[ResearchReviewOutcome], _FakeReviewModel]:
+    fake = _FakeReviewModel(review)
+    monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: fake)
     outcomes: list[ResearchReviewOutcome] = []
     node = nodes.make_research_review_node(
         today_date="2026-08-14",
@@ -80,13 +83,13 @@ def _review_node(
         emit_result_stage=outcomes.append,
         emit_activity=lambda _title: None,
     )
-    return node, outcomes
+    return node, outcomes, fake
 
 
 async def test_the_outcome_carries_the_iteration_the_assessment_and_the_steps(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    node, outcomes = _review_node(
+    node, outcomes, _fake = _review_node(
         monkeypatch, ResearchReview(assessment=_ASSESSMENT, next_steps=_STEPS)
     )
 
@@ -102,7 +105,7 @@ async def test_the_outcome_carries_the_iteration_the_assessment_and_the_steps(
 
 async def test_uncovered_work_reports_the_continue_verdict(monkeypatch: MonkeyPatch) -> None:
     """The verdict comes from the function the router calls, so it names the route actually taken."""
-    node, outcomes = _review_node(
+    node, outcomes, _fake = _review_node(
         monkeypatch, ResearchReview(assessment=_ASSESSMENT, next_steps=_STEPS)
     )
 
@@ -114,7 +117,7 @@ async def test_uncovered_work_reports_the_continue_verdict(monkeypatch: MonkeyPa
 
 
 async def test_full_coverage_reports_the_report_verdict(monkeypatch: MonkeyPatch) -> None:
-    node, outcomes = _review_node(
+    node, outcomes, _fake = _review_node(
         monkeypatch, ResearchReview(assessment="Every plan item is covered.", next_steps=[])
     )
 
@@ -130,7 +133,9 @@ async def test_the_findings_never_reach_a_log_record(
     monkeypatch: MonkeyPatch, caplog: LogCaptureFixture
 ) -> None:
     """LLM response text belongs in the stage; the logs carry the step count."""
-    node, _ = _review_node(monkeypatch, ResearchReview(assessment=_ASSESSMENT, next_steps=_STEPS))
+    node, _, _fake = _review_node(
+        monkeypatch, ResearchReview(assessment=_ASSESSMENT, next_steps=_STEPS)
+    )
 
     with caplog.at_level(logging.DEBUG):
         await node(_reviewed_state())
@@ -163,6 +168,83 @@ async def test_a_failed_review_call_emits_nothing_and_ends_the_turn(
         await node(_reviewed_state())
 
     assert outcomes == []
+
+
+_IMAGE_BLOCK = {"type": "image", "base64": "aGk="}
+
+
+def _transcript_with_an_image() -> list[BaseMessage]:
+    """One completed tool call whose result carries both text and an image."""
+    return [
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "get_page", "args": {"page": 3}, "id": "c1"}],
+            id="a1",
+        ),
+        ToolMessage(
+            content=[{"type": "text", "text": "page 3 text"}, _IMAGE_BLOCK],
+            tool_call_id="c1",
+            name="get_page",
+            id="t1",
+        ),
+    ]
+
+
+async def test_an_image_finding_reaches_the_review_call(monkeypatch: MonkeyPatch) -> None:
+    """research-review must see the image itself, not a marker noting one was returned."""
+    node, _outcomes, fake = _review_node(
+        monkeypatch, ResearchReview(assessment="ok", next_steps=[])
+    )
+    state = _reviewed_state()
+    state["messages"] = _transcript_with_an_image()
+
+    await node(state)
+
+    assert fake.last_messages is not None
+    [_system, human] = fake.last_messages
+    assert _IMAGE_BLOCK in human.content
+
+
+async def test_research_review_prompt_distinguishes_data_from_pure_format_requests() -> None:
+    """A format request can still name research work (issue #45's other half): "compare X and Y
+    in a table" implies data for both, but the report itself is never something research-review
+    can check — there is nothing written yet to check it against."""
+    normalized = " ".join(RESEARCH_REVIEW_SYSTEM_PROMPT.split())
+    assert "coverage gap" in normalized
+    assert "no report is written until research" in normalized
+
+
+async def test_successive_review_calls_share_a_byte_prefix(monkeypatch: MonkeyPatch) -> None:
+    """A later iteration's call must extend, not rewrite, an earlier one's message content — the
+    property the provider's prompt cache relies on (see the prompt-caching spec)."""
+    node, _outcomes, fake = _review_node(
+        monkeypatch, ResearchReview(assessment="ok", next_steps=[])
+    )
+    state = _reviewed_state()
+    state["messages"] = _transcript_with_an_image()
+
+    await node(state)
+    assert fake.last_messages is not None
+    [_system, first_human] = fake.last_messages
+    first_content = list(first_human.content)
+
+    state["messages"] = [
+        *_transcript_with_an_image(),
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "rag_search", "args": {"q": "y"}, "id": "c2"}],
+            id="a2",
+        ),
+        ToolMessage(content="more hits", tool_call_id="c2", name="rag_search", id="t2"),
+    ]
+    await node(state)
+    assert fake.last_messages is not None
+    [_system, second_human] = fake.last_messages
+    second_content = list(second_human.content)
+
+    # The tail block (closing the findings and rendering the plans) sits last in both messages;
+    # everything before it — the head and the growing findings — must be an unchanged prefix.
+    assert second_content[: len(first_content) - 1] == first_content[:-1]
 
 
 async def test_the_runner_renders_the_outcome_beside_the_open_activity_stage() -> None:

@@ -97,7 +97,8 @@ def test_a_transcript_without_statuses_is_untouched() -> None:
 
 def test_the_findings_log_shows_no_status() -> None:
     """Otherwise research-review weighs `SEARCHED: update_status(...)` as a retrieval."""
-    findings = _render_findings(_strip_status_calls(_mixed_transcript()))
+    blocks = _render_findings(_strip_status_calls(_mixed_transcript()))
+    findings = "\n\n".join(block["text"] for block in blocks)
 
     assert UPDATE_STATUS_TOOL_NAME not in findings
     assert _STATUS_TEXT not in findings

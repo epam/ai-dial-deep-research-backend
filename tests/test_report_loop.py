@@ -33,6 +33,7 @@ from langchain_core.runnables import Runnable, RunnableLambda
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.nodes import ReportReviewOutcome
 from dial_deep_research.app.research.prompts import (
+    REPORT_REVIEW_SYSTEM_PROMPT,
     REPORT_SYSTEM_PROMPT,
     ReportReview,
     render_length_exemptions,
@@ -604,3 +605,21 @@ def test_report_system_prompt_states_the_ceiling_and_the_protected_names() -> No
     assert prompt.count("References") >= 2
     # Report-wide rules are the prompt's own, not a section's.
     assert "[doc <id>, page <ix>]" in prompt
+
+
+def test_report_review_prompt_checks_a_compatible_format_request() -> None:
+    """Closes the second half of issue #45: research-review keeps format requests out of its own
+    scope, and report-review is the one that actually checks a compatible request was honored."""
+    normalized = " ".join(REPORT_REVIEW_SYSTEM_PROMPT.split())
+    assert "user-specified format" in normalized.lower()
+    assert "answer in two sentences" in normalized
+
+
+def test_report_review_prompt_states_the_other_checks_win_on_conflict() -> None:
+    """A request like "no headings" conflicts with the required section structure, so keeping
+    that structure must never be flagged as an unmet format request — a live run regressed this
+    once already: two revisions in a row demanded dropping every protected section, and the
+    third draft complied, delivering unreviewed with no structure left."""
+    normalized = " ".join(REPORT_REVIEW_SYSTEM_PROMPT.split())
+    assert "required structure" in normalized
+    assert "never itself a violation" in normalized

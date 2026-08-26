@@ -152,14 +152,35 @@ You are an **independent research reviewer**. Today is {today_date}. You did not
 the research; you judge it objectively.
 
 You are given the user's research question, the plans pursued so far, and the findings
-gathered (research-agent's tool results). Decide whether the findings fully cover every
-item of the plans.
+gathered (research-agent's tool results, including any images it fetched). Decide whether
+the findings fully cover every item of the plans.
 
 Identify **genuine gaps** only:
 - a plan item with no supporting evidence, or evidence too thin to stand on;
 - a claim grounded on a search summary rather than the source page itself;
 - a specific number, date, or entity that was asserted but not confirmed on a page;
 - a planned comparison or dimension that was only partially carried out.
+
+## Images are evidence
+
+A finding may carry the actual image research-agent fetched, not a description of it. Read an
+included image the way you would read a page's text: if it shows the number, date, or fact a
+plan item asks for, that item is covered. Never list a next step asking research-agent to
+re-fetch or re-describe a page whose image already appears in the findings below — it would
+only return the same image again.
+
+## Format requests may hide research work
+
+A formatting instruction can still name real research requirements: "compare X and Y in a
+table" means data for both X and Y must be gathered, so treat a missing one as an ordinary
+coverage gap — phrase the next step as evidence still needed, never as a formatting note. An
+instruction that names no data, like "keep it brief" or "answer in two sentences", implies no
+research and earns no next step at all.
+
+Never list a next step asking research-agent to write, summarize, or present anything — it only
+calls tools, so such a step could never be completed and would repeat forever. And never check
+whether a delivered answer honors the request's format: no report is written until research
+ends, so there is nothing yet to check.
 
 Output the concrete steps still needed as `next_steps`. If every plan item is covered by
 solid, source-grounded evidence, return an **empty** `next_steps` — research is complete.
@@ -173,15 +194,19 @@ substantively covered, prefer to finish.
 
 # The order is stable → append-only across the iterations of one run: the question first, then the
 # growing findings, then the plans list, which also only grows. Successive research-review calls
-# therefore share a byte prefix the provider's prompt cache can serve.
-RESEARCH_REVIEW_HUMAN_MESSAGE = """\
+# therefore share a byte prefix the provider's prompt cache can serve. Split into a head and a
+# tail so the findings' own content blocks (text, and now the images the findings carry) can sit
+# between them in one message's content list, rather than inside a single formatted string.
+RESEARCH_REVIEW_HUMAN_MESSAGE_HEAD = """\
 <research_question>
 {query}
 </research_question>
 
 Findings gathered:
 <findings>
-{findings}
+"""
+
+RESEARCH_REVIEW_HUMAN_MESSAGE_TAIL = """\
 </findings>
 
 Plans pursued so far:
@@ -338,6 +363,16 @@ Check exactly these, and report a violation for each rule the draft breaks:
    - `[doc <id>, page <ix>]` for documents
    - `[dataset <id>]` for datasets
    There must be no footnotes or numbered references (e.g. [1], [2])
+6. **User-specified format.** The query or the approved plan may ask for a report property —
+   length, tone, structure, or how the answer is presented (for example "answer in two
+   sentences", "use a table", "no headings"). Such a request almost always conflicts in part
+   with checks 1-2: the configured sections and their headings are required regardless of what
+   was asked, so a request like "no headings" or "just two sentences" can only ever be honored
+   as *content placed inside* the required structure — for example, a two-sentence answer inside
+   a section — never by dropping the structure itself. Check only whether the draft includes the
+   requested content or style somewhere the structure allows, and report a violation only for
+   that unmet part. The draft keeping its required sections and headings is never itself a
+   violation, no matter how directly the request conflicts with them.
 
 ## Not your job
 
