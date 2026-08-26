@@ -36,6 +36,11 @@ DEPLOYMENT_NAME = "deep-research"
 # properties as the research deployment.
 PLAYGROUND_DEPLOYMENT_NAME = "deep-research-playground"
 
+# Deployment id of the local-only inline-annotations spike (registered only when
+# `settings.enable_annotations_spike` is set). It reads no application properties:
+# its reply is a fixed report.
+ANNOTATIONS_SPIKE_DEPLOYMENT_NAME = "annotations-spike"
+
 # The DIAL application-type meta-schema and this type's identity within it. The
 # `$id` is a generic placeholder: instances reference the type by this value, and
 # the DIAL Core `applicationTypeSchemas` entry must carry the same one.

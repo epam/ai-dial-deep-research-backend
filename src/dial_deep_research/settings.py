@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     # the configured MCP servers, no clarification/research flow) for testing MCP tools.
     enable_playground_channel: bool = False
 
+    # When true, also register the inline-annotations spike deployment: a fixed report carrying
+    # `custom_content.annotations`, used to check how DIAL Chat renders inline citation pills.
+    # Local investigation aid, not a product surface.
+    enable_annotations_spike: bool = False
+
     # opik tracing
     opik_tracing_enabled: bool = False
     opik_project_name: str = Field(default="deep-research", min_length=1)
