@@ -1,0 +1,59 @@
+# Opt-in overlay for the inline-annotations spike: swaps the chat UI for the next-generation
+# one, which is the only one that renders inline citation pills.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.spike.yml up -d   (or `make spike-up`)
+#
+# Plain `docker compose up` / `make infra-up` still starts the legacy chat, unchanged.
+#
+# DIAL core needs no change: annotation attachment auto-sharing entered core in 0.44.0 and
+# docker-compose.yml already pins 0.45.1.
+#
+# The next-generation chat has no equivalent of the legacy AUTH_DISABLED, so a real OIDC
+# provider is required. The four AUTH_KEYCLOAK_* values come from .env via env_file — never
+# inline them here, this file is committed.
+#
+# The app must not run on port 5000 under this overlay: the chat image is a single container
+# whose backend-for-frontend listens there. Set APP_PORT to something else in .env and re-run
+# `make infra-config` so core's rendered application-schema endpoint follows.
+
+services:
+
+  core:
+    environment:
+      # The base list from docker-compose.yml plus the spike application. Compose replaces
+      # this value rather than merging, so the three base entries are repeated here.
+      aidial.config.files: '["/opt/config/generated/models.json", "/opt/config/generated/application-schemas.json", "/opt/config/applications.json", "/opt/config/spike-applications.json"]'
+
+  themes:
+    # The next-generation chat redesigned the palette; a legacy themes config loads without an
+    # error and applies almost nothing.
+    image: epam/ai-dial-chat-themes:0.19.1
+
+  chat:
+    # The 1.0.0-rc.x line is the rewritten chat (same image name as the legacy 0.4x.x line).
+    image: epam/ai-dial-chat:1.0.0-rc.6
+    ports:
+      - "3000:5000"
+    env_file:
+      - .env
+    environment:
+      # env_file brings the whole .env in, including app variables the chat also reads under
+      # the same name but validates differently: it accepts only debug/log/warn/error, so the
+      # app's LOG_LEVEL=INFO makes it exit at startup. `environment` wins over `env_file`.
+      LOG_LEVEL: "log"
+      PORT: "5000"
+      API_PREFIX: "api"
+      CORS_ORIGIN: "http://localhost:3000"
+      DIAL_CORE_URL: "http://core:8080"
+      DIAL_API_KEY: ${DIAL_API_KEY:-dial_api_key}
+      # Renamed from the legacy THEMES_CONFIG_HOST.
+      THEMES_CONFIG_URL: "http://themes:8080"
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      # Must match a redirect URI registered on the Keycloak client, or login fails with
+      # "Invalid parameter: redirect_uri". The dial-chat-2 client accepts localhost on
+      # ports 3000, 4207 and 5000; 3010 and 3020 are not registered.
+      AUTH_CALLBACK_BASE_URL: "http://localhost:3000"
+      AUTH_POST_LOGOUT_REDIRECT_URI: "http://localhost:3000"
+      # Sanctioned by the upstream .env.template for local HTTP; also disables HSTS and the
+      # CSP upgrade-insecure-requests directive.
+      AUTH_COOKIE_SECURE: "false"

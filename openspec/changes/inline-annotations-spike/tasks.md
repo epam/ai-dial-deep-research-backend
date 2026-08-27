@@ -18,35 +18,39 @@
 
 ## 2. PDFs
 
-- [ ] 2.1 Copy the two spike papers into the repo (or a gitignored local path) under short,
+- [x] 2.1 Copy the two spike papers into the repo (or a gitignored local path) under short,
       space-free names.
-- [ ] 2.2 Write `scripts/upload_spike_pdfs.py`: upload both to DIAL file storage via the DIAL file
+- [x] 2.2 Write `scripts/upload_spike_pdfs.py`: upload both to DIAL file storage via the DIAL file
       API and print their `files/<bucket>/...` paths.
-- [ ] 2.3 Record the resulting paths in the spike config so the annotations reference real files.
+- [x] 2.3 Record the resulting paths in the spike config so the annotations reference real files.
 
 ## 3. Local stack
 
-- [ ] 3.1 Add `docker-compose.spike.yml`: override `chat` to `epam/ai-dial-chat:1.0.0-rc.6` with
+- [x] 3.1 Add `docker-compose.spike.yml`: override `chat` to `epam/ai-dial-chat:1.0.0-rc.6` with
       the next-gen environment (`DIAL_CORE_URL`, `THEMES_CONFIG_URL`, `AUTH_*`,
       `AUTH_COOKIE_SECURE=false`), override `themes` to `0.19.1`, and pass `.env` through with
       `env_file` so the Keycloak values are never inlined.
-- [ ] 3.2 Move the app off port 5000 (next-gen chat-api claims it) and re-run `make infra-config`
-      so Core's rendered application-schema endpoint points at the new port.
-- [ ] 3.3 Add `make spike-up` / `make spike-down` targets wrapping the two-file compose invocation.
+- [x] 3.2 Confirm the app port does not collide with the chat backend. Not needed in practice:
+      the local setup already runs the app on 5011, and the chat is published on host port 3020
+      (3010 was held by a stale Rancher Desktop reservation).
+- [x] 3.5 Register the spike with DIAL Core: `dial_conf/core/spike-applications.json` declares it
+      with a plain `endpoint`, and the overlay adds that file to core's `aidial.config.files`.
+      No application-type schema is needed — the spike reads no application properties.
+- [x] 3.3 Add `make spike-up` / `make spike-down` targets wrapping the two-file compose invocation.
 - [ ] 3.4 Confirm plain `make infra-up` still starts the legacy stack unchanged.
 
 ## 4. Automated end-to-end check
 
-- [ ] 4.1 Write `scripts/check_spike_annotations.py`: call the deployment through DIAL Core with an
+- [x] 4.1 Write `scripts/check_spike_annotations.py`: call the deployment through DIAL Core with an
       API key and capture the full response.
-- [ ] 4.2 Assert the payload: `custom_content.annotations` is present; every entry has a sequential
+- [x] 4.2 Assert the payload: `custom_content.annotations` is present; every entry has a sequential
       integer `index`; every entry has `body.source.attachment.url` (the condition `useAnnotations`
       filters on); each `target.selector.end` lands at the intended sentence in the returned
       content; and the same-page-twice pair shares one `url` while the two-different-pages pair
       does not.
-- [ ] 4.3 Assert Core's auto-sharing: fetch each cited `files/<bucket>/...` URL with the caller's
+- [x] 4.3 Assert Core's auto-sharing: fetch each cited `files/<bucket>/...` URL with the caller's
       key and confirm it is readable.
-- [ ] 4.4 Assert the non-streaming path too (`stream: false`), which exercises the SDK's
+- [x] 4.4 Assert the non-streaming path too (`stream: false`), which exercises the SDK's
       `merge_indexed_lists` and so proves the `index` contract.
 
 ## 5. Manual browser pass

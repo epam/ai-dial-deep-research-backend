@@ -1,0 +1,16 @@
+{
+  "applications": {
+    "annotations-spike": {
+      "displayName": "Inline Annotations Spike",
+      "description": "Local-only: replies with a fixed report carrying inline citation annotations.",
+      "endpoint": "http://host.docker.internal:5011/openai/deployments/annotations-spike/chat/completions"
+    }
+  },
+  "roles": {
+    "default": {
+      "limits": {
+        "annotations-spike": {}
+      }
+    }
+  }
+}

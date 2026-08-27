@@ -118,6 +118,21 @@ all-down: ## Stop infra + the app container
 all-logs: ## Tail logs from the infra + the app container
 	docker compose $(APP_COMPOSE) logs -f
 
+## -------- annotations spike (opt-in, local only) -------- ##
+
+# Infra with the next-generation chat UI in place of the legacy one. See
+# docker-compose.spike.yml for what it overrides and what .env must carry.
+SPIKE_COMPOSE = -f docker-compose.yml -f docker-compose.spike.yml
+
+spike-up: ## Start infra with the next-gen chat UI (inline-annotations spike)
+	docker compose $(SPIKE_COMPOSE) up -d
+
+spike-down: ## Stop the spike stack
+	docker compose $(SPIKE_COMPOSE) down
+
+spike-logs: ## Tail logs from the spike stack
+	docker compose $(SPIKE_COMPOSE) logs -f
+
 ## -------- opik -------- ##
 
 $(OPIK_DIR):
