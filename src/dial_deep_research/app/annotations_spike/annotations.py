@@ -1,21 +1,27 @@
 """Builds the `custom_content.annotations` array the spike emits.
 
 DIAL Chat groups annotations by `body.source.attachment.url` and renders one pill per group, at
-the *first* annotation's offset. All seven citations here carry a bare url, so grouping falls out
-of which document each citation points at, giving four groups:
+the *first* annotation's offset. Five of the seven citations carry a bare url, and two carry a
+`#page=N` fragment, giving five groups:
 
 - Group A: three citations of plan.pdf share its bare url — pages 3, 7, and 3 again — so all
   three collapse into a single pill and the second and third locations render nothing. It has a
   switcher and no quote, and its popup reserves a blank quote area.
-- Group B: two citations of scaling.pdf share its bare url — pages 5 and 9 — and collapse the
-  same way. It has a switcher and no quote, and shows the same blank gap as group A.
+- Groups B1 and B2: the two citations of scaling.pdf, pages 5 and 9, each carry the page as a
+  `#page=N` fragment, so their urls differ and each forms its own singleton pill — unlike group
+  A, neither location collapses into the other. This demonstrates that a fragment separates
+  pills, at the cost of breaking Preview on the annotation path (Download still works — see F2a
+  in `docs/deep_research/inline_annotations.md` in the documentation repository).
 - Group C: one citation of a second copy of plan.pdf, stored under a different destination
   filename so its url matches nothing else, forms a singleton pill of its own. It has no
   switcher and no quote, and its popup shows no gap — confirming the gap tracks `hasSwitcher`,
-  not whether a quote exists.
+  not whether a quote exists. Its pill label reads "Learning When to Plan (copy)"
+  (`SpikePdf.attachment_title`), distinguishing it from group A's pill even though the popup's
+  own per-entry title still reads "Learning When to Plan, page 1".
 - Group D: one citation of a second copy of scaling.pdf, stored under yet another destination
-  filename, also forming a singleton pill. Unlike the other three groups it carries a real
-  `body.quote`, to confirm that quote text renders as actual content when one is present.
+  filename, also forming a singleton pill. Unlike the other groups it carries a real
+  `body.quote`, to confirm that quote text renders as actual content when one is present. Its
+  pill label reads "Scaling Test-Time Compute (copy)" for the same reason group C's does.
 
 The page a pill navigates to never comes from the url. It is carried by `body.selector`, a
 degenerate zero-size `pdf_bbox` — the only selector Chat maps to a scroll target.
@@ -36,6 +42,10 @@ class SpikePdf(BaseModel):
     # DIAL file path, e.g. `files/<bucket>/plan.pdf` — no fragment.
     url: str
     title: str
+    # Group-level pill label (`body.source.attachment.title`), when it must differ from `title`.
+    # Defaults to `title`. `title` itself still feeds the popup's per-entry `body.title` — see
+    # `build_annotations` — so this field changes only what the pill itself displays.
+    attachment_title: str | None = None
 
 
 class Citation(BaseModel):
@@ -62,11 +72,11 @@ def build_citations(
     return [
         Citation(pdf=plan_pdf, page=3, page_in_url=False),
         Citation(pdf=plan_pdf, page=7, page_in_url=False),
-        # `page_in_url` is currently false for all seven citations: a `#page=N` fragment does
-        # split pill groups, but it also breaks Preview and Download on the annotation path.
-        # Flip it back to true here to re-run that fragment experiment.
-        Citation(pdf=scaling_pdf, page=5, page_in_url=False),
-        Citation(pdf=scaling_pdf, page=9, page_in_url=False),
+        # These two carry the page as a `#page=N` fragment instead of a bare url: a fragment
+        # does split pill groups, but it also breaks Preview and Download on the annotation
+        # path (see F2a) — this pair is the demonstration of both effects at once.
+        Citation(pdf=scaling_pdf, page=5, page_in_url=True),
+        Citation(pdf=scaling_pdf, page=9, page_in_url=True),
         # Same PDF and same page as the first citation: the decisive test of whether one page
         # cited twice in different places yields two pills or one.
         Citation(pdf=plan_pdf, page=3, page_in_url=False),
@@ -131,7 +141,7 @@ def build_annotations(*, citations: list[Citation], markers: list[CitationMarker
                     "url": citation.url,
                     # Group-level label — this is what the pill itself displays
                     # (groupAnnotationsBySource's sourceName), so it stays page-free.
-                    "title": citation.pdf.title,
+                    "title": citation.pdf.attachment_title or citation.pdf.title,
                 },
             },
             # A zero-size box carries the page without drawing a region. Chat applies a

@@ -59,8 +59,8 @@ at a fraction of the cost.[[{plan_url}]]
 
 Test-time compute is the other lever. Allocating more of it to a smaller model can beat a much
 larger model given the same total budget, provided the allocation adapts to how hard the prompt
-is.[[{scaling_url}]] The gain disappears when the budget is spread uniformly, which is why the
-allocation policy matters more than the raw amount.[[{scaling_url}]]
+is.[[{scaling_url}#page=5]] The gain disappears when the budget is spread uniformly, which is why
+the allocation policy matters more than the raw amount.[[{scaling_url}#page=9]]
 
 ## Taken together
 

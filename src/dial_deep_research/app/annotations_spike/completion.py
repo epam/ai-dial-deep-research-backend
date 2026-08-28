@@ -125,7 +125,11 @@ class AnnotationsSpikeCompletion(ChatCompletion):
         solo_url = await files.copy_to_caller(
             source_url=app_bucket_urls["plan"], appdata=bucket_ids.appdata, name="plan-2.pdf"
         )
-        prepared["plan_solo"] = SpikePdf(url=solo_url, title="Learning When to Plan")
+        prepared["plan_solo"] = SpikePdf(
+            url=solo_url,
+            title="Learning When to Plan",
+            attachment_title="Learning When to Plan (copy)",
+        )
 
         # A second copy of scaling.pdf, filed at yet another destination name — the singleton
         # citation that carries a real `body.quote`.
@@ -134,7 +138,11 @@ class AnnotationsSpikeCompletion(ChatCompletion):
             appdata=bucket_ids.appdata,
             name="scaling-2.pdf",
         )
-        prepared["scaling_quote"] = SpikePdf(url=quote_url, title="Scaling Test-Time Compute")
+        prepared["scaling_quote"] = SpikePdf(
+            url=quote_url,
+            title="Scaling Test-Time Compute",
+            attachment_title="Scaling Test-Time Compute (copy)",
+        )
 
         return prepared
 

@@ -114,9 +114,9 @@ def check_annotations(*, message: dict[str, Any], label: str, expect_index: bool
 
     for annotation in annotations:
         index = annotation.get("index")
-        url = (
-            ((annotation.get("body") or {}).get("source") or {}).get("attachment") or {}
-        ).get("url")
+        url = (((annotation.get("body") or {}).get("source") or {}).get("attachment") or {}).get(
+            "url"
+        )
         if not url:
             failures.append(f"{label}: annotation {index} has no body.source.attachment.url")
 
