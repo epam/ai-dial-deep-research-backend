@@ -11,97 +11,97 @@ change stays active rather than archived.
 
 ## 1. Demo — shared citation code
 
-- [ ] 1.1 Create `src/dial_deep_research/app/research/citations.py` with no DIAL and no LangChain
+- [x] 1.1 Create `src/dial_deep_research/app/research/citations.py` with no DIAL and no LangChain
       imports, so every function below is testable over plain strings.
-- [ ] 1.2 Parse citation markers: `[doc <id>, page <ix>]` and `[dataset <id>]`, integer id and page,
+- [x] 1.2 Parse citation markers: `[doc <id>, page <ix>]` and `[dataset <id>]`, integer id and page,
       keyword matched case-insensitively. A page range, a non-numeric id, a page-less document
       citation and a nested bracket are not citations and keep their text. Do not reuse
       `report_length.py`'s `_CITATION_RE` — it errs the other way on purpose.
-- [ ] 1.3 Classify the Markdown block each marker sits in, over a line scan that tracks fenced-code
+- [x] 1.3 Classify the Markdown block each marker sits in, over a line scan that tracks fenced-code
       state: paragraph and list item are eligible; table row, ATX heading, setext heading (a text
       line underlined with `=` or `-`), blockquote, fenced code block, four-space-indented code
       block are not; nor is a marker inside an inline code span, detected by an odd number of
       backticks before it on its line.
-- [ ] 1.4 Detect runs of adjacent markers (separated only by spaces, commas or semicolons) and fold
+- [x] 1.4 Detect runs of adjacent markers (separated only by spaces, commas or semicolons) and fold
       each run into one tag: separators inside the run go with the markers they joined, surviving
       unconvertible markers follow the tag single-spaced in their original order, and two markers
       naming the same document and page collapse to one annotation.
-- [ ] 1.5 Detect and repair hyperlinks, one definition of "a hyperlink" that both the delivery pass
+- [x] 1.5 Detect and repair hyperlinks, one definition of "a hyperlink" that both the delivery pass
       and the report rule import: a Markdown link keeps its label, an image is dropped whole, an
       autolink or bare URL is deleted, a reference-style link keeps its label and loses both bracket
       pairs with its `[ref]: url` definition line deleted, a raw HTML anchor keeps its text and a
       raw HTML image tag is dropped. Nothing is interpreted, matched against the retrieved
       documents, or preserved anywhere.
-- [ ] 1.6 Replace each convertible marker (or run) with `<cit data-id="…"></cit>`, ids opaque and
+- [x] 1.6 Replace each convertible marker (or run) with `<cit data-id="…"></cit>`, ids opaque and
       each appearing on exactly one tag in the message.
-- [ ] 1.7 Build the annotation payload: 0-based unique `index`, `target.selector` of type `html_tag`
+- [x] 1.7 Build the annotation payload: 0-based unique `index`, `target.selector` of type `html_tag`
       naming tag `cit` and the tag's `data-id` value in its `id` field, `body.title` reading
       `doc <id>, page <ix>`, `body.source.attachment` of `{type: "application/pdf", url, title}`
       with the URL carried verbatim and the title the same string as `body.title`, `body.selector` a
       `pdf_bbox` with the cited page and a zero-size box, and no `body.quote`.
-- [ ] 1.8 Order the two alterations: hyperlink repair first, then citation conversion over the text
+- [x] 1.8 Order the two alterations: hyperlink repair first, then citation conversion over the text
       it produced, each failing independently of the other.
-- [ ] 1.9 Unit tests for 1.2 to 1.8, including the marker grammar's rejections, every ineligible
+- [x] 1.9 Unit tests for 1.2 to 1.8, including the marker grammar's rejections, every ineligible
       block, run folding with a mixed run, the repeated same-page pair, each hyperlink form, and the
       payload's field-by-field shape.
 
 ## 2. Demo — DIAL annotations emission
 
-- [ ] 2.1 Add an emission helper under `src/dial_deep_research/utils/` that sends the annotations
+- [x] 2.1 Add an emission helper under `src/dial_deep_research/utils/` that sends the annotations
       array as one `ArbitraryChunk` through `choice.send_chunk` on the open choice, after the text
       has been appended. Note at the call site that the import path is unexported.
-- [ ] 2.2 Test the chunk's shape, and that the helper is the only place that builds it.
+- [x] 2.2 Test the chunk's shape, and that the helper is the only place that builds it.
 
 ## 3. Demo — the flag-gated completion
 
-- [ ] 3.1 Add the settings flag (default `False`) and register the demo completion in
+- [x] 3.1 Add the settings flag (default `False`) and register the demo completion in
       `src/dial_deep_research/app/factory.py` only when it is set, on a deployment id of its own,
       as the playground channel is registered.
-- [ ] 3.2 Rewrite `src/dial_deep_research/app/annotations_spike/` into the demo package: it reads no
+- [x] 3.2 Rewrite `src/dial_deep_research/app/annotations_spike/` into the demo package: it reads no
       application properties, runs no research, and calls no model.
-- [ ] 3.3 Load the PDF fixtures from their expected location, kept out of git. A missing fixture
+- [x] 3.3 Load the PDF fixtures from their expected location, kept out of git. A missing fixture
       fails the turn with a message naming the file and where to put it, rather than answering with
       an incomplete demonstration.
-- [ ] 3.4 Copy the fixtures into the caller's `appdata` folder with the per-request key, so a pill
+- [x] 3.4 Copy the fixtures into the caller's `appdata` folder with the per-request key, so a pill
       opens for whoever is clicking. When no `appdata` folder resolves — an ordinary api-key rather
       than a per-request one — fail with that reason.
-- [ ] 3.5 Write the fixed report. Every case introduced by a sentence saying what it is and what
+- [x] 3.5 Write the fixed report. Every case introduced by a sentence saying what it is and what
       should appear: a lone citation in a paragraph; a run folding into one pill; one document cited
       in several separate places; a citation in a list item; two pages of one document; a citation
       in a table cell and one in a heading, both keeping their marker text; a citation whose
       document has no URL; a Markdown link delivered as its label; a bare URL deleted. No dataset
       citation, no research prose, and no Markdown beyond what a case needs to exist.
-- [ ] 3.6 Build the reply through the group-1 and group-2 code — the same parsing, folding, link
+- [x] 3.6 Build the reply through the group-1 and group-2 code — the same parsing, folding, link
       removal, tag replacement, payload building and emission — with nothing reimplemented locally.
-- [ ] 3.7 Emit the (8c) INFO event from the demo path: ids requested, resolved, annotations emitted,
+- [x] 3.7 Emit the (8c) INFO event from the demo path: ids requested, resolved, annotations emitted,
       markers left as written, hyperlinks removed, duration. Counts only — no URL, file name,
       document title or id in any record.
-- [ ] 3.8 Tests: the flag off registers nothing; the fixed report's ten cases produce the tags and
+- [x] 3.8 Tests: the flag off registers nothing; the fixed report's ten cases produce the tags and
       annotations the specs require; a missing fixture fails with its message.
 
 ## 4. Demo — local stack overlay
 
-- [ ] 4.1 Rewrite `docker-compose.spike.yml` as the annotations overlay: **add** a next-generation
+- [x] 4.1 Rewrite `docker-compose.spike.yml` as the annotations overlay: **add** a next-generation
       chat and a themes service of its own beside the base pair rather than replacing them, and
       rename the file accordingly. Pin both images (a `1.0.0-rc.x` `epam/ai-dial-chat` and the
       `epam/ai-dial-chat-themes` tag that line expects) and record at the pin why the repository
       carries a pre-release line here.
-- [ ] 4.2 Serve the next-generation chat on host port 4207, the one port the OIDC client accepts
+- [x] 4.2 Serve the next-generation chat on host port 4207, the one port the OIDC client accepts
       that the base chat and the app's default do not already hold, and note that constraint in the
       file.
-- [ ] 4.3 Take the OIDC credentials from `.env` only, with nothing inlined in the committed file.
-- [ ] 4.4 Rename `dial_conf/core/spike-applications.json` to the demo's core configuration file,
+- [x] 4.3 Take the OIDC credentials from `.env` only, with nothing inlined in the committed file.
+- [x] 4.4 Rename `dial_conf/core/spike-applications.json` to the demo's core configuration file,
       rewrite its application entry, and append it to `aidial.config.files` from the overlay alone,
       never from the base stack.
-- [ ] 4.5 Turn the `spike-*` Makefile targets into the overlay's up, down and logs targets.
-- [ ] 4.6 Document in `.env.example` the identity-provider variables the next-generation chat needs
+- [x] 4.5 Turn the `spike-*` Makefile targets into the overlay's up, down and logs targets.
+- [x] 4.6 Document in `.env.example` the identity-provider variables the next-generation chat needs
       and the demo's flag, and add the flag to the README's environment-variables table.
-- [ ] 4.7 Document the demo for the audience that will run it: how to enable it, which deployment id
+- [x] 4.7 Document the demo for the audience that will run it: how to enable it, which deployment id
       to call, which fixtures to place where, and what to look for in the reply.
-- [ ] 4.8 Check the constraint D14 leaves open: whether the app must still be moved off host port
+- [x] 4.8 Check the constraint D14 leaves open: whether the app must still be moved off host port
       5000 under this overlay now that the next-generation chat takes 4207. Record the answer where
       the constraint is stated, and drop the note if it no longer applies.
-- [ ] 4.9 Confirm `make infra-up` with no next-generation values in `.env` still starts the base
+- [x] 4.9 Confirm `make infra-up` with no next-generation values in `.env` still starts the base
       stack alone and fails for nothing.
 
 ## 5. Demo — verify it, then ship it

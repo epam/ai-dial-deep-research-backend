@@ -4,11 +4,11 @@ from typing import Any
 from aidial_sdk import DIALApp
 from aidial_sdk.telemetry.types import MetricsConfig, TelemetryConfig, TracingConfig
 
-from dial_deep_research.app.annotations_spike.completion import AnnotationsSpikeCompletion
+from dial_deep_research.app.annotations_demo.completion import AnnotationsDemoCompletion
 from dial_deep_research.app.completion import DeepResearchCompletion
 from dial_deep_research.app.playground.completion import PlaygroundCompletion
 from dial_deep_research.app_properties import (
-    ANNOTATIONS_SPIKE_DEPLOYMENT_NAME,
+    ANNOTATIONS_DEMO_DEPLOYMENT_NAME,
     DEPLOYMENT_NAME,
     PLAYGROUND_DEPLOYMENT_NAME,
     ApplicationProperties,
@@ -63,14 +63,14 @@ def create_app() -> DIALApp:
             heartbeat_interval=settings.heartbeat_interval,
         )
 
-    if settings.enable_annotations_spike:
+    if settings.enable_annotations_demo:
         _log.info(
-            "Registering annotations spike chat completion deployment=%s",
-            ANNOTATIONS_SPIKE_DEPLOYMENT_NAME,
+            "Registering annotations demo chat completion deployment=%s",
+            ANNOTATIONS_DEMO_DEPLOYMENT_NAME,
         )
         app.add_chat_completion(
-            ANNOTATIONS_SPIKE_DEPLOYMENT_NAME,
-            AnnotationsSpikeCompletion(),
+            ANNOTATIONS_DEMO_DEPLOYMENT_NAME,
+            AnnotationsDemoCompletion(),
             heartbeat_interval=settings.heartbeat_interval,
         )
 

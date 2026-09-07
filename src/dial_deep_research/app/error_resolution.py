@@ -4,8 +4,8 @@ A DIAL Deep Research turn fails from a few directions — the LLM call (openai e
 `langchain-openai`; a connection dropped mid-stream surfaces as a raw `httpx` transport error
 once the call-site retries are exhausted), DIAL Core service operations (aidial `HTTPException`),
 the RAG MCP or other HTTP calls (`httpx` errors), the research graph (`GraphRecursionError`), and
-two known in-process conditions (`ApplicationNotConfiguredError`,
-`ResearchAlreadyHandedOffError`). This module
+the known in-process conditions, each an `AppConditionError` subclass carrying its own
+user-facing text. This module
 normalizes them all into an `ErrorDetails` view and resolves a `ResolvedError` by a fixed
 precedence: display_message -> code map -> status/type map -> mid-stream stream-failure rule ->
 internal map -> generic fallback.
@@ -128,7 +128,7 @@ _CODE_MESSAGES: dict[str, str] = {
 }
 
 
-class _AppConditionError(Exception):
+class AppConditionError(Exception):
     """A known, in-process, turn-aborting condition carrying curated user-facing text.
 
     Routed through the same resolver and handler as upstream errors so that every
@@ -143,7 +143,7 @@ class _AppConditionError(Exception):
         super().__init__(self.user_message)
 
 
-class ApplicationNotConfiguredError(_AppConditionError):
+class ApplicationNotConfiguredError(AppConditionError):
     """The instance's DIAL application properties could not be validated."""
 
     user_message = (
@@ -152,7 +152,7 @@ class ApplicationNotConfiguredError(_AppConditionError):
     )
 
 
-class ResearchAlreadyHandedOffError(_AppConditionError):
+class ResearchAlreadyHandedOffError(AppConditionError):
     """Research was already prepared and handed off on an earlier turn of this conversation."""
 
     user_message = (
@@ -255,7 +255,7 @@ def _extract_from_httpx(e: httpx.HTTPError) -> ErrorDetails:
 def _extract_error_details(e: Exception) -> ErrorDetails:
     """Best-effort, total: malformed or absent bodies yield an empty ``ErrorDetails``."""
     try:
-        if isinstance(e, _AppConditionError):
+        if isinstance(e, AppConditionError):
             return ErrorDetails(status_code=e.status_code)
         if isinstance(e, openai.APIError):
             return _extract_from_openai(e)
@@ -358,7 +358,7 @@ def _resolve_status_or_type(e: Exception, details: ErrorDetails) -> _Resolution 
 
 
 def _resolve_internal(e: Exception) -> _Resolution | None:
-    if isinstance(e, _AppConditionError):
+    if isinstance(e, AppConditionError):
         return (e.user_message, e.retryable)
     if isinstance(e, GraphRecursionError):
         return (_MSG_RESEARCH_STEP_BUDGET, False)

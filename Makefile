@@ -118,20 +118,21 @@ all-down: ## Stop infra + the app container
 all-logs: ## Tail logs from the infra + the app container
 	docker compose $(APP_COMPOSE) logs -f
 
-## -------- annotations spike (opt-in, local only) -------- ##
+## -------- inline citations (opt-in) -------- ##
 
-# Infra with the next-generation chat UI in place of the legacy one. See
-# docker-compose.spike.yml for what it overrides and what .env must carry.
-SPIKE_COMPOSE = -f docker-compose.yml -f docker-compose.spike.yml
+# Infra plus a next-generation chat UI beside the base one, and the inline-citations demo
+# registered in core. See docker-compose.annotations.yml for what it adds and what .env
+# must carry.
+ANNOTATIONS_COMPOSE = -f docker-compose.yml -f docker-compose.annotations.yml
 
-spike-up: ## Start infra with the next-gen chat UI (inline-annotations spike)
-	docker compose $(SPIKE_COMPOSE) up -d
+annotations-up: ## Start infra with both chat generations and the inline-citations demo
+	docker compose $(ANNOTATIONS_COMPOSE) up -d
 
-spike-down: ## Stop the spike stack
-	docker compose $(SPIKE_COMPOSE) down
+annotations-down: ## Stop the infra + both chat generations
+	docker compose $(ANNOTATIONS_COMPOSE) down
 
-spike-logs: ## Tail logs from the spike stack
-	docker compose $(SPIKE_COMPOSE) logs -f
+annotations-logs: ## Tail logs from the infra + both chat generations
+	docker compose $(ANNOTATIONS_COMPOSE) logs -f
 
 ## -------- opik -------- ##
 
