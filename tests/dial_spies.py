@@ -74,6 +74,9 @@ class ChoiceSpy:
         self.content = ""
         self.stages: list[StageSpy] = []
         self.events: list[tuple[str, str]] = []
+        # Raw chunks sent past the SDK's typed API — annotations go out that way.
+        self.chunks: list[dict] = []
+        self.index = 0
 
     @property
     def stage_titles(self) -> list[str]:
@@ -86,6 +89,9 @@ class ChoiceSpy:
 
     def append_content(self, text: str) -> None:
         self.content += text
+
+    def send_chunk(self, chunk: object) -> None:
+        self.chunks.append(chunk.to_dict())  # type: ignore[attr-defined]
 
     def create_stage(self, title: str) -> StageSpy:
         stage = StageSpy(title, self.events)

@@ -36,6 +36,11 @@ DEPLOYMENT_NAME = "deep-research"
 # properties as the research deployment.
 PLAYGROUND_DEPLOYMENT_NAME = "deep-research-playground"
 
+# Deployment id of the inline-citations demo (registered only when
+# `settings.enable_annotations_demo` is set). It reads no application properties:
+# its reply is a fixed report exercising the citation mechanism.
+ANNOTATIONS_DEMO_DEPLOYMENT_NAME = "deep-research-annotations-demo"
+
 # The DIAL application-type meta-schema and this type's identity within it. The
 # `$id` is a generic placeholder: instances reference the type by this value, and
 # the DIAL Core `applicationTypeSchemas` entry must carry the same one.

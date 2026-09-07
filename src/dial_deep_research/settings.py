@@ -70,6 +70,11 @@ class Settings(BaseSettings):
     # the configured MCP servers, no clarification/research flow) for testing MCP tools.
     enable_playground_channel: bool = False
 
+    # When true, also register the inline-citations demo deployment: a fixed report whose
+    # citations are converted by the same code a research turn uses, for checking how a client
+    # renders inline citation pills. A demonstration surface, not a product one.
+    enable_annotations_demo: bool = False
+
     # opik tracing
     opik_tracing_enabled: bool = False
     opik_project_name: str = Field(default="deep-research", min_length=1)

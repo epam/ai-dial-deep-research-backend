@@ -37,6 +37,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /opt/app
 
+# The base image ships packages that Alpine has already published a fix for, because Alpine
+# patches its packages more often than the image is rebuilt. Trivy fails the build on any
+# vulnerability that has a fix available, so install the patched versions here.
+RUN apk --no-cache upgrade
+
 # Remove the base image's pip for the same reason .venv is built without it: the runtime
 # installs nothing, and pip's SBOM of its vendored dependencies makes Trivy report advisories
 # against code the app never imports.

@@ -1,0 +1,81 @@
+# Opt-in overlay for inline citations: it **adds** a next-generation chat UI and a themes service
+# of its own beside the base pair, and registers the inline-citations demo in DIAL core.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.annotations.yml up -d
+#   (or `make annotations-up`)
+#
+# Plain `docker compose up` / `make infra-up` starts the base stack alone: no next-generation
+# service, no demo application in core, and nothing failing for the values this file needs.
+#
+# Adding rather than swapping is the point. Only the next-generation chat draws inline citation
+# pills, so one reply has to be openable in both generations to see what each does with it, and a
+# swap-style overlay cannot show that without a restart. The two chats authenticate as different
+# identities — the base one under the development key, this one as a real user — so they resolve
+# to different DIAL storage buckets and share no conversations. The demo's reply is the same
+# every time, so comparing the two needs no shared conversation.
+#
+# DIAL core needs no change beyond the demo's application entry: annotation attachment
+# auto-sharing entered core in 0.44.0 and docker-compose.yml already pins 0.45.1.
+#
+# The app's own host port is untouched by this overlay. The next-generation chat's
+# backend-for-frontend listens on container port 5000, which is published on host port 4207, so
+# nothing here binds host 5000 and the app can keep its default.
+
+services:
+
+  core:
+    environment:
+      # The base list from docker-compose.yml plus the demo's application entry. Compose replaces
+      # this value rather than merging it, so the three base entries are repeated here.
+      aidial.config.files: '["/opt/config/generated/models.json", "/opt/config/generated/application-schemas.json", "/opt/config/applications.json", "/opt/config/annotations-demo-applications.json"]'
+
+  themes-next:
+    # The next-generation chat redesigned the palette: a themes configuration built for one
+    # generation loads in the other without an error and applies almost nothing, so the two
+    # cannot share one themes service.
+    image: epam/ai-dial-chat-themes:0.19.1
+    ports:
+      - "3021:8080"
+    restart: unless-stopped
+
+  chat-next:
+    # The 1.0.0-rc.x line is the rewritten chat, under the same image name as the base 0.4x.x
+    # line. This image and the themes one above are the only pre-release tags this repository
+    # pins: no released chat renders the citation marker tags this feature emits.
+    image: epam/ai-dial-chat:1.0.0-rc.6
+    ports:
+      # Host port 4207, and not a preference: this chat needs an identity provider that accepts
+      # http://localhost:4207 as a redirect URI, and an OIDC client that does not know the port
+      # fails the login with "Invalid parameter: redirect_uri" before anything can be looked at.
+      # Change the port only together with the redirect URIs your provider registers. 4207 is
+      # what the client used to develop this feature accepts, and it leaves the base chat and
+      # the app's own default host port alone.
+      - "4207:5000"
+    depends_on:
+      - themes-next
+      - core
+    env_file:
+      # The identity-provider credentials — the four AUTH_KEYCLOAK_* values — come from .env, and
+      # none of them appears in this committed file. This chat has no equivalent of the base
+      # chat's AUTH_DISABLED, so it needs a real identity provider; a contributor without those
+      # values cannot start it, which is why these services are opt-in. See .env.example.
+      - .env
+    environment:
+      # env_file brings the whole .env in, including app variables the chat also reads under the
+      # same name but validates differently: it accepts only debug/log/warn/error for LOG_LEVEL,
+      # so the app's LOG_LEVEL=INFO makes it exit at startup. `environment` wins over `env_file`.
+      LOG_LEVEL: "log"
+      PORT: "5000"
+      API_PREFIX: "api"
+      CORS_ORIGIN: "http://localhost:4207"
+      DIAL_CORE_URL: "http://core:8080"
+      DIAL_API_KEY: ${DIAL_API_KEY:-dial_api_key}
+      # Renamed from the base chat's THEMES_CONFIG_HOST.
+      THEMES_CONFIG_URL: "http://themes-next:8080"
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      AUTH_CALLBACK_BASE_URL: "http://localhost:4207"
+      AUTH_POST_LOGOUT_REDIRECT_URI: "http://localhost:4207"
+      # Sanctioned by the upstream .env.template for local HTTP; also disables HSTS and the
+      # CSP upgrade-insecure-requests directive.
+      AUTH_COOKIE_SECURE: "false"
+    restart: unless-stopped
