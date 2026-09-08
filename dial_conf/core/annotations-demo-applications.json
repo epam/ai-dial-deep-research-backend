@@ -2,8 +2,10 @@
   "applications": {
     "deep-research-annotations-demo": {
       "displayName": "Deep Research - Inline Citations Demo",
-      "description": "Answers with a fixed report whose citations are converted into inline citation annotations.",
-      "endpoint": "http://host.docker.internal:5010/openai/deployments/deep-research-annotations-demo/chat/completions"
+      "description": "Answers with a fixed report citing the two PDFs you attach, their citations converted into inline citation annotations.",
+      "endpoint": "http://host.docker.internal:5010/openai/deployments/deep-research-annotations-demo/chat/completions",
+      "inputAttachmentTypes": ["application/pdf"],
+      "maxInputAttachments": 2
     }
   },
   "roles": {

@@ -20,6 +20,8 @@ dependencies = [
     "langchain-mcp-adapters>=0.1.0,<1.0.0",
     "langgraph>=1.1,<2",
     "pyyaml>=6.0.0,<7.0.0",
+    # Page count of the PDFs the annotations demo is called with. Pure Python, no native build.
+    "pypdf>=6.0.0,<7.0.0",
 ]
 
 [project.urls]

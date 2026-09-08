@@ -69,15 +69,13 @@ choosing the annotations workflow:
   chat — never by the base stack. A default stack therefore SHALL NOT show an application whose
   deployment nothing is serving.
 
-The demo's PDF fixtures SHALL be kept out of git, so the repository carries no sample binaries; the
-demo SHALL state plainly what a contributor must place where, and SHALL fail with that message
-rather than silently degrade when a fixture is missing.
+The demo SHALL ship no PDFs of its own, so the repository carries no sample binaries and no
+environment needs files placed on it. It SHALL cite what the caller attached, and SHALL state
+plainly what to attach when the attachments cannot carry the report.
 
-Reaching the demo through core is what the registration is for, and it is the only way to see the
-demo answer at all: the fixtures are copied with the per-request key, which only a call routed
-through core carries, so a direct call to the app's host port resolves no `appdata` folder and SHALL
-fail with that reason rather than answer with an incomplete demonstration. Inspecting the payload
-without core is the unit tests' job, over the shared citation code, not a direct call's.
+Reaching the demo through core is what the registration is for: the attachments are read with the
+per-request key, which only a call routed through core carries. Inspecting the payload without core
+is the unit tests' job, over the shared citation code, not a direct call's.
 
 #### Scenario: A default stack shows no demo application
 
@@ -91,11 +89,12 @@ without core is the unit tests' job, over the shared citation code, not a direct
 - **THEN** the demo deployment SHALL be callable from the next-generation chat, and its reply SHALL
   carry the citation marker tags and annotations
 
-#### Scenario: A missing fixture is reported, not ignored
+#### Scenario: Attachments that cannot carry the report are reported, not ignored
 
-- **WHEN** the demo is called with a fixture PDF absent from its expected location
-- **THEN** the turn SHALL fail with a message naming the missing file and where to put it, rather
-  than answering with an incomplete demonstration
+- **WHEN** the demo is called with fewer PDF attachments than the report cites, or with one whose
+  page count is below the deepest page the report cites
+- **THEN** the turn SHALL fail with a message saying how many PDFs to attach and how deep they must
+  be, naming the attachment at fault, rather than answering with an incomplete demonstration
 
 ## MODIFIED Requirements
 

@@ -382,13 +382,16 @@ def _convertible_citation(
     if not blocks.allows_pill(marker.start):
         return None
     url = document_urls.get(marker.document_id)
-    if url is None or not _is_pdf_url(url):
+    if url is None or not is_pdf_url(url):
         return None
     return _ConvertibleCitation(document_id=marker.document_id, page=marker.page, url=url)
 
 
-def _is_pdf_url(url: str) -> bool:
+def is_pdf_url(url: str) -> bool:
     """Whether the URL's own path names a PDF.
+
+    Public because a caller resolving URLs has to refuse one this would reject, rather than hand
+    over a URL whose citations then quietly keep their marker text.
 
     The file-sharing contract returns a URL and nothing else, so the extension is what the app
     has to go on. A PDF stored under another extension is treated as a non-PDF and keeps its

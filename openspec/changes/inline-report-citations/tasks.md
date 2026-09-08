@@ -59,12 +59,14 @@ change stays active rather than archived.
       as the playground channel is registered.
 - [x] 3.2 Rewrite `src/dial_deep_research/app/annotations_spike/` into the demo package: it reads no
       application properties, runs no research, and calls no model.
-- [x] 3.3 Load the PDF fixtures from their expected location, kept out of git. A missing fixture
-      fails the turn with a message naming the file and where to put it, rather than answering with
-      an incomplete demonstration.
-- [x] 3.4 Copy the fixtures into the caller's `appdata` folder with the per-request key, so a pill
-      opens for whoever is clicking. When no `appdata` folder resolves — an ordinary api-key rather
-      than a per-request one — fail with that reason.
+- [x] 3.3 Take the cited documents from the caller's PDF attachments on the last message, in the
+      order they arrive. Refuse an attachment that is not a PDF, carries no URL, or whose URL the
+      shared PDF-URL rule rejects. Too few usable attachments fails the turn with a message saying
+      what to attach, rather than answering with an incomplete demonstration.
+- [x] 3.4 Check each attachment holds every page the report cites, reading the deepest cited page
+      out of the report itself. A shallower attachment fails naming the file and its page count.
+      Point each annotation at the attachment's own URL, which the caller can already open, so the
+      demo copies nothing anywhere.
 - [x] 3.5 Write the fixed report. Every case introduced by a sentence saying what it is and what
       should appear: a lone citation in a paragraph; a run folding into one pill; one document cited
       in several separate places; a citation in a list item; two pages of one document; a citation
@@ -77,7 +79,8 @@ change stays active rather than archived.
       markers left as written, hyperlinks removed, duration. Counts only — no URL, file name,
       document title or id in any record.
 - [x] 3.8 Tests: the flag off registers nothing; the fixed report's ten cases produce the tags and
-      annotations the specs require; a missing fixture fails with its message.
+      annotations the specs require; too few attachments and a shallow one each fail with their
+      message.
 
 ## 4. Demo — local stack overlay
 
@@ -97,7 +100,7 @@ change stays active rather than archived.
 - [x] 4.6 Document in `.env.example` the identity-provider variables the next-generation chat needs
       and the demo's flag, and add the flag to the README's environment-variables table.
 - [x] 4.7 Document the demo for the audience that will run it: how to enable it, which deployment id
-      to call, which fixtures to place where, and what to look for in the reply.
+      to call, what to attach and how deep it must be, and what to look for in the reply.
 - [x] 4.8 Check the constraint D14 leaves open: whether the app must still be moved off host port
       5000 under this overlay now that the next-generation chat takes 4207. Record the answer where
       the constraint is stated, and drop the note if it no longer applies.
@@ -154,7 +157,7 @@ change stays active rather than archived.
 ## 7. Research turn — enabling it for a reader
 
 - [ ] 7.1 Name the file-sharing tool in one instance's `mcp_servers` entry and run a real research
-      turn, whose prose carries tables, bullets and emphasis unlike any fixture.
+      turn, whose prose carries tables, bullets and emphasis unlike the demo's report.
 - [ ] 7.2 Check the same things as 5.2 on that report, plus whether the annotations survive a
       conversation reload and a re-share — the design's open question, which changes what we can
       promise a client.

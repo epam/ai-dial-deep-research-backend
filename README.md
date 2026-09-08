@@ -73,7 +73,7 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 | `LOG_PAYLOADS` | `false` | No | Opt-in payload debugging — **local development only, never enable in a shared environment**. When `false`, logs carry no prompt/message content at any level, and the payload-capable `openai`/`httpx`/`httpcore` loggers are capped at `INFO` regardless of `LOG_LEVEL`. When `true`, the app logs assembled LLM requests at `DEBUG` (truncated) and the cap is lifted. | `true`, `false` |
 | `LOG_PAYLOADS_MAX_LENGTH` | `2000` | No | Per-string character cap for payload records when `LOG_PAYLOADS=true`; longer values are truncated with a marker. Inert otherwise. | positive integer |
 | `ENABLE_PLAYGROUND_CHANNEL` | `false` | No | Also register the `deep-research-playground` deployment: a tool-calling agent over the configured MCP servers, with no clarification or research flow, for testing MCP tools. | `true`, `false` |
-| `ENABLE_ANNOTATIONS_DEMO` | `false` | No | Also register the `deep-research-annotations-demo` deployment: a fixed report whose citations are converted into inline citation annotations by the same code a research turn uses, for checking how a client renders them. See [Inline citations demo](#inline-citations-demo). | `true`, `false` |
+| `ENABLE_ANNOTATIONS_DEMO` | `false` | No | Also register the `deep-research-annotations-demo` deployment: a fixed report citing the PDFs the caller attaches, its citations converted into inline citation annotations by the shared citation code, for checking how a client renders them. See [Inline citations demo](#inline-citations-demo). | `true`, `false` |
 | **DIAL Core** | | | | |
 | `DIAL_URL` | | ⚠️ Yes | Where the app finds DIAL Core. No built-in default. | |
 | `DIAL_APP_NAME` | `deep-research` | No | OTel service name for traces. | |
@@ -271,9 +271,13 @@ Notes:
 A second chat completion that answers with a **fixed report** demonstrating how the delivered
 report's citations become DIAL inline citation annotations: each paragraph of the reply shows one
 behaviour and says in its own text what should appear at that spot. It runs no research and calls
-no model, so it is the cheap way to check how a client renders a citation — and it converts its
-citations with the same code a research turn uses, so a behaviour seen here is the behaviour a
-real report gets.
+no model, so it is the cheap way to check how a client renders a citation.
+
+The report cites the PDFs you attach. Two of them become documents 1 and 2, in the order they
+arrive, and which file becomes which does not matter. A third document is cited with nothing
+attached behind it, which is the case where no URL resolves and the marker text stays as written.
+An attachment already lives in your own storage, so the annotations point straight at it and the
+demo copies nothing anywhere.
 
 **Only the next-generation chat UI draws inline citation pills**, and no released version carries
 the marker-tag rendering this feature emits yet. The overlay below adds such a chat beside the
@@ -282,39 +286,32 @@ base one so the same reply can be opened in both.
 Bring it up:
 
 ```sh
-# 1. Put the two fixture PDFs in place (kept out of git — each checkout supplies its own).
-#    Any PDF of at least 3 pages will do.
-#    data/annotations_demo/doc-101.pdf
-#    data/annotations_demo/doc-102.pdf
-
-# 2. Add the identity-provider values the next-generation chat needs to .env (see .env.example),
+# 1. Add the identity-provider values the next-generation chat needs to .env (see .env.example),
 #    then start infra with both chat generations and the demo registered in core.
 make annotations-up
 
-# 3. Run the app with the demo deployment enabled.
+# 2. Run the app with the demo deployment enabled.
 ENABLE_ANNOTATIONS_DEMO=true make app
 ```
 
 Then open the next-generation chat at <http://localhost:4207>, log in as a real user, and start a
 conversation with **Deep Research - Inline Citations Demo** (deployment id
-`deep-research-annotations-demo`). Any message gets the same reply.
+`deep-research-annotations-demo`). Attach two PDFs of at least three pages each and send any
+message. Attach anything else — one file, a shallower PDF, nothing at all — and the demo says
+what to attach rather than answering with half its cases working.
 
 What to look for in that reply:
 
 - a pill at every citation the text says should have one, and none where the text says the marker
-  stays as it was written (the table cell, the heading, and the document no URL resolved for);
+  stays as it was written (the table cell, the heading, and the document you attached nothing for);
 - one pill for the run of three adjacent citations, its popup carrying two sources — the source
   cited twice inside the run is listed once;
 - separate pills for the same document cited in two places, each opening its own page;
-- clicking a pill opens the cited PDF at the cited page;
+- clicking a pill opens the attached PDF at the cited page;
 - no raw `<cit …>` tag and no placeholder text anywhere in the text.
 
-The fixtures are copied into the **caller's** own DIAL storage with the per-request key, so the
-pills open for whoever is clicking rather than only for whoever added the files. That is also why
-the demo has to be reached through DIAL core: called directly on the app's port with an ordinary
-api-key, it resolves no `appdata` folder and fails with that reason instead of answering with an
-incomplete demonstration. Opening the same reply in the base chat at <http://localhost:3010>
-shows what a client that does not understand the marker tags does with it.
+Opening the same reply in the base chat at <http://localhost:3010> shows what a client that does
+not understand the marker tags does with it.
 
 ## Driving the app from the CLI
 

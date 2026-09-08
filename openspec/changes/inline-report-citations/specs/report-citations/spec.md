@@ -504,12 +504,22 @@ disagree about the mechanism. A behaviour that holds in the demo therefore holds
 which is what makes the demo evidence rather than an illustration.
 
 The one permitted difference is **where the file URLs come from**. A research turn resolves them
-through the configured file-sharing tool; the demo ships its own PDF fixtures, copies them into the
-caller's `appdata` folder itself, and feeds the resulting URLs into the shared code. A demo has to be
-self-contained and to produce the same reply on every environment, which a dependency on a live
-retrieval server and its document ids would prevent. The copy SHALL use the per-request key, exactly
-as production does, so the pills open for whoever is clicking rather than only for the developer who
-uploaded the fixtures.
+through the configured file-sharing tool; the demo cites the PDFs the caller attached to the last
+message and feeds their URLs into the shared code. A demo has to be self-contained and to produce
+the same reply on every environment, which a dependency on a live retrieval server and its document
+ids would prevent. An attachment already lives in the caller's own storage, so the demo SHALL copy
+nothing anywhere: the annotation points at the attachment's own URL, which the caller can open.
+
+The demo SHALL take one attachment per document it cites an attachment for, in the order they
+arrive, and which attachment becomes which document SHALL NOT change what any case demonstrates. It
+SHALL refuse an attachment that is not a PDF, one carrying no URL, and one whose URL the shared
+PDF-URL rule would reject — a URL that rule rejects draws no pill, so accepting it would show a
+broken case as if the mechanism were at fault.
+
+**It SHALL check that each attachment is deep enough** to hold every page the report cites, and the
+page it checks against SHALL be read out of the report rather than written down beside it, so a case
+citing a new page cannot disagree with the number checked. The report SHALL cite only the first few
+pages of a document, so an ordinary short PDF is usable.
 
 **Its fixed report SHALL exercise every behaviour of the mechanism**, so that a reader of the
 rendered reply can see each one and a client change that breaks one is caught:
@@ -560,10 +570,9 @@ call, and what to look for in the reply.
 
 #### Scenario: The demo's pills open for the person clicking them
 
-- **WHEN** a user other than the developer who added the fixtures calls the demo deployment and
-  clicks a pill
-- **THEN** the cited file SHALL open, because the fixture was copied into that caller's own `appdata`
-  folder with the per-request key
+- **WHEN** a caller attaches two PDFs, sends any message, and clicks a pill in the reply
+- **THEN** the cited file SHALL open at the cited page, because the annotation points at the
+  caller's own attachment rather than at a file in another bucket
 
 #### Scenario: Every mechanism behaviour is visible in one reply
 
