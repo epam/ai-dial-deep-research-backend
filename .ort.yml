@@ -155,6 +155,9 @@ resolutions:
     - message: ".*PyPI::fsspec:2026\\..*"
       reason: "CANT_FIX_EXCEPTION"
       comment: "BSD 3-Clause License: https://github.com/fsspec/filesystem_spec/blob/master/LICENSE"
+    - message: ".*PyPI::pypdf:6\\..*"
+      reason: "CANT_FIX_EXCEPTION"
+      comment: "BSD 3-Clause License: https://github.com/py-pdf/pypdf/blob/main/LICENSE"
 
     # Auth / crypto
     - message: ".*PyPI::pyjwt:2\\..*"
