@@ -35,13 +35,13 @@ copy and returns the resulting URL, so the producer side can finally be built ag
   open, returned by the file-sharing tool, and that file is a PDF — ours, and the reason a dataset
   never qualifies, since a dataset is not a file. PDF-only because the client opens a citation for
   exactly that content type and the cited page is a PDF page; anything else keeps its text marker
-  rather than getting a pill that opens nothing. Second, the marker stands where the client draws a pill: inside a paragraph
-  or a list item, in ordinary text rather than in a table cell, a heading of either Markdown form, a
-  blockquote, a fenced or indented code block, or inside emphasis or a code span — the client's
-  renderer, which no prompt or setting can talk out of it. A citation failing either one keeps its marker text, so the failure mode is a missing pill
-  and never a lost citation. Both intended readers — DIAL Chat and the DIAL overlay, which embeds
-  the chat application in an iframe rather than reimplementing it — run the same renderer, so the
-  second condition is one rule rather than one per reader.
+  rather than getting a pill that opens nothing. Where in the Markdown the marker stands is not a
+  condition: the client draws a pill wherever its renderer parses the marker tag — a paragraph, a
+  list item, a table cell, a heading, a blockquote, an emphasis span — so the step classifies no
+  block. A citation failing the condition keeps its marker text, so the failure mode is a missing
+  pill and never a lost citation. Both intended readers — DIAL Chat and the DIAL overlay, which
+  embeds the chat application in an iframe rather than reimplementing it — run the same renderer, so
+  this is one rule rather than one per reader.
 
 - **The report may cite nothing but the retrieved sources, so it carries no hyperlinks.** A
   Markdown link is a citation of something the research never retrieved, and today nothing stops the
@@ -106,7 +106,8 @@ copy and returns the resulting URL, so the producer side can finally be built ag
   environment flag is set, answers with a fixed report that exercises every behaviour of the
   mechanism: a lone citation, a run that folds into one pill, one document cited in several places,
   a citation in a list item, two pages of one document, citations in a table cell and a heading that
-  keep their text, a citation whose document has no URL, a Markdown link delivered as its label, and
+  render pills there too, a citation whose document has no URL, a Markdown link delivered as its
+  label, and
   a bare URL deleted. It builds its annotations with **the same code** a research turn uses, so a
   behaviour shown there holds in a real report; the only difference is that it ships PDF fixtures and
   copies them into the caller's `appdata` folder itself, since a demo must be self-contained and
@@ -121,7 +122,7 @@ copy and returns the resulting URL, so the producer side can finally be built ag
   conversion stays configuration-gated.
 
 - **Not in this change.** Dataset citations: a dataset is not a file, so there is nothing to copy
-  into the reader's bucket and nothing for the document viewer to open, which is the first condition
+  into the reader's bucket and nothing for the document viewer to open, which is the URL condition
   failing rather than a limit of the annotation model. What a dataset pill should link to, and where
   such a link should open, is undecided, so `[dataset <id>]` markers keep their plain text as
   specified behavior rather than as an omission. Also deferred: a References section built by code

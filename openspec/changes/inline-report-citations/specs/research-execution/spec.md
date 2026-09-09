@@ -44,6 +44,13 @@ leaves every other character alone (see the **report-citations** capability). Th
 the review settled on and the text the user reads; nothing else may alter a settled draft, and the
 annotations it emits SHALL be the only other thing the app adds to the message alongside that text.
 
+**The report SHALL be delivered as assistant message content, never as an attachment.** A citation
+pill is drawn only inside the assistant message bubble, where the client injects it while rendering
+that message's Markdown; an attachment opened in the client's side canvas is rendered by a path that
+resolves no annotations. A report moved into a `text/markdown` attachment would therefore show as
+plain text with no pill anywhere, and the annotations, which name marker tags standing in the
+message text, would have nothing to anchor to.
+
 The delivered content therefore carries markup a reader's client is expected to resolve: a client
 that understands the marker tags renders a pill for each, and one that does not either drops a tag
 or shows it. A converted citation's readable text lives in its annotation rather than in the report

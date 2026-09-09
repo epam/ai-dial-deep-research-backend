@@ -17,11 +17,10 @@ change stays active rather than archived.
       keyword matched case-insensitively. A page range, a non-numeric id, a page-less document
       citation and a nested bracket are not citations and keep their text. Do not reuse
       `report_length.py`'s `_CITATION_RE` — it errs the other way on purpose.
-- [x] 1.3 Classify the Markdown block each marker sits in, over a line scan that tracks fenced-code
-      state: paragraph and list item are eligible; table row, ATX heading, setext heading (a text
-      line underlined with `=` or `-`), blockquote, fenced code block, four-space-indented code
-      block are not; nor is a marker inside an inline code span, detected by an odd number of
-      backticks before it on its line.
+- [x] 1.3 Convert a marker wherever it stands, classifying no Markdown block: a table cell, a
+      heading, a blockquote and an emphasis span each carry a pill, because the client's `cit`
+      component override is keyed by tag name alone. A marker inside code delivers a tag the reader
+      sees as text, and that is accepted rather than detected.
 - [x] 1.4 Detect runs of adjacent markers (separated only by spaces, commas or semicolons) and fold
       each run into one tag: separators inside the run go with the markers they joined, surviving
       unconvertible markers follow the tag single-spaced in their original order, and two markers
@@ -41,9 +40,9 @@ change stays active rather than archived.
       `pdf_bbox` with the cited page and a zero-size box, and no `body.quote`.
 - [x] 1.8 Order the two alterations: hyperlink repair first, then citation conversion over the text
       it produced, each failing independently of the other.
-- [x] 1.9 Unit tests for 1.2 to 1.8, including the marker grammar's rejections, every ineligible
-      block, run folding with a mixed run, the repeated same-page pair, each hyperlink form, and the
-      payload's field-by-field shape.
+- [x] 1.9 Unit tests for 1.2 to 1.8, including the marker grammar's rejections, each Markdown block
+      a citation can stand in, run folding with a mixed run, the repeated same-page pair, each
+      hyperlink form, and the payload's field-by-field shape.
 
 ## 2. Demo — DIAL annotations emission
 
@@ -70,7 +69,7 @@ change stays active rather than archived.
 - [x] 3.5 Write the fixed report. Every case introduced by a sentence saying what it is and what
       should appear: a lone citation in a paragraph; a run folding into one pill; one document cited
       in several separate places; a citation in a list item; two pages of one document; a citation
-      in a table cell and one in a heading, both keeping their marker text; a citation whose
+      in a table cell and one in a heading, both rendering a pill there; a citation whose
       document has no URL; a Markdown link delivered as its label; a bare URL deleted. No dataset
       citation, no research prose, and no Markdown beyond what a case needs to exist.
 - [x] 3.6 Build the reply through the group-1 and group-2 code — the same parsing, folding, link
@@ -86,9 +85,9 @@ change stays active rather than archived.
 
 - [x] 4.1 Rewrite `docker-compose.spike.yml` as the annotations overlay: **add** a next-generation
       chat and a themes service of its own beside the base pair rather than replacing them, and
-      rename the file accordingly. Pin both images (a `1.0.0-rc.x` `epam/ai-dial-chat` and the
-      `epam/ai-dial-chat-themes` tag that line expects) and record at the pin why the repository
-      carries a pre-release line here.
+      rename the file accordingly. Pin the themes image to the `epam/ai-dial-chat-themes` tag
+      that chat line expects, run the chat on the moving `epam/ai-dial-chat:development` tag, and
+      record at that tag why this one service is not pinned to a version.
 - [x] 4.2 Serve the next-generation chat on host port 4207, the one port the OIDC client accepts
       that the base chat and the app's default do not already hold, and note that constraint in the
       file.
@@ -109,15 +108,20 @@ change stays active rather than archived.
 
 ## 5. Demo — verify it, then ship it
 
-- [ ] 5.1 Bring up the overlay against a chat build carrying the marker-tag rendering and the
+- [x] 5.1 Bring up the overlay against a chat build carrying the marker-tag rendering and the
       `data-id` attribute, log in as a real end user rather than with the development key, and call
-      the demo deployment.
-- [ ] 5.2 Check each case renders as its sentence says: a pill at every convertible citation, none
+      the demo deployment. Done on 2026-09-09 against `epam/ai-dial-chat:development`.
+- [x] 5.2 Check each case renders as its sentence says: a pill at every convertible citation, none
       where a citation was left as text, one pill for the run, separate pills for the repeated
-      document, each opening its own page, and no raw tag or placeholder text anywhere.
-- [ ] 5.3 Call the demo as a second user and confirm the pills open their files for that user too.
-- [ ] 5.4 Open the same reply in the base chat and confirm what a client that does not understand
-      the tags shows.
+      document, each opening its own page, and no raw tag or placeholder text anywhere. Checked on
+      2026-09-09.
+- [x] 5.3 Confirm the annotations survive a conversation reload: the pills come back after the
+      conversation is reopened, so the client persists the `custom_content.annotations` this app
+      writes and not only the raw wire form. Checked on 2026-09-09.
+- [ ] 5.4 Open the same reply in the DIAL overlay — the portal page's embedded panel, the second
+      intended reader — and check what nothing has exercised yet: whether the pill is usable at that
+      width, how the citation canvas renders inside a panel that is itself inside an iframe, and
+      whether the canvas closing the sources and history panels is tolerable there.
 
 ## 6. Research turn — wiring
 
@@ -159,5 +163,5 @@ change stays active rather than archived.
 - [ ] 7.1 Name the file-sharing tool in one instance's `mcp_servers` entry and run a real research
       turn, whose prose carries tables, bullets and emphasis unlike the demo's report.
 - [ ] 7.2 Check the same things as 5.2 on that report, plus whether the annotations survive a
-      conversation reload and a re-share — the design's open question, which changes what we can
-      promise a client.
+      re-share — the half of the design's open question that a reload has now answered, and the one
+      that changes what we can promise a client.

@@ -39,10 +39,14 @@ services:
     restart: unless-stopped
 
   chat-next:
-    # The 1.0.0-rc.x line is the rewritten chat, under the same image name as the base 0.4x.x
-    # line. This image and the themes one above are the only pre-release tags this repository
-    # pins: no released chat renders the citation marker tags this feature emits.
-    image: epam/ai-dial-chat:1.0.0-rc.6
+    # The rewritten chat, under the same image name as the base 0.4x.x line. This is the one
+    # service in the repository that runs a moving tag rather than a version, because no released
+    # chat renders the citation marker tags this feature emits: the rendering merged into the
+    # chat's development branch on 2026-09-09, a day after its newest release (1.0.14) was built.
+    # Move this to a 1.0.x tag as soon as one carries it. Until then `docker compose pull` can
+    # change what this service runs, so a rendering that differs from a colleague's is worth
+    # checking against a fresh pull before it is read as a bug in the demo.
+    image: epam/ai-dial-chat:development
     ports:
       # Host port 4207, and not a preference: this chat needs an identity provider that accepts
       # http://localhost:4207 as a redirect URI, and an OIDC client that does not know the port

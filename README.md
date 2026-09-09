@@ -302,8 +302,9 @@ what to attach rather than answering with half its cases working.
 
 What to look for in that reply:
 
-- a pill at every citation the text says should have one, and none where the text says the marker
-  stays as it was written (the table cell, the heading, and the document you attached nothing for);
+- a pill at every citation the text says should have one, including the one in the table cell and
+  the one in the heading, and none where the text says the marker stays as it was written (the
+  document you attached nothing for);
 - one pill for the run of three adjacent citations, its popup carrying two sources — the source
   cited twice inside the run is listed once;
 - separate pills for the same document cited in two places, each opening its own page;

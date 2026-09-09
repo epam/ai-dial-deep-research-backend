@@ -64,7 +64,7 @@ are covered by the delivery-failure requirement below and by the **research-exec
   SHALL be identical to each other, SHALL carry the marker tags of the converted citations, and
   SHALL be the post-processed text rather than the draft the review judged
 
-### Requirement: A citation is converted only when it has a URL and a drawable position
+### Requirement: A citation is converted when the document it names has a PDF URL
 
 The report is written entirely in the inline citation forms the **research-execution** capability
 defines: `[doc <id>, page <ix>]` for a document and `[dataset <id>]` for a dataset.
@@ -79,42 +79,40 @@ citation back into the defined form is the report review, whose criteria include
 (see **report-composition**).
 
 Once the hyperlinks are gone, every remaining marker of those forms is a citation, and the step
-converts one
-— replacing its marker with a marker tag and emitting one annotation for it — only when **both** of
-the following hold. They are independent: either can fail while the other holds, and each is decided
-by something different.
+converts one — replacing its marker with a marker tag and emitting one annotation for it — on one
+condition: **the cited document has a URL the reader can open, and that file is a PDF.**
 
-1. **The cited document has a URL the reader can open, and that file is a PDF.** The file-sharing
-   tool must have returned a DIAL file URL for that document id. It returns none when no configured
-   server declares such a tool, when the call fails, or when the response omits that id. A dataset
-   citation never has one, because a dataset is not a file (see the dataset requirement below).
+The file-sharing tool must have returned a DIAL file URL for that document id. It returns none when
+no configured server declares such a tool, when the call fails, or when the response omits that id.
+A dataset citation never has one, because a dataset is not a file (see the dataset requirement
+below).
 
-   The file must also be a PDF, because that is the only kind the client opens from a citation and
-   because the page a citation names is expressed as a PDF page. The contract returns a URL and
-   nothing else, so the step SHALL decide this from the URL's own path, treating a path ending in
-   `.pdf` as a PDF and anything else as not one. A PDF stored under a name without that extension is
-   therefore treated as a non-PDF and keeps its marker — the conservative direction, since the
-   alternative is a pill that opens nothing.
-2. **The marker stands where the client can draw a pill.** The client draws a pill for a marker tag
-   only inside a Markdown paragraph or a list item, and only where the tag stands in ordinary text.
-   It does not draw one in a table cell, a heading of either Markdown form — an ATX heading (`#`) or
-   a setext heading, whose text line is underlined with `=` or `-` — a blockquote, a fenced code
-   block, or an indented (four-space) code block, nor inside emphasis or an inline code span; there
-   it shows the reader the tag's placeholder text instead. This is how the client behaves, not a
-   preference: no prompt and no configuration changes it. A construct this list does not name is
-   treated as ineligible when the step cannot tell, since a missing pill costs a citation's link and
-   a wrong one costs the reader visible debris.
+The file must also be a PDF, because that is the only kind the client opens from a citation and
+because the page a citation names is expressed as a PDF page. The contract returns a URL and nothing
+else, so the step SHALL decide this from the URL's own path, treating a path ending in `.pdf` as a
+PDF and anything else as not one. A PDF stored under a name without that extension is therefore
+treated as a non-PDF and keeps its marker — the conservative direction, since the alternative is a
+pill that opens nothing.
 
-A citation that fails either one SHALL keep its marker text exactly as the report writer wrote it,
-and SHALL produce no annotation. The step SHALL NOT convert a citation partially — a converted
+**Where the marker stands is not a condition.** The client parses a marker tag wherever its
+Markdown renderer parses raw inline HTML and draws the pill there, so the step SHALL convert a
+citation in a table cell, a heading of either Markdown form, a blockquote and an emphasis span
+exactly as it converts one in a paragraph or a list item, and SHALL classify no Markdown block. The
+one place a tag does not become a pill is code — a fenced block, an indented block or an inline code
+span — where Markdown parses no raw HTML and the reader sees the tag as text; a citation there is
+converted like any other, because a report cites its sources in prose and tables rather than inside
+code, and a rule that read the Markdown to find those places would cost more than the case is worth.
+
+A citation that fails the condition SHALL keep its marker text exactly as the report writer wrote
+it, and SHALL produce no annotation. The step SHALL NOT convert a citation partially — a converted
 citation has both its tag and its annotation, or neither.
 
 The failure mode is therefore always a **missing pill**, never a lost or corrupted citation: a
 citation the step declines to convert stays as readable as it is today.
 
 Both intended readers — DIAL Chat and the DIAL overlay — run the same renderer, the overlay
-embedding the chat application rather than reimplementing it. Condition 2 is therefore one rule, not
-one per reader, and the step SHALL NOT be configurable per consumer.
+embedding the chat application rather than reimplementing it. What the client renders is therefore
+one behaviour, not one per reader, and the step SHALL NOT be configurable per consumer.
 
 #### Scenario: A cited sentence in a paragraph is converted
 
@@ -128,18 +126,17 @@ one per reader, and the step SHALL NOT be configurable per consumer.
 - **WHEN** a list item of the settled draft carries a document citation and a URL resolves for it
 - **THEN** that citation SHALL be converted exactly as in a paragraph
 
-#### Scenario: A resolved document cited inside a table keeps its text
+#### Scenario: A document cited inside a table is converted
 
-- **WHEN** a table row of the settled draft carries `| 2.4% | [doc 446, page 12] |` and a URL did
-  resolve for document 446
-- **THEN** the second condition fails, the marker SHALL remain in the delivered text unchanged, and
-  no annotation SHALL be emitted for it
+- **WHEN** a table row of the settled draft carries `| 2.4% | [doc 446, page 12] |` and a URL
+  resolves for document 446
+- **THEN** that citation SHALL be converted exactly as in a paragraph
 
-#### Scenario: A citation in a heading, a blockquote or a code block keeps its text
+#### Scenario: A citation in a heading or a blockquote is converted
 
-- **WHEN** a document citation appears in a `##`/`###` heading, a setext heading's text line, a
-  blockquote, a fenced code block, or a four-space-indented code block
-- **THEN** its marker SHALL remain in the delivered text and it SHALL produce no annotation
+- **WHEN** a document citation appears in a `##`/`###` heading, a setext heading's text line or a
+  blockquote, and a URL resolves for its document
+- **THEN** each SHALL be converted exactly as in a paragraph
 
 #### Scenario: A malformed marker is not a citation
 
@@ -150,17 +147,15 @@ one per reader, and the step SHALL NOT be configurable per consumer.
 
 #### Scenario: A cited document that is not a PDF keeps its text
 
-- **WHEN** a citation sits in a paragraph and the file-sharing tool returned a URL whose path does
-  not end in `.pdf`
-- **THEN** the first condition fails, the marker SHALL remain in the delivered text, and no
-  annotation SHALL be emitted for it
+- **WHEN** the file-sharing tool returned a URL whose path does not end in `.pdf`
+- **THEN** the condition fails, the marker SHALL remain in the delivered text, and no annotation
+  SHALL be emitted for it
 
-#### Scenario: An unresolved document cited in a paragraph keeps its text
+#### Scenario: An unresolved document's citation keeps its text
 
-- **WHEN** a citation sits in a paragraph, so the second condition holds, but the file-sharing tool
-  returned no URL for its document
-- **THEN** the first condition fails, its marker SHALL remain in the delivered text, and no
-  annotation SHALL be emitted for it
+- **WHEN** the file-sharing tool returned no URL for a cited document
+- **THEN** the condition fails, its marker SHALL remain in the delivered text, and no annotation
+  SHALL be emitted for it
 
 #### Scenario: A link leaves only its label
 
@@ -192,9 +187,9 @@ treated as one **run** and converted together:
 - Within a run, two markers naming the same document **and** the same page SHALL produce one
   annotation, not two: they are one source cited once.
 - A run MAY hold both convertible and unconvertible citations, and each is still all-or-nothing on
-  its own: the citations satisfying both conditions fold into one tag placed where the run's
-  first marker stood, and each citation failing a condition keeps its own marker text, in its
-  original order, immediately after that tag.
+  its own: the citations satisfying the condition fold into one tag placed where the run's first
+  marker stood, and each citation failing it keeps its own marker text, in its original order,
+  immediately after that tag.
 - The separators **inside** a run — the spaces, commas or semicolons standing between its markers —
   SHALL be removed with the markers they joined. What the run leaves behind is the one tag followed
   by each surviving marker text in its original order, single-spaced, so a fold never delivers a
@@ -234,7 +229,7 @@ treated as one **run** and converted together:
 `[dataset <id>]` markers SHALL be left in the delivered text exactly as written, and no annotation
 SHALL be emitted for them. This is specified behavior, not an omission.
 
-The reason is the first condition: a dataset is not a file, so there is nothing to copy into the reader's
+The reason is the condition: a dataset is not a file, so there is nothing to copy into the reader's
 bucket and nothing for the document viewer to open, and no file-sharing tool call is made on a
 dataset's behalf. What a dataset pill should link to, and where such a link should open, is undecided
 and out of scope for this change. A report that cites datasets therefore delivers those citations as
@@ -249,7 +244,7 @@ text alongside its converted document citations.
 #### Scenario: Mixed citations in one report
 
 - **WHEN** the settled draft cites both documents and datasets
-- **THEN** the document citations SHALL be converted where both conditions hold, and every
+- **THEN** the document citations SHALL be converted where the condition holds, and every
   dataset citation SHALL remain as text
 
 #### Scenario: A dataset citation adjacent to a document citation
@@ -313,11 +308,9 @@ below prescribes rather than degrade the report.
   the same document across turns SHALL be safe and SHALL NOT require the document to be transferred
   again.
 
-The app SHALL call the tool **once per turn**, with the distinct document ids of the citations that
-a URL is all they still need — those already satisfying the position condition, since a citation
-that cannot carry a pill needs no copy made for it. So: not once per citation, not for a document
-retrieved during research but never cited in the delivered report, and not for a document cited only
-where no pill can be drawn.
+The app SHALL call the tool **once per turn**, with the distinct document ids the delivered report
+cites. So: not once per citation, and not for a document retrieved during research but never cited
+in the delivered report.
 
 A server with no file-sharing tool configured SHALL contribute no annotations, and its documents'
 citations SHALL keep their marker text.
@@ -332,8 +325,8 @@ server in deployment mode.
 
 #### Scenario: One call carries every cited document id
 
-- **WHEN** the settled draft cites nine passages drawn from three documents, each cited at least
-  once in a paragraph or a list item, and research read twenty more documents it did not cite
+- **WHEN** the settled draft cites nine passages drawn from three documents, and research read
+  twenty more documents it did not cite
 - **THEN** the app SHALL make exactly one file-sharing tool call, passing the three cited document
   ids and no others
 
@@ -416,7 +409,7 @@ behind one tag contributes three entries that share that tag's id — carrying:
   it surviving to a non-streaming caller.
 - **`target.selector`** — type `html_tag`, naming the tag (`cit`) and, in its `id` field, the value
   of that tag's `data-id` attribute. The two SHALL match exactly; an annotation naming a value no tag
-  carries renders nothing, and a tag no annotation names is removed from the text by the client. The
+  carries renders nothing, and a tag no annotation names is shown to the reader as text. The
   selector's field is `id` while the tag's attribute is `data-id` — an asymmetry of the client's
   contract, not a choice open to this app.
 - **`body.title`** — the label of this citation's entry inside the pill's popup, reading
@@ -447,6 +440,10 @@ quote reserves blank space in the popup.
 The array SHALL be emitted **once**, after the report text has been appended to the choice, as a
 single streamed delta on the same choice while it is still open. Annotations SHALL NOT be emitted
 through the attachment API, which assigns its own indices and would renumber them.
+
+Emitting after the content costs no pill. The client hides a supported marker tag while the message
+is still streaming and resolves no annotations until the message completes, so every pill appears
+when the message finishes rather than as the report streams.
 
 #### Scenario: A converted citation's two halves agree
 
@@ -529,8 +526,8 @@ rendered reply can see each one and a client change that breaks one is caught:
 - the same document cited in several separate places, each rendering its own pill;
 - a citation in a list item;
 - two pages of one document, so page navigation can be compared between pills;
-- a citation in a table cell, which keeps its marker text;
-- a citation in a heading, which keeps its marker text;
+- a citation in a table cell, which renders a pill there as it does in prose;
+- a citation in a heading, which renders a pill there as it does in prose;
 - a citation whose document has no URL, which keeps its marker text;
 - a Markdown link, which is delivered as its label alone;
 - a bare URL, which is deleted from the delivered text.
@@ -540,9 +537,8 @@ would invite the reader to judge behaviour that is not yet designed.
 
 **The demo's reply SHALL consist of the case descriptions and nothing else.** Each demonstrated
 behaviour SHALL be introduced by a sentence saying what it is and what should appear — in the shape
-of "Here is a citation inside a table cell: it keeps its marker text and shows no pill" — so a reader
-can look at that spot and tell a correct rendering from a broken one without reading this
-specification. The exact wording is the implementation's, but no case may be left for the reader to
+of "Here is a citation in a list item: it becomes a pill, as in a paragraph" — so a reader can look
+at that spot and tell a correct rendering from a broken one without reading this specification. The exact wording is the implementation's, but no case may be left for the reader to
 infer from position.
 
 Beyond those descriptions the reply SHALL carry only the Markdown a case needs in order to exist at
@@ -585,8 +581,8 @@ call, and what to look for in the reply.
 
 - **WHEN** someone outside this project opens the demo's reply and looks at the citation inside a
   table cell
-- **THEN** the text at that spot SHALL have told them that this citation keeps its marker text and
-  shows no pill, so they can tell the intended rendering from a broken one on the spot
+- **THEN** the text at that spot SHALL have told them what to expect there, so they can tell the
+  intended rendering from a broken one on the spot
 
 ### Requirement: A citation failure costs the citations, never the report
 
@@ -633,8 +629,8 @@ alterations fail independently, and each keeps whatever the earlier one finished
 - The **conversion** raising — marker parsing, block classification, tag replacement, payload
   building — SHALL deliver the text the link pass produced, so the hyperlink guarantee still holds,
   with no tag and no annotation.
-- The **emission** failing after the text was appended leaves that text's tags unclaimed: a client
-  that understands them drops them, one that does not shows them. The step SHALL NOT re-send the
+- The **emission** failing after the text was appended leaves that text's tags unclaimed, and the
+  client shows an unclaimed tag to the reader as text. The step SHALL NOT re-send the
   array and SHALL NOT edit the appended content, which DIAL's append-only content makes impossible.
 
 Each of these SHALL be logged once as a WARNING naming the failure kind, and none SHALL fail the

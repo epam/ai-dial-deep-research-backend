@@ -111,9 +111,9 @@ async def test_the_reply_carries_the_report_and_its_annotations(
     await _reply(choice)
 
     annotations = _annotations(choice)
-    assert choice.content.count(f"<{CITATION_TAG_NAME} ") == 6
-    assert len(annotations) == 7
-    assert [annotation["index"] for annotation in annotations] == list(range(7))
+    assert choice.content.count(f"<{CITATION_TAG_NAME} ") == 8
+    assert len(annotations) == 9
+    assert [annotation["index"] for annotation in annotations] == list(range(9))
 
 
 async def test_every_annotation_points_at_an_attachment_and_a_tag_the_text_carries(
@@ -143,22 +143,31 @@ async def test_the_run_folds_into_one_tag_carrying_two_sources(
         )
     # One tag carries the run's two distinct sources; the source repeated inside the run is
     # counted once. Every other tag carries exactly one.
-    assert sorted(len(titles) for titles in per_tag.values()) == [1, 1, 1, 1, 1, 2]
+    assert sorted(len(titles) for titles in per_tag.values()) == [1, 1, 1, 1, 1, 1, 1, 2]
 
 
-async def test_the_cases_that_keep_their_marker_text_do(downloads: dict[str, bytes]) -> None:
+async def test_the_table_cell_and_the_heading_carry_a_tag_like_any_other_case(
+    downloads: dict[str, bytes],
+) -> None:
     choice = ChoiceSpy()
 
     await _reply(choice)
 
     lines = choice.content.splitlines()
-    # The table cell and the heading both name an attached document, and both keep the marker
-    # because the client draws no pill there.
     table_row = next(line for line in lines if line.startswith("| A citation in a table cell"))
     heading = next(line for line in lines if line.startswith("### "))
-    assert "[doc 1, page 1]" in table_row
-    assert "[doc 1, page 1]" in heading
-    # The document nothing was attached for keeps its marker where it stands.
+    for line in (table_row, heading):
+        assert f"<{CITATION_TAG_NAME} " in line
+        assert "[doc 1, page 1]" not in line
+
+
+async def test_the_document_nothing_was_attached_for_keeps_its_marker(
+    downloads: dict[str, bytes],
+) -> None:
+    choice = ChoiceSpy()
+
+    await _reply(choice)
+
     assert "[doc 3, page 1]" in choice.content
 
 
@@ -199,8 +208,8 @@ def test_the_demo_reuses_the_shared_conversion_rather_than_its_own() -> None:
     }
     converted = convert_citations(without_links.text, document_urls=urls)
 
-    assert len(converted.annotations) == 7
-    assert converted.markers_left == 3
+    assert len(converted.annotations) == 9
+    assert converted.markers_left == 1
     assert without_links.removed == 2
 
 
