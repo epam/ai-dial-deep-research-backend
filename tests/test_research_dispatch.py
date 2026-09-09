@@ -19,6 +19,7 @@ from langgraph.types import ValuesStreamPart
 from pytest import MonkeyPatch
 
 from dial_deep_research.app.history import Plan, PrepState
+from dial_deep_research.app.mcp_tools import LoadedMcpTools
 from dial_deep_research.app.research import runner as runner_module
 from dial_deep_research.app.research.nodes import ReportBudgetExhausted
 from dial_deep_research.app.research.runner import ResearchRunner
@@ -34,31 +35,36 @@ def _make_runner(*, content_already_streamed: bool = False) -> tuple[ResearchRun
     return runner, choice
 
 
-def test_settled_report_is_appended_once_with_no_separator() -> None:
+async def _deliver(runner: ResearchRunner) -> None:
+    """Deliver the settled report the way `run` does, with inline citations switched off."""
+    await runner._deliver_report(file_sharing_tool=None, configured_tool_name=None)
+
+
+async def test_settled_report_is_appended_once_with_no_separator() -> None:
     """Nothing streams: the report reaches the choice in one append, once the loop settles."""
     runner, choice = _make_runner()
     runner._handle_part(_values([HumanMessage(content="q")], report="draft one"))
     runner._handle_part(_values([HumanMessage(content="q")], report="draft two"))
-    runner._deliver_report()
+    await _deliver(runner)
 
     # Only the draft the loop settled on, and no leading blank line: preparation streamed nothing.
     assert choice.content == "draft two"
 
 
-def test_report_is_separated_when_preparation_streamed_text() -> None:
+async def test_report_is_separated_when_preparation_streamed_text() -> None:
     runner, choice = _make_runner(content_already_streamed=True)
     runner._handle_part(_values([HumanMessage(content="q")], report="the report"))
-    runner._deliver_report()
+    await _deliver(runner)
 
     assert choice.content == "\n\nthe report"
 
 
-def test_delivered_report_is_appended_to_the_persisted_slice() -> None:
+async def test_delivered_report_is_appended_to_the_persisted_slice() -> None:
     """The graph state carries no draft AIMessage, so the runner builds the assistant message."""
     runner, _ = _make_runner()
     transcript = [HumanMessage(content="q"), AIMessage(content="tool round")]
     runner._handle_part(_values(transcript, report="the report"))
-    runner._deliver_report()
+    await _deliver(runner)
 
     assert runner._messages[:-1] == transcript
     assert isinstance(runner._messages[-1], AIMessage)
@@ -162,7 +168,14 @@ def _properties(**overrides: Any) -> ApplicationProperties:
                 "agent_name": "Test Deep Research",
                 "data_sources_descriptions": "## report\n\nA report.",
             },
-            "mcp_servers": [{"server_name": "rag", "deployment_id": "generic-rag-mcp"}],
+            "mcp_servers": [
+                {
+                    "server_name": "rag",
+                    "server_type": "generic_rag",
+                    "deployment_id": "generic-rag-mcp",
+                    "file_sharing_tool": "get_citation_url",
+                }
+            ],
             **overrides,
         }
     )
@@ -187,8 +200,8 @@ class _GraphStub:
 
 
 def _stub_graph_build(monkeypatch: MonkeyPatch, captured: dict[str, Any]) -> None:
-    async def _no_tools(**_kwargs: Any) -> list[Any]:
-        return []
+    async def _no_tools(**_kwargs: Any) -> LoadedMcpTools:
+        return LoadedMcpTools(agent_tools=[], file_sharing_tool=None)
 
     monkeypatch.setattr(runner_module, "load_mcp_tools", _no_tools)
     monkeypatch.setattr(runner_module, "build_research_graph", lambda **_kw: _GraphStub(captured))

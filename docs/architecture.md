@@ -106,6 +106,8 @@ retracted, so such a sentence can still appear ahead of the report.
 Specs: [research-execution](../openspec/specs/research-execution/spec.md),
 [report-composition](../openspec/specs/report-composition/spec.md) (what the report must look like
 and the loop that enforces it),
+[report-citations](../openspec/specs/report-citations/spec.md) (what the delivery step does to the
+settled draft),
 [dial-agent-with-mcp](../openspec/specs/dial-agent-with-mcp/spec.md) (the research-agent node, MCP
 tool loading, stages, error delivery).
 Code: `app/research/`.
@@ -181,7 +183,28 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   revised and DIAL content is append-only, so no rejected draft ever reaches the user. The same node
   writes the first draft and every revision, branching on whether a draft already exists.
   Research-agent, research-review and report-review output never become assistant content;
-  research-agent tool calls surface as timed DIAL stages.
+  research-agent tool calls surface as timed DIAL stages. What reaches the user is that draft after
+  the delivery step below, the one permitted transformation between the two.
+- **Report delivery** (`ResearchRunner._deliver_report`, `app/research/citations.py`,
+  `app/research/file_sharing.py`): the citation step, run once per turn between the graph finishing
+  and the report being appended. It makes two alterations to the settled draft, in this order:
+  every hyperlink form goes (a link keeps its label, an image is dropped whole, an autolink or bare
+  URL is deleted), then each convertible citation marker is replaced by an empty marker tag,
+  `<cit data-id="…"></cit>`. A citation is convertible when the file-sharing tool returned a PDF URL
+  for the document it names, so an unresolved or non-PDF document keeps its `[doc <id>, page <ix>]`
+  text and a `[dataset <id>]` marker always does. Markers standing next to each other, separated
+  only by spaces, commas or semicolons, share one tag and render as one pill. The post-processed
+  text is what is appended **and** what is persisted, so a later turn reads back what the user saw.
+  One `custom_content.annotations` array follows the content, one entry per converted citation,
+  each naming its tag's id and carrying the cited page in a zero-size `pdf_bbox` selector. The
+  document URLs come from one call per turn to the tool named by `mcp_servers[].file_sharing_tool`,
+  invoked tool-call-shaped so its structured result is reachable, and with the agent tools' error
+  handling cleared so a failure reaches the app instead of arriving as result text. An instance
+  naming no tool converts nothing and records that at DEBUG; every other failure — a tool the
+  server does not advertise, a failed call, an unreadable answer, an id the answer omitted, and a
+  failure of the step's own passes — is one WARNING naming the kind, and none of them can fail the
+  turn or withhold the report. Every record of the step carries counts and never a URL, a file name
+  or a document id.
 - **Report structure**: `default_report_structure` (an application property) — an ordered list of
   `{name, description, protected, references_section}` sections, Overview → Key Findings →
   Detailed Analysis → Conclusion → References by default. Every section is rendered as a `##`
@@ -205,15 +228,21 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   rewriting, never by truncation: no token cap is placed on the report call, and a shortening
   revision rewrites to fit instead of cutting, so the report ends at a clean boundary. A draft over
   the ceiling forces a revision deterministically, even when report-review approved it.
-- **App-checked rules** (`app/research/report_rules.py`): the two report rules the app decides
+- **App-checked rules** (`app/research/report_rules.py`): the three report rules the app decides
   itself, over the draft text — the section structure (every configured section present, named
-  exactly as configured, in order, as a `##` heading) and the word ceiling. Each rule owns three
-  things in one class: the instruction rendered into the report writer's prompt, the check over the
-  finished draft, and the wording of the violation a revision acts on, so the writer can never be
-  told something different from what its draft is judged against. Their violations are prepended to
-  report-review's own, and report-review is told the app checks both — leaving it what needs a
+  exactly as configured, in order, as a `##` heading), the word ceiling, and the absence of
+  hyperlinks (no Markdown link or image, no reference-style link or its definition line, no raw
+  HTML anchor or image tag, no autolink, no bare URL). Each rule owns three things in one class:
+  the instruction rendered into the report writer's prompt, the check over the finished draft, and
+  the wording of the violation a revision acts on, so the writer can never be told something
+  different from what its draft is judged against. Their violations are prepended to
+  report-review's own, and report-review is told the app checks all three — leaving it what needs a
   reader: a padded section, the protected-section rules, the banned annotations, valid Markdown,
-  the citation format. Because the structure check passes only when every heading matches the
+  the citation format. The hyperlink rule's violation asks for the **sentence** to be rewritten
+  rather than for the URL to be deleted, because only the report writer can produce a sentence that
+  still reads well without it; the delivery step's removal is the guarantee behind it, for a draft
+  the review never got to revise. The detection is shared — the rule and the delivery step both
+  call `citations.find_hyperlinks` — so the two cannot disagree about what a hyperlink is. Because the structure check passes only when every heading matches the
   configuration, the references section is then found by the length measure by construction; that
   correspondence is covered by tests rather than by a runtime signal.
 - **Version budget**: `max_report_versions` (default 3) — at most that many report versions, the
@@ -254,6 +283,10 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   replaces the one before it, which is what closes it — a stage name can only be appended to, never
   rewritten. research-agent sets the title by calling `update_status`, and research-review, report
   and report-review each set it on entry, so no LLM call in the graph runs behind a silent screen.
+  The citation step replaces it once more after the graph finishes, and closes it before the report
+  text is appended, so the content never arrives under an open stage; that step opens a stage only
+  once it has work — a file-sharing call to make, or an edit to apply — because a draft citing
+  nothing and carrying no link would otherwise open and close one in the same instant.
   The stage carries a title only: no body, no `[TOOL]`-style prefix, and no elapsed time — it ends
   because a new step started, not because the announced work finished, so a duration would claim
   something untrue. Several statuses in one assistant message are joined into one title rather than

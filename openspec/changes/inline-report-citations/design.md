@@ -124,8 +124,11 @@ report is the case that checks them at length.
 - One pill per cited position, anchored where the citation stood, opening the cited page of a file
   the reader can actually read — and one pill, not a row of them, where a statement cites several
   sources at once.
-- Deep Research depends on a tool contract, so the retrieval server can be replaced without
-  re-deriving the citation mechanism.
+- Deep Research depends on a tool **contract** rather than on one server's tool names, so a server
+  that attributes its results the way the citation format expects — documents with integer ids and
+  1-based pages — is reached by naming its file-sharing tool in configuration, with no code change.
+  This is not a claim that any MCP server can be plugged in: which attribution shapes the citation
+  format can express is a closed list, stated as the supported server types (see D5a).
 - The report the review loop settled on is otherwise untouched, and no citation problem can cost a
   finished report.
 - The parsing, the eligibility conditions, the tag replacement and the payload are testable without
@@ -269,7 +272,7 @@ for a line scan of every draft to protect a case that does not arise buys nothin
 - *A real Markdown parser* — rejected: a new dependency to answer a question the step no longer
   asks.
 
-### D5. The tool is named per MCP server in configuration, and at most one server may name it
+### D5. The tool is named per MCP server in configuration
 
 One optional string field on `MCPClientSettings`, `file_sharing_tool`, both opts the server in and
 says which tool to call. Flat rather than nested, because the DIAL application-type schema generator
@@ -286,10 +289,125 @@ inlines a root property's model and raises on a model nested below that (`_inlin
 - *A single top-level property naming server and tool* — rejected: it duplicates an association the
   server entry already expresses, and two properties could then disagree.
 
-The at-most-one rule is not a simplification but a correctness requirement: a `[doc 442, page 3]`
-marker names no server, so two servers issuing integer ids would make 442 ambiguous, and the report
-writer has no way to qualify it. A configuration that wants two document servers needs the marker
-format to carry a source first — a change to the **research-execution** citation requirement.
+Only one server may end up naming a tool, and that is a correctness requirement rather than a
+simplification: a `[doc 442, page 3]` marker names no server, so two servers issuing integer ids
+would make 442 ambiguous, and the report writer has no way to qualify it. It needs no check of its
+own, though — D5a bounds the configuration to one server per type and D5b makes the tool the
+document server's alone, so a second namer is unreachable. A configuration that wants two document
+servers needs the marker format to carry a source first — a change to the **research-execution**
+citation requirement.
+
+### D5a. The supported server types are named in configuration, one of each at most
+
+At-most-one *file-sharing tool* is weaker than what correctness needs, and the gap is not
+hypothetical. One server naming a file-sharing tool while a **second** server also serves documents
+passes that check, and then a `[doc 442, page 3]` marker written from the second server's results is
+resolved against the first, which answers with **its own** document 442 — a pill that opens the
+wrong document, silently. Generic RAG's document id is documented as "unique id of this document
+within the channel" (`generic_rag/types.py`), so every channel numbers from 1 and a collision is the
+likely case rather than the exotic one; the contract's absent-id path, which keeps the marker as
+text and warns, only saves the configuration where the ids happen not to collide.
+
+`MCPClientSettings` therefore carries a required `server_type`, one of a closed list —
+`generic_rag` and `statgpt` — and `ApplicationProperties` rejects more than one server of a type
+(**application-config-schema** owns the field and the rule). The same rule covers dataset servers:
+`[dataset <id>]` markers are converted into nothing today, but two dataset servers could ship the
+same dataset id, and one rule that holds for every type is smaller than a rule per type.
+
+Naming implementations in configuration is a real cost, and it is paid for a real reason: the app is
+**already** coupled to a retrieval server's attribution shape, and pretending otherwise is the more
+expensive mistake. The citation format fixes an integer document id and a 1-based page, and the
+report prompt teaches the writer to translate the compact `(doc_id, page_ix)` tuples one particular
+server returns (`app/research/prompts.py`). A server that attributed its results with page-less
+documents, or with web pages, could not be expressed in that format at all. So the tool **contract**
+is what stays open — any server may name its file-sharing tool anything, which is what D5 protects —
+while the set of attribution shapes the report format can express is closed, and the type field is
+where that is said out loud.
+
+- *A capability flag instead of a type* (`serves_cited_documents: bool`, required only when more than
+  one server is configured) — rejected, though it costs no migration for today's single-server
+  channels. It describes one property of a server the app cannot verify, while the real constraint is
+  broader: whether this server's attribution fits the citation format at all. An operator can also
+  answer "which server is this" reliably, and "does this server serve the documents the report cites
+  by id" only after reading the citation spec.
+- *Qualifying the citation with its source* (`[doc rag_a:442, page 3]`) — deferred, and the durable
+  fix, since it is the only one that makes several servers of one type work. It needs the report
+  writer to emit the qualifier reliably, and a wrong qualifier is worse than none: it resolves
+  against the wrong server rather than merely losing a pill. Not worth its cost while every
+  deployment runs one document server.
+- *Stating the constraint in prose only* — rejected: the constraint was already in prose, in this
+  decision's own closing sentence, and nothing enforced it. The next person to add a second server
+  gets a wrong pill rather than a validation error.
+- *A runtime check when the servers are loaded* — rejected as the place for it. The whole condition
+  is decidable from configuration, so it belongs in `ApplicationProperties` validation with the other
+  server rules, where it fails before any model call and reaches the operator as the
+  application-not-configured error rather than mid-turn.
+
+A cost worth stating: `server_type` is required, so **every** channel's `applicationProperties` must
+carry it, including the committed `applications-template.json`, whose test asserts it sets exactly
+the required properties. A default would have removed that migration and reintroduced the silent
+case — an unlabelled dataset server counted as the document server — which is the thing this rule
+exists to prevent.
+
+### D5b. The file-sharing tool is the document server's, and it must name one
+
+`file_sharing_tool` is required of a `generic_rag` server and forbidden on every other type: the
+configuration is rejected both when a document server does not name one and when a dataset server
+does (**application-config-schema** owns the rule).
+
+Those two halves replace the cross-server check an earlier cut of this design carried, which
+rejected a configuration where more than one server named a tool. That check is now provable
+rather than written: only the document server may name one, and D5a allows at most one server of
+each type, so a second namer cannot be configured. Keeping it would have been a third validator
+guarding a state the other two make unreachable — and the per-server error it replaces is the more
+actionable one, because it names the offending server and says why a dataset server has no file to
+share.
+
+The reason is that the two readings of an unset field cannot be told apart, and only one of them
+is real. A document server whose tool is unnamed delivers **every** document citation as plain
+text, which is what a broken deployment looks like, not what an operator chooses; and the tool it
+would name is part of that server — Generic RAG advertises `get_citation_url` taking
+`document_ids` and returning `{id: url}`, exactly the contract. Leaving the field optional means a
+missing name reads as "citations off" when it almost always means "somebody forgot", and the
+symptom reaches the reader rather than the operator: a report full of `[doc 442, page 3]` markers
+looks like a product without pills, not like a misconfiguration.
+
+The check is on `MCPClientSettings`, so the error points at the offending server entry, and it is
+declared **after** `_validate_mode`, since pydantic runs `mode="after"` validators in declaration
+order and a server with no usable connection at all is the more fundamental misconfiguration to
+report first.
+
+**What this costs, stated rather than discovered later.** Requiring the name removes the
+per-instance switch that three earlier passages leaned on, and each has been corrected:
+
+- *Rollback.* The Migration Plan promised that rolling back the citation half was a configuration
+  edit. It is not any more: a deployment serving documents converts its citations, so turning that
+  off means reverting code, exactly as with the hyperlink rule.
+- *The StatGPT relay.* The risk register mitigated the dropped-annotations problem with "conversion
+  is inert unless an instance names a file-sharing tool". That mitigation is gone, and an instance
+  behind that relay now delivers an empty marker tag where a readable marker used to stand.
+- *Reader readiness.* The marker-tag rendering is on DIAL Chat's development branch and in no
+  release, and the Risks section makes "confirming which chat version a reader gets" a precondition
+  for enabling the feature. An operator can no longer honour that per instance by withholding the
+  tool name.
+
+Whether that is the right trade is a product decision, and it was taken deliberately: a document
+server without file sharing is a broken document server. The alternative, if the switch is wanted
+back, is a property of its own — an instance-level flag that turns conversion off while the tool
+stays named — which is a small addition and is **not** part of this change.
+
+- *Requiring at least one file-sharing tool across the configuration* — rejected: it would forbid a
+  dataset-only deployment, which has no documents to share and no document citations to convert.
+- *Letting a dataset server name one too, in case StatGPT later serves documents* — rejected: a
+  tool named there would never be called for a dataset citation, and a StatGPT server that did
+  serve documents would put a second integer id space beside the document server's, which is
+  exactly what D5a refuses. That future needs source-qualified citations first, so the option it
+  was being kept open for does not exist.
+- *Failing the turn when the named tool is absent from the server's advertised list* — rejected.
+  Configuration can only require the name; whether the tool is really advertised is known per turn,
+  and turning that into a hard failure would contradict the rule that no citation problem costs a
+  finished report — a retrieval server redeployed without the tool would take every turn down
+  instead of delivering reports with plain markers and a warning.
 
 ### D6. The tool is invoked as a LangChain tool, and only its structured result is read
 
@@ -588,11 +706,16 @@ Two alternatives were weighed and are worth keeping visible:
   them** → `OpenAiToDialStreamer._process_custom_content` forwards only `state`, `attachments` and
   `stages`, so a relayed report loses `custom_content.annotations`, and with them the document, the
   page and the label of every converted citation — the delivered text holds only an empty marker tag
-  at that spot. Mitigation: citation conversion is inert unless an instance names a file-sharing
-  tool, so that switch is per instance, and this change deliberately does not attempt that chain —
-  the relay stays deferred work. Link removal has no such switch (see D12), but it leaves nothing
-  for a relay to drop: the delivered text is plain prose either way. The fix on that side is small (one branch, plus a passthrough method on its choice
-  protocol), and until it lands the feature serves readers who reach Deep Research directly.
+  at that spot. **This risk has no mitigation left on our side.** An earlier cut of this design
+  leaned on one — conversion was inert until an instance named a file-sharing tool, so a relayed
+  instance could simply not name it — and requiring the tool on every document server (D5b) took
+  that switch away. A Deep Research instance relayed through StatGPT therefore converts its
+  citations, the relay drops the annotations, and the reader is left with an empty marker tag where
+  a readable `[doc 442, page 3]` used to stand. Link removal was never switchable (see D12) but
+  leaves nothing for a relay to drop: the delivered text is plain prose either way. The fix belongs
+  on the relay side and is small there (one branch, plus a passthrough method on its choice
+  protocol); until it lands, this feature serves readers who reach Deep Research directly, and an
+  instance behind that relay needs the fix or a code change here.
 - **Preview lands on the wrong page for every repeat citation of one document** → Read from
   `feat/cit-html-tag-annotations`, not observed: `annotationToPdfCanvasContent` resolves the clicked
   annotation's group with `groups.find((g) => g.sourceUrl === source.url)`, which is ambiguous now
@@ -660,17 +783,22 @@ product wiring, because it is what makes the mechanism verifiable at all.
    hyperlink rule in the report rules, and the delivery step. From this step on, every deployment
    gets the hyperlink rule — the writer instruction, the review violation and the removal at
    delivery — whether or not it names a file-sharing tool, because that rule has no configuration
-   switch (see D12). What an instance that names no tool does not get is citation conversion: its
-   reports carry every citation marker exactly as the writer wrote it.
-4. **Name the tool in one instance's `mcp_servers` entry** and check a real report — whose prose
-   carries tables, bullets and emphasis, unlike any fixture — for the same things, plus whether
-   annotations survive a re-share.
+   switch (see D12). Citation conversion arrives with it wherever a document server is configured,
+   since that server must name its file-sharing tool (D5b); only a deployment with no document
+   server delivers every citation marker as the writer wrote it.
+4. **Check a real report** — whose prose carries tables, bullets and emphasis, unlike any fixture —
+   for the same things, plus whether annotations survive a re-share. Every channel's
+   `applicationProperties` needs `server_type`, and a document server needs `file_sharing_tool`,
+   before it serves any request at all.
 5. **Later, and out of this change**: the relay through StatGPT, which drops `annotations` today.
 
-Rolling back the citation half is a configuration edit at each stage: unset the demo's flag, or clear
-the file-sharing tool name on the instance, and no report gets a marker tag or an annotation, with no
-code change or redeploy. The hyperlink rule has no such switch — rolling it back means reverting
-code, which is the trade-off D12 states and accepts.
+Rolling back the demo is a configuration edit: unset its flag, and it is not registered. **Rolling
+back citation conversion is not**, because a document server must name its file-sharing tool
+(D5b): every deployment that serves documents converts its citations, so returning one to plain
+markers means reverting code. The hyperlink rule is in the same position, which is the trade-off
+D12 states and accepts. The staged rollout above therefore stages the *verification*, not the
+exposure — step 3 turns conversion on everywhere a document server is configured, and step 4 is
+where a real report is inspected rather than where the feature is first enabled.
 
 ## Open Questions
 

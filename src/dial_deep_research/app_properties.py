@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     BaseModel,
@@ -78,6 +78,14 @@ class _ConnectionBundle(BaseModel):
     api_key: SecretStr = Field(min_length=1)
 
 
+# The retrieval servers this application is built against, and the reason the list is closed:
+# a report's citations carry the ids and page numbers a server reports, and that shape is no
+# part of the MCP protocol. A server outside this list may attribute its results in a form no
+# citation format here can express — documents without pages, or web pages — so plugging one in
+# is a change to the citation format and its parser, not a configuration entry.
+MCPServerType = Literal["generic_rag", "statgpt"]
+
+
 class MCPClientSettings(BaseModel):
     """Connection config for one MCP server the research agent connects to.
 
@@ -96,7 +104,19 @@ class MCPClientSettings(BaseModel):
     server_name: str = Field(
         min_length=1,
         description="Internal name for this server connection; must be unique across the list."
-        " Arbitrary — need not match any remote server name.",
+        " Arbitrary — it need not match any remote server name, and nothing routes on it. It"
+        " labels this server in the application's logs, so name it after what the server"
+        " serves for this channel rather than after the software it runs: server_type already"
+        " says which retrieval server it is.",
+    )
+    server_type: MCPServerType = Field(
+        description="Which supported retrieval server this is. generic_rag serves documents,"
+        " which the report cites as [doc <id>, page <ix>]; statgpt serves datasets, cited as"
+        " [dataset <id>]. The list of types is closed because the report's citations carry the"
+        " ids and page numbers the server reports, and that is not part of the MCP protocol."
+        " At most one server of each type may be configured: a citation names an id and never"
+        " the server that issued it, so two servers of one type — each numbering its own"
+        " content — would make an id ambiguous.",
     )
     deployment_id: str | None = Field(
         default=None,
@@ -112,6 +132,18 @@ class MCPClientSettings(BaseModel):
     tools_to_include: list[str] = Field(
         default_factory=list,
         description="Names of tools to include from this server. If empty, all tools are included.",
+    )
+    file_sharing_tool: str | None = Field(
+        default=None,
+        description="Name of this server's tool that copies a cited document into the DIAL"
+        " storage of the person reading the report and returns the URL of that copy, so a"
+        " citation in the report can open the cited page. The application calls this tool"
+        " itself when it delivers a report and never offers it to the research agent, so it"
+        " does not have to appear in tools_to_include. Required on a generic_rag server, whose"
+        " documents a report cites by id and page: without it every one of those citations is"
+        " delivered as plain text, which is a broken document server rather than a choice. No"
+        " other server type may set it — a dataset citation has no file to open — so exactly"
+        " one configured server names one whenever any document is served at all.",
     )
 
     @property
@@ -135,6 +167,40 @@ class MCPClientSettings(BaseModel):
             _ = self.direct_connection
         elif not self.deployment_id:
             raise ValueError("either deployment_id or connection must be set")
+        return self
+
+    # Declared after the mode check on purpose: pydantic runs `mode="after"` validators in
+    # declaration order, and a server with no usable connection at all is the more fundamental
+    # misconfiguration, so its error is the one the operator should be shown first.
+    @model_validator(mode="after")
+    def _validate_file_sharing_tool(self) -> MCPClientSettings:
+        """The file-sharing tool belongs to the document server, and it must name one.
+
+        A `generic_rag` server serves the documents a report cites by id and page, and such a
+        citation is only useful when the reader can open the cited page — which needs the copy
+        this tool makes in the reader's own storage. A document server configured without the
+        tool delivers every document citation as plain text, so it is refused here rather than
+        costing every report its citations.
+
+        No other type may name one. A `statgpt` server has datasets to cite and no files to
+        share, so a tool named there would never be called for a dataset citation; and were it
+        to serve documents too, their ids would collide with the document server's, which is
+        the ambiguity `ApplicationProperties._validate_one_server_per_type` exists to refuse.
+        Since at most one server of each type is configured, these two halves together make
+        "at most one server names a file-sharing tool" a consequence rather than a third check.
+        """
+        if self.server_type == "generic_rag" and not self.file_sharing_tool:
+            raise ValueError(
+                "a generic_rag server must name its file_sharing_tool: the documents it serves"
+                " are cited by id and page, and a citation can only be opened through the copy"
+                " that tool makes in the reader's own storage"
+            )
+        if self.server_type != "generic_rag" and self.file_sharing_tool:
+            raise ValueError(
+                f"only a generic_rag server may set file_sharing_tool, and this one is"
+                f" {self.server_type}: the tool exists to make a cited document readable, and"
+                " the documents a report cites come from the document server"
+            )
         return self
 
 
@@ -311,6 +377,31 @@ class ApplicationProperties(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_one_server_per_type(self) -> ApplicationProperties:
+        """At most one MCP server of each supported type.
+
+        Every server of one type numbers its own content, and a citation carries that number
+        without saying which server issued it — `[doc 442, page 3]` for a document,
+        `[dataset ABC:DEF]` for a dataset. Two servers of one type therefore make an id
+        ambiguous, with nothing in the marker, the retrieval result or the MCP protocol able to
+        tell the two apart. The configuration is refused rather than resolved by guessing, and
+        supporting several servers of one type means qualifying a citation with its source
+        first.
+        """
+        names_by_type: dict[str, list[str]] = {}
+        for server in self.mcp_servers:
+            names_by_type.setdefault(server.server_type, []).append(server.server_name)
+        repeated = {
+            server_type: names for server_type, names in names_by_type.items() if len(names) > 1
+        }
+        if repeated:
+            raise ValueError(
+                "at most one MCP server of each type may be configured;"
+                f" more than one was given for: {repeated}"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_report_structure(self) -> ApplicationProperties:
         """Unique section names, at least one protected section, and the references section last.
 
@@ -336,6 +427,20 @@ class ApplicationProperties(BaseModel):
                 f" misplaced section(s): {misplaced}"
             )
         return self
+
+    @property
+    def file_sharing_tool(self) -> str | None:
+        """The configured file-sharing tool's name, or `None` when no server names one.
+
+        At most one server can name one — only a `generic_rag` server may, and at most one
+        server of each type is configured — so this reads the single name rather than choosing
+        between candidates. `None` means the configuration has no document server, and its
+        reports carry every citation marker as the report writer wrote it.
+        """
+        return next(
+            (server.file_sharing_tool for server in self.mcp_servers if server.file_sharing_tool),
+            None,
+        )
 
     @classmethod
     def model_json_schema(  # type: ignore[override]

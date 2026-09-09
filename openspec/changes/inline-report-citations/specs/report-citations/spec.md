@@ -271,11 +271,22 @@ behave identically for any server that satisfies it.
 be able to name that server's file-sharing tool, and the app SHALL call exactly the tool that
 entry names (**application-config-schema** owns the field). There SHALL be no default name and no
 discovery by convention: the app SHALL NOT infer the tool from a server's advertised tool list,
-from a tool's description, or from any naming pattern. An operator who has named no tool has
-switched inline citations off, and a server whose tool is named differently is a configuration
-entry away from working rather than a code change away. At most one configured server may name a
-file-sharing tool, because a `[doc <id>]` marker names no server and ids coming from two servers
-could not be told apart.
+from a tool's description, or from any naming pattern. A server whose tool is named differently
+is a configuration entry away from working rather than a code change away. A **document** server
+SHALL name one — **application-config-schema** rejects a configuration where it does not — so
+inline citations are on for every deployment that serves documents, and no configuration edit
+turns them off. Exactly one configured server names a
+file-sharing tool whenever documents are served at all — only a document server may name one, and
+at most one document server may be configured — because a `[doc <id>]` marker names no server and
+ids coming from two servers could not be told apart.
+
+The same reason bounds the configuration more broadly, and the **application-config-schema**
+capability owns that rule: every MCP server declares which supported retrieval server it is, and at
+most one server of each type may be configured. The document ids a report cites therefore come from
+exactly one server, which is what makes asking that server for a URL correct. Without the rule, a
+citation of a second document server's id would be resolved against the first, which may well hold
+a different document under the same integer — a pill that opens the wrong document rather than a
+citation that keeps its text.
 
 **The contract.** A tool named as a server's file-sharing tool SHALL satisfy all of the following.
 These are requirements on the server, not observations of any one implementation: a named tool that
@@ -313,7 +324,9 @@ cites. So: not once per citation, and not for a document retrieved during resear
 in the delivered report.
 
 A server with no file-sharing tool configured SHALL contribute no annotations, and its documents'
-citations SHALL keep their marker text.
+citations SHALL keep their marker text. Only a dataset server may be configured that way, so in
+practice this is the shape of a deployment that serves no documents at all: it makes no
+file-sharing call, and its `[dataset <id>]` markers were never convertible anyway.
 
 Resolving the caller's `appdata` folder requires the per-request key, which reaches the MCP server
 only when it is called through DIAL Core in deployment mode. DIAL Core reports an `appdata` path
@@ -598,9 +611,10 @@ left as text, and SHALL convert whatever remains:
 - an id is missing from an otherwise valid response.
 
 Each of these SHALL be logged once, naming the failure kind, at the level the **logging-policy**
-capability's level semantics give it. **No configured file-sharing tool is not a failure**: an
-instance that names none has switched inline citations off, so this is a routine expected outcome of
-every turn it serves and SHALL be recorded at DEBUG rather than warning on each report. The other
+capability's level semantics give it. **No configured file-sharing tool is not a failure**: only a
+deployment with no document server can be configured that way, so it has no document citations to
+convert, and this is a routine expected outcome of every turn it serves — recorded at DEBUG rather
+than warning on each report. The other
 five SHALL each be a WARNING — an id missing from an otherwise valid response included, since it
 costs the reader a pill the report was written to offer.
 

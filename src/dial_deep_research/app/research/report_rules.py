@@ -5,8 +5,9 @@ given, the check over a finished draft, and the wording of the violation a revis
 live together in one class, so changing a rule means editing one place and the writer can never be
 told something different from what the draft is judged against.
 
-The rules are built from the instance's configuration (the section structure, the word ceiling)
-and used at two points: the report node renders their instructions into its system prompt, and
+The rules are built once per turn — some from the instance's configuration (the section
+structure, the word ceiling), some from nothing at all (the no-hyperlink rule) — and used at two
+points: the report node renders their instructions into its system prompt, and
 the report-review node runs their checks and prepends the violations to the review model's own
 list. The review model is told nothing about them — it judges what needs judgment.
 
@@ -22,6 +23,7 @@ from collections.abc import Sequence
 
 from dial_deep_research.app_properties import ReportSection
 
+from .citations import find_hyperlinks
 from .prompts import render_length_exemptions, render_report_structure
 from .report_length import (
     SECTION_HEADING_LEVEL,
@@ -50,6 +52,7 @@ def build_report_rules(
     return (
         ReportStructureRule(sections=sections),
         ReportLengthRule(sections=sections, max_words=max_words),
+        ReportHyperlinkRule(),
     )
 
 
@@ -129,6 +132,47 @@ class ReportLengthRule(ReportRule):
         ]
 
 
+class ReportHyperlinkRule(ReportRule):
+    """The report references a source only by an inline citation, so it carries no hyperlink.
+
+    A hyperlink cites something the research never retrieved, which is what the rule exists to
+    prevent. Every form counts: a Markdown link or image, a reference-style link and its
+    definition line, a raw HTML anchor or image tag, an autolink, and a bare URL written as
+    text — which a Markdown renderer turns back into a link.
+
+    The violation asks for the **sentence** to be rewritten rather than for the URL to be
+    deleted, because only the report writer can produce a sentence that still reads well
+    without it. Deletion is what the delivery step does to whatever survives to it (see
+    `citations.remove_hyperlinks`), and that is a guarantee rather than a repair: this rule is
+    where a link is properly fixed, while a version is still available.
+
+    The detection is `citations.find_hyperlinks` — the same function the delivery step removes
+    with, so the two can never disagree about what a hyperlink is.
+    """
+
+    def writer_instruction(self) -> str:
+        return _HYPERLINK_INSTRUCTION
+
+    def violations(self, draft: str) -> list[str]:
+        return [
+            _HYPERLINK_VIOLATION.format(form=_HYPERLINK_FORMS[link.kind], text=link.text)
+            for link in find_hyperlinks(draft)
+        ]
+
+
+# How each detected form is named to the report writer. The keys are `Hyperlink.kind`.
+_HYPERLINK_FORMS: dict[str, str] = {
+    "link": "a Markdown link",
+    "image": "a Markdown image",
+    "reference_link": "a reference-style link",
+    "reference_definition": "a link definition line",
+    "html_anchor": "a raw HTML anchor",
+    "html_image": "a raw HTML image tag",
+    "autolink": "an autolink",
+    "bare_url": "a bare URL",
+}
+
+
 _STRUCTURE_INSTRUCTION = """\
 ## Report structure
 
@@ -164,3 +208,26 @@ The draft is {word_count} words, over the {max_words}-word ceiling — a count t
 out {length_exemptions}. Shorten it to fit by condensing and rewriting — cut detail, tighten \
 prose, merge overlapping passages. Do not truncate: every section that the draft filled stays \
 present, and the report still ends at a complete sentence."""
+
+
+_HYPERLINK_INSTRUCTION = """\
+## No links
+
+Reference a source only through the inline citation forms specified below. The report carries no
+hyperlink of any kind:
+
+- no Markdown link, `[text](url)`, and no Markdown image, `![alt](url)`
+- no reference-style link, `[text][ref]`, and no `[ref]: url` definition line
+- no autolink, `<https://example.org/page>`, and no raw HTML `<a>` or `<img>` tag
+- no bare URL written out as text, which a Markdown renderer turns into a link of its own
+
+A hyperlink points the reader at something the research never retrieved, and the report answers
+from the retrieved sources alone. Where a source matters, name it in words — its title, its
+publisher, its date — and cite the retrieved page inline."""
+
+
+_HYPERLINK_VIOLATION = """\
+The draft carries {form}: `{text}`. A report references a source only by an inline citation, so \
+rewrite the sentence around it — name the source in words and cite the retrieved page inline, or \
+drop the reference altogether. Deleting the URL and leaving the rest of the sentence as it stands \
+is not the fix: the sentence has to read correctly without it."""

@@ -118,8 +118,10 @@ copy and returns the resulting URL, so the producer side can finally be built ag
   their own. Wiring the research turn — the MCP tool call, the configuration field, the delivery
   step — follows. The demo is how the mechanism gets verified before any of it can affect a real
   report: until the research turn is wired, and with the demo's flag off, the app behaves exactly as
-  it does today. Once it is wired, the hyperlink rule applies everywhere and only the citation
-  conversion stays configuration-gated.
+  it does today. Once it is wired, both the hyperlink rule and citation conversion apply to every
+  deployment that serves documents, because a document server is required to name its file-sharing
+  tool — neither half has a configuration switch, and a deployment with no document server is the
+  only one whose reports carry every citation marker as written.
 
 - **Not in this change.** Dataset citations: a dataset is not a file, so there is nothing to copy
   into the reader's bucket and nothing for the document viewer to open, which is the URL condition
@@ -157,8 +159,11 @@ copy and returns the resulting URL, so the producer side can finally be built ag
   never see, loaded outside the `tools_to_include` filter and without the agent's
   `handle_tool_error` conversion; and citations require the server to be reached in deployment
   mode, because `appdata` resolves only for a per-request key.
-- `application-config-schema`: `MCPClientSettings` gains the optional citation-tool field, with a
-  validator allowing at most one server to set it.
+- `application-config-schema`: `MCPClientSettings` gains the citation-tool field, which a document
+  server must set and no other type may, and a required `server_type` naming which
+  supported retrieval server it is — `generic_rag` or `statgpt` — with a validator allowing at most
+  one server of each type. Which document ids a citation may name is decided by that rule: the app
+  asks one server for the URL of `[doc 442, page 3]`, so exactly one server may issue document ids.
 - `logging-policy`: the INFO request skeleton gains one event for the citation step, and the
   warning cases above are named.
 - `local-stack`: both chat generations become runnable side by side through an opt-in overlay that
@@ -226,21 +231,24 @@ copy and returns the resulting URL, so the producer side can finally be built ag
 - `.env.example` — documents the identity-provider variables the next-generation chat needs, and the
   demo's flag.
 - `README.md` — the environment-variables table gains the demo's flag, which the repository's own
-  rule requires whenever a variable is added. Its per-server `mcp_servers` prose is deliberately
-  **not** extended for the new field: that paragraph already defers the authoritative property list
-  to `docs/generated-app-schema.json`, which the model regenerates, and the at-most-one-server rule
-  is a cross-server constraint that reads better in the validator's error than in prose.
+  rule requires whenever a variable is added. Its per-server `mcp_servers` prose gains `server_type`
+  and the one-server-per-type rule, because that paragraph is where the prose states what an
+  operator must set — it already names the "at least one server" and unique-`server_name`
+  requirements. It is deliberately **not** extended for `file_sharing_tool`: that field is optional,
+  and the paragraph defers the authoritative property list to `docs/generated-app-schema.json`,
+  which the model regenerates.
 - `openspec/changes/inline-annotations-spike/` — **removed.** Its `local-stack` delta is superseded
   by this change's, and archiving it would have written a deployment `development` never had into the
   main specs as current behaviour.
+- `dial_conf/core/applications-template.json` — both channel entries gain `server_type`, because
+  the field is required and the template's own rule is that it sets exactly the required properties
+  (`tests/test_app_properties.py::test_applications_template_sets_only_the_required_properties`
+  fails until it does). `file_sharing_tool` stays out of it: that one is optional.
 - `docs/architecture.md` — the report-delivery step and what it now emits, plus two passages this
   change makes wrong: the app-checked-rules bullet, which says there are two such rules and that
   report-review is told the app checks "both", and the list of what report-review is left to judge.
 
 **Not affected**
-
-- `dial_conf/core/applications-template.json` — the new property is optional, and the template
-  carries exactly the required ones.
 - `src/dial_deep_research/app/research/report_length.py` and the report review loop's control flow —
   the word ceiling, the version budget and the routing are untouched; the no-hyperlink rule joins the
   existing app-checked rules rather than changing how they are applied.

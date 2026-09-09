@@ -132,9 +132,18 @@
         "description": "Connection config for one MCP server the research agent connects to.\n\nTwo mutually exclusive modes:\n- deployment: the MCP is a DIAL application reached through DIAL Core by deployment id.\n  The per-request api-key is supplied by SDK header propagation and the request bearer\n  token is forwarded for per-user access.\n- direct: a directly-reachable MCP whose URL and api-key come together in `connection`,\n  the api-key sent in the `api-key` header.\n\n`connection` must be a `$env:{VAR}` placeholder, expanded from the app's environment at\nload time; the URL and api-key are bundled in one env var (not two config fields) so they\ncannot be independently selected. Access the parsed pair through `direct_connection`.",
         "properties": {
           "server_name": {
-            "description": "Internal name for this server connection; must be unique across the list. Arbitrary — need not match any remote server name.",
+            "description": "Internal name for this server connection; must be unique across the list. Arbitrary — it need not match any remote server name, and nothing routes on it. It labels this server in the application's logs, so name it after what the server serves for this channel rather than after the software it runs: server_type already says which retrieval server it is.",
             "minLength": 1,
             "title": "Server Name",
+            "type": "string"
+          },
+          "server_type": {
+            "description": "Which supported retrieval server this is. generic_rag serves documents, which the report cites as [doc <id>, page <ix>]; statgpt serves datasets, cited as [dataset <id>]. The list of types is closed because the report's citations carry the ids and page numbers the server reports, and that is not part of the MCP protocol. At most one server of each type may be configured: a citation names an id and never the server that issued it, so two servers of one type — each numbering its own content — would make an id ambiguous.",
+            "enum": [
+              "generic_rag",
+              "statgpt"
+            ],
+            "title": "Server Type",
             "type": "string"
           },
           "deployment_id": {
@@ -172,10 +181,24 @@
             },
             "title": "Tools To Include",
             "type": "array"
+          },
+          "file_sharing_tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Name of this server's tool that copies a cited document into the DIAL storage of the person reading the report and returns the URL of that copy, so a citation in the report can open the cited page. The application calls this tool itself when it delivers a report and never offers it to the research agent, so it does not have to appear in tools_to_include. Required on a generic_rag server, whose documents a report cites by id and page: without it every one of those citations is delivered as plain text, which is a broken document server rather than a choice. No other server type may set it — a dataset citation has no file to open — so exactly one configured server names one whenever any document is served at all.",
+            "title": "File Sharing Tool"
           }
         },
         "required": [
-          "server_name"
+          "server_name",
+          "server_type"
         ],
         "title": "MCPClientSettings",
         "type": "object"
