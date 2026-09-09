@@ -545,12 +545,42 @@ any of this can be looked at.
 - *Keep swapping and restart to compare* — rejected: the comparison is the requirement, and a
   restart between two renderings of one reply makes it a memory test.
 
-One constraint of the swap-style overlay does not obviously carry over and SHALL be re-checked when
-this is written: the current file states that the app must not run on host port 5000 under it,
-because the chat image is one container whose backend-for-frontend listens there. With the
-next-generation chat on 4207 and the base chat still on 3000, that reason may no longer apply. It is
-recorded here rather than dropped silently, and it is a five-minute check against a running stack
-rather than an argument to settle on paper.
+One constraint of the swap-style overlay does not carry over: it stated that the app must not run on
+host port 5000, because the chat image is one container whose backend-for-frontend listens there.
+That container now publishes port 5000 on host port 4207, so nothing in the overlay binds host 5000
+and the app keeps its default. The overlay file records this where the ports are set.
+
+### D15. The report stays in the message content, and the canvas is only for cited files
+
+A long report takes a lot of vertical space in the chat, and the client has a canvas — a resizable
+side panel that renders an attachment's content, `text/markdown` included — so delivering the report
+as an attachment and letting the canvas display it is an obvious idea. It is rejected: the report is
+message content (**research-execution**), because the canvas cannot carry inline citations.
+
+Three independent reasons, each sufficient:
+
+- **The pill injection exists only in the message bubble.** The `cit` component override and the
+  marker injection live in `libs/quotations`'s `useCitationMarkdownComponents`, whose one consumer
+  is the conversation's message item. The canvas renders Markdown through `libs/attachment-canvas`,
+  which does not depend on the quotations library and, under that repository's library-isolation
+  rule, cannot reach the app state the injection needs.
+- **The annotation model cannot address an attachment.** `target.selector` either indexes the
+  message text or names a marker tag inside it, and `AnnotationTarget.source` is declared as
+  `source?: unknown` and never interpreted. There is no way to say "this position inside
+  attachment 0".
+- **The canvas is already where a citation click goes.** Clicking Preview in a citation's popup
+  opens the canvas with the cited file, and the canvas holds one content at a time. The report and
+  the file it cites would compete for the same panel, so opening a citation would replace the
+  report.
+
+Two alternatives were weighed and are worth keeping visible:
+
+- *Report in the message content plus a duplicate `text/markdown` attachment* — pills work in the
+  bubble, and the attachment offers a full-panel read without them. Costs one attachment and no
+  other change, so it stays available if a reader asks for it.
+- *Report in the canvas with working pills* — needs client work we do not own: interpreting
+  `target.source`, injecting markers inside `attachment-canvas` across its isolation boundary, and
+  resolving two contents wanting one panel. A feature request, not a configuration.
 
 ## Risks / Trade-offs
 
@@ -651,4 +681,7 @@ code, which is the trade-off D12 states and accepts.
 - Whether the DIAL overlay — the portal page's embedded panel, the second intended reader — renders
   a pill and its citation canvas usably. Nothing about it has been exercised: every check so far is
   DIAL Chat in a full browser tab, where the canvas has the width of a window rather than of a panel
-  inside an iframe, and where closing the sources and history panels costs the reader less.
+  inside an iframe, and where closing the sources and history panels costs the reader less. The
+  canvas is mutually exclusive with the conversation-sources panel and the conversation-history
+  panel — opening any one of the three closes the other two — which is a layout nuisance in a full
+  tab and an open question inside a narrow embedded panel.

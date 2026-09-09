@@ -441,6 +441,10 @@ The array SHALL be emitted **once**, after the report text has been appended to 
 single streamed delta on the same choice while it is still open. Annotations SHALL NOT be emitted
 through the attachment API, which assigns its own indices and would renumber them.
 
+Emitting after the content costs no pill. The client hides a supported marker tag while the message
+is still streaming and resolves no annotations until the message completes, so every pill appears
+when the message finishes rather than as the report streams.
+
 #### Scenario: A converted citation's two halves agree
 
 - **WHEN** the step converts a lone citation of document 442, page 3
