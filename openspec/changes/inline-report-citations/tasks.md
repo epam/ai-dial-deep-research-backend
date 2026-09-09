@@ -108,15 +108,22 @@ change stays active rather than archived.
 
 ## 5. Demo — verify it, then ship it
 
-- [ ] 5.1 Bring up the overlay against a chat build carrying the marker-tag rendering and the
+- [x] 5.1 Bring up the overlay against a chat build carrying the marker-tag rendering and the
       `data-id` attribute, log in as a real end user rather than with the development key, and call
-      the demo deployment.
+      the demo deployment. Done on 2026-09-09 against `epam/ai-dial-chat:development`.
 - [ ] 5.2 Check each case renders as its sentence says: a pill at every convertible citation, none
       where a citation was left as text, one pill for the run, separate pills for the repeated
       document, each opening its own page, and no raw tag or placeholder text anywhere.
 - [ ] 5.3 Call the demo as a second user and confirm the pills open their files for that user too.
 - [ ] 5.4 Open the same reply in the base chat and confirm what a client that does not understand
       the tags shows.
+- [x] 5.5 Confirm the annotations survive a conversation reload: the pills come back after the
+      conversation is reopened, so the client persists the `custom_content.annotations` this app
+      writes and not only the raw wire form. Checked on 2026-09-09.
+- [ ] 5.6 Open the same reply in the DIAL overlay — the portal page's embedded panel, the second
+      intended reader — and check what nothing has exercised yet: whether the pill is usable at that
+      width, how the citation canvas renders inside a panel that is itself inside an iframe, and
+      whether the canvas closing the sources and history panels is tolerable there.
 
 ## 6. Research turn — wiring
 
@@ -158,5 +165,5 @@ change stays active rather than archived.
 - [ ] 7.1 Name the file-sharing tool in one instance's `mcp_servers` entry and run a real research
       turn, whose prose carries tables, bullets and emphasis unlike the demo's report.
 - [ ] 7.2 Check the same things as 5.2 on that report, plus whether the annotations survive a
-      conversation reload and a re-share — the design's open question, which changes what we can
-      promise a client.
+      re-share — the half of the design's open question that a reload has now answered, and the one
+      that changes what we can promise a client.

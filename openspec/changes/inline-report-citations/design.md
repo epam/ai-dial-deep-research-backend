@@ -634,7 +634,7 @@ product wiring, because it is what makes the mechanism verifiable at all.
    reports carry every citation marker exactly as the writer wrote it.
 4. **Name the tool in one instance's `mcp_servers` entry** and check a real report — whose prose
    carries tables, bullets and emphasis, unlike any fixture — for the same things, plus whether
-   annotations survive a reload and a re-share.
+   annotations survive a re-share.
 5. **Later, and out of this change**: the relay through StatGPT, which drops `annotations` today.
 
 Rolling back the citation half is a configuration edit at each stage: unset the demo's flag, or clear
@@ -644,9 +644,11 @@ code, which is the trade-off D12 states and accepts.
 
 ## Open Questions
 
-- Whether inline annotations survive a conversation reload and a re-share. The spike confirmed the
-  older reference-attachment convention survives a share, and annotations ride on the same message
-  snapshot, but this was never exercised. It changes nothing in this design; it changes what we
-  promise a client.
-- Whether DIAL Chat will offer a page-only selector, which would retire the zero-size `pdf_bbox`
-  workaround. Cosmetic here — the payload keeps working either way.
+- Whether inline annotations survive a re-share. A reload keeps them, and a share was exercised
+  only for the older reference-attachment convention, which survived it; annotations ride on the
+  same message snapshot, but that is reasoning rather than an observation. It changes nothing in
+  this design; it changes what we promise a client.
+- Whether the DIAL overlay — the portal page's embedded panel, the second intended reader — renders
+  a pill and its citation canvas usably. Nothing about it has been exercised: every check so far is
+  DIAL Chat in a full browser tab, where the canvas has the width of a window rather than of a panel
+  inside an iframe, and where closing the sources and history panels costs the reader less.
