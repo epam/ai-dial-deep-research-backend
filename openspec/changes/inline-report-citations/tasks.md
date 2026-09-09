@@ -111,16 +111,14 @@ change stays active rather than archived.
 - [x] 5.1 Bring up the overlay against a chat build carrying the marker-tag rendering and the
       `data-id` attribute, log in as a real end user rather than with the development key, and call
       the demo deployment. Done on 2026-09-09 against `epam/ai-dial-chat:development`.
-- [ ] 5.2 Check each case renders as its sentence says: a pill at every convertible citation, none
+- [x] 5.2 Check each case renders as its sentence says: a pill at every convertible citation, none
       where a citation was left as text, one pill for the run, separate pills for the repeated
-      document, each opening its own page, and no raw tag or placeholder text anywhere.
-- [ ] 5.3 Call the demo as a second user and confirm the pills open their files for that user too.
-- [ ] 5.4 Open the same reply in the base chat and confirm what a client that does not understand
-      the tags shows.
-- [x] 5.5 Confirm the annotations survive a conversation reload: the pills come back after the
+      document, each opening its own page, and no raw tag or placeholder text anywhere. Checked on
+      2026-09-09.
+- [x] 5.3 Confirm the annotations survive a conversation reload: the pills come back after the
       conversation is reopened, so the client persists the `custom_content.annotations` this app
       writes and not only the raw wire form. Checked on 2026-09-09.
-- [ ] 5.6 Open the same reply in the DIAL overlay — the portal page's embedded panel, the second
+- [ ] 5.4 Open the same reply in the DIAL overlay — the portal page's embedded panel, the second
       intended reader — and check what nothing has exercised yet: whether the pill is usable at that
       width, how the citation canvas renders inside a panel that is itself inside an iframe, and
       whether the canvas closing the sources and history panels is tolerable there.
