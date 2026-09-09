@@ -2,7 +2,7 @@ name: Deploy development
 
 on:
   workflow_dispatch: # manual run
-  workflow_run:
+  workflow_run: # HACK: redundant trigger to mitigate GitHub's huge delays in registry_package event processing
     workflows: ["Release Workflow"]
     types:
       - completed
