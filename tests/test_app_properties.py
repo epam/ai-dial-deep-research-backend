@@ -27,7 +27,14 @@ VALID_PROPERTIES: dict = {
         "agent_name": "Test Deep Research",
         "data_sources_descriptions": "## report\n\nA report.",
     },
-    "mcp_servers": [{"server_name": "rag", "deployment_id": "generic-rag-mcp"}],
+    "mcp_servers": [
+        {
+            "server_name": "rag",
+            "server_type": "generic_rag",
+            "deployment_id": "generic-rag-mcp",
+            "file_sharing_tool": "get_citation_url",
+        }
+    ],
 }
 
 
@@ -227,7 +234,7 @@ def test_schema_inlines_list_item_model() -> None:
     schema = ApplicationProperties.model_json_schema()
     items = schema["properties"]["mcp_servers"]["items"]
     assert "$ref" not in items
-    assert set(items["required"]) == {"server_name"}
+    assert set(items["required"]) == {"server_name", "server_type"}
     assert "tools_to_include" in items["properties"]
 
 
@@ -250,12 +257,190 @@ def test_at_least_one_mcp_server_required() -> None:
     assert any(err["loc"] == ("mcp_servers",) for err in excinfo.value.errors())
 
 
+def test_a_server_must_declare_its_type() -> None:
+    """The supported types are a closed list, so a server cannot be left unlabelled."""
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate({"server_name": "rag", "deployment_id": "x"})
+    assert any(err["loc"] == ("server_type",) for err in excinfo.value.errors())
+
+
+def test_an_unsupported_server_type_is_rejected() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(
+            {"server_name": "rag", "server_type": "web_search", "deployment_id": "x"}
+        )
+    assert any(err["loc"] == ("server_type",) for err in excinfo.value.errors())
+
+
+def test_one_server_of_each_type_is_accepted() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "mcp_servers": [
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "deployment_id": "a",
+                "file_sharing_tool": "get_citation_url",
+            },
+            {"server_name": "datasets", "server_type": "statgpt", "deployment_id": "b"},
+        ],
+    }
+    properties = ApplicationProperties.model_validate(data)
+    assert [server.server_type for server in properties.mcp_servers] == [
+        "generic_rag",
+        "statgpt",
+    ]
+
+
+def test_two_servers_of_one_type_are_rejected() -> None:
+    """Each server numbers its own content, and a citation never says which one issued an id."""
+    data = {
+        **VALID_PROPERTIES,
+        "mcp_servers": [
+            {
+                "server_name": "rag-a",
+                "server_type": "generic_rag",
+                "deployment_id": "a",
+                "file_sharing_tool": "get_citation_url",
+            },
+            {
+                "server_name": "rag-b",
+                "server_type": "generic_rag",
+                "deployment_id": "b",
+                "file_sharing_tool": "get_citation_url",
+            },
+        ],
+    }
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(data)
+    message = str(excinfo.value)
+    assert "at most one MCP server of each type" in message
+    assert "generic_rag" in message
+    assert "rag-a" in message and "rag-b" in message
+
+
+def test_two_dataset_servers_are_rejected_too() -> None:
+    """Dataset ids are not converted into pills today, but nothing keeps two servers from
+    shipping the same one, so the same rule holds for them."""
+    data = {
+        **VALID_PROPERTIES,
+        "mcp_servers": [
+            {"server_name": "stat-a", "server_type": "statgpt", "deployment_id": "a"},
+            {"server_name": "stat-b", "server_type": "statgpt", "deployment_id": "b"},
+        ],
+    }
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(data)
+    assert "statgpt" in str(excinfo.value)
+
+
+def test_a_document_server_must_name_its_file_sharing_tool() -> None:
+    """Without it every document citation ships as plain text, which is a broken server."""
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(
+            {"server_name": "rag", "server_type": "generic_rag", "deployment_id": "x"}
+        )
+    assert "must name its file_sharing_tool" in str(excinfo.value)
+
+
+def test_a_dataset_server_may_leave_the_file_sharing_tool_unset() -> None:
+    """A dataset is not a file, so there is nothing for it to share."""
+    server = MCPClientSettings.model_validate(
+        {"server_name": "datasets", "server_type": "statgpt", "deployment_id": "x"}
+    )
+    assert server.file_sharing_tool is None
+
+
+def test_a_server_with_no_connection_reports_that_before_the_missing_tool() -> None:
+    """A server that cannot be reached at all is the more fundamental misconfiguration."""
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate({"server_name": "rag", "server_type": "generic_rag"})
+    assert "either deployment_id or connection must be set" in str(excinfo.value)
+
+
+def test_one_server_may_name_a_file_sharing_tool() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "mcp_servers": [
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "deployment_id": "a",
+                "file_sharing_tool": "share_documents",
+            },
+            {"server_name": "datasets", "server_type": "statgpt", "deployment_id": "b"},
+        ],
+    }
+    properties = ApplicationProperties.model_validate(data)
+    assert properties.file_sharing_tool == "share_documents"
+
+
+def test_no_server_naming_one_switches_inline_citations_off() -> None:
+    """A dataset-only configuration names none: it has no documents to make readable."""
+    data = {
+        **VALID_PROPERTIES,
+        "mcp_servers": [
+            {"server_name": "datasets", "server_type": "statgpt", "deployment_id": "a"}
+        ],
+    }
+    assert ApplicationProperties.model_validate(data).file_sharing_tool is None
+
+
+def test_only_a_document_server_may_name_a_file_sharing_tool() -> None:
+    """The tool makes a cited document readable, and the documents come from one server.
+
+    With at most one server per type, this is also what keeps a second server from naming a
+    tool at all, so no separate cross-server check is needed.
+    """
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(
+            {
+                "server_name": "datasets",
+                "server_type": "statgpt",
+                "deployment_id": "b",
+                "file_sharing_tool": "copy_to_user",
+            }
+        )
+    message = str(excinfo.value)
+    assert "only a generic_rag server may set file_sharing_tool" in message
+    assert "statgpt" in message
+
+
+def test_no_configuration_can_name_two_file_sharing_tools() -> None:
+    """A consequence of the two rules rather than a check of its own: only the document server
+    may name a tool, and only one document server may be configured."""
+    data = {
+        **VALID_PROPERTIES,
+        "mcp_servers": [
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "deployment_id": "a",
+                "file_sharing_tool": "get_citation_url",
+            },
+            {
+                "server_name": "datasets",
+                "server_type": "statgpt",
+                "deployment_id": "b",
+                "file_sharing_tool": "copy_to_user",
+            },
+        ],
+    }
+    with pytest.raises(ValidationError):
+        ApplicationProperties.model_validate(data)
+
+
 def test_duplicate_server_names_are_rejected() -> None:
     data = {
         **VALID_PROPERTIES,
         "mcp_servers": [
-            {"server_name": "rag", "deployment_id": "a"},
-            {"server_name": "rag", "deployment_id": "b"},
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "deployment_id": "a",
+                "file_sharing_tool": "get_citation_url",
+            },
+            {"server_name": "rag", "server_type": "statgpt", "deployment_id": "b"},
         ],
     }
     with pytest.raises(ValidationError) as excinfo:
@@ -265,7 +450,12 @@ def test_duplicate_server_names_are_rejected() -> None:
 
 def test_deployment_mode_server_loads() -> None:
     server = MCPClientSettings.model_validate(
-        {"server_name": "rag", "deployment_id": "generic-rag-mcp"}
+        {
+            "server_name": "rag",
+            "server_type": "generic_rag",
+            "deployment_id": "generic-rag-mcp",
+            "file_sharing_tool": "get_citation_url",
+        }
     )
     assert server.connection is None
     assert server.deployment_id == "generic-rag-mcp"
@@ -276,8 +466,10 @@ def test_direct_mode_server_loads(direct_mode: None) -> None:
     server = MCPClientSettings.model_validate(
         {
             "server_name": "rag",
+            "server_type": "generic_rag",
             "connection": "$env:{MY_MCP_CONN}",
             "tools_to_include": ["search_docs"],
+            "file_sharing_tool": "get_citation_url",
         }
     )
     bundle = server.direct_connection
@@ -289,20 +481,27 @@ def test_direct_mode_server_loads(direct_mode: None) -> None:
 def test_connection_and_deployment_id_together_are_rejected(direct_mode: None) -> None:
     with pytest.raises(ValidationError) as excinfo:
         MCPClientSettings.model_validate(
-            {"server_name": "rag", "deployment_id": "x", "connection": "$env:{MY_MCP_CONN}"}
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "deployment_id": "x",
+                "connection": "$env:{MY_MCP_CONN}",
+            }
         )
     assert "cannot be set at the same time" in str(excinfo.value)
 
 
 def test_no_mode_configured_is_rejected() -> None:
     with pytest.raises(ValidationError) as excinfo:
-        MCPClientSettings.model_validate({"server_name": "rag"})
+        MCPClientSettings.model_validate({"server_name": "rag", "server_type": "generic_rag"})
     assert "either deployment_id or connection must be set" in str(excinfo.value)
 
 
 def test_empty_server_name_is_rejected() -> None:
     with pytest.raises(ValidationError) as excinfo:
-        MCPClientSettings.model_validate({"server_name": "", "deployment_id": "x"})
+        MCPClientSettings.model_validate(
+            {"server_name": "", "server_type": "generic_rag", "deployment_id": "x"}
+        )
     assert any(err["loc"] == ("server_name",) for err in excinfo.value.errors())
 
 
@@ -310,14 +509,20 @@ def test_plaintext_connection_is_rejected(direct_mode: None) -> None:
     # Inline values are refused: connection must be a $env:{VAR} placeholder.
     inline = '{"url": "http://localhost:8000/mcp", "api_key": "resolved-secret"}'
     with pytest.raises(ValidationError, match=r"\$env:\{VAR\} placeholder"):
-        MCPClientSettings.model_validate({"server_name": "rag", "connection": inline})
+        MCPClientSettings.model_validate(
+            {"server_name": "rag", "server_type": "generic_rag", "connection": inline}
+        )
 
 
 def test_default_placeholder_form_is_rejected(direct_mode: None) -> None:
     # The $env:{VAR|default} form is not a valid placeholder -> refused.
     with pytest.raises(ValidationError, match=r"\$env:\{VAR\} placeholder"):
         MCPClientSettings.model_validate(
-            {"server_name": "rag", "connection": "$env:{SOME_VAR|whatever}"}
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "connection": "$env:{SOME_VAR|whatever}",
+            }
         )
 
 
@@ -337,7 +542,13 @@ def test_malformed_connection_bundle_is_rejected(
 ) -> None:
     monkeypatch.setenv("MY_MCP_CONN", bundle)
     with pytest.raises(ValidationError, match=match):
-        MCPClientSettings.model_validate({"server_name": "rag", "connection": "$env:{MY_MCP_CONN}"})
+        MCPClientSettings.model_validate(
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "connection": "$env:{MY_MCP_CONN}",
+            }
+        )
 
 
 def test_unresolved_env_placeholder_fails_validation(
@@ -346,7 +557,11 @@ def test_unresolved_env_placeholder_fails_validation(
     monkeypatch.delenv("MISSING_CONN", raising=False)
     with pytest.raises(ValidationError, match="MISSING_CONN"):
         MCPClientSettings.model_validate(
-            {"server_name": "rag", "connection": "$env:{MISSING_CONN}"}
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "connection": "$env:{MISSING_CONN}",
+            }
         )
 
 

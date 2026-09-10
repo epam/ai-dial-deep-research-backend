@@ -180,7 +180,13 @@ for a fictional example instance:
 > wants to differ.
 
 `mcp_servers` lists the MCP servers the research agent connects to (at least one is
-required; `server_name` must be unique across the list). Each server is one of two modes:
+required; `server_name` must be unique across the list). Each server states which supported
+retrieval server it is in `server_type` — `generic_rag` for one serving documents, `statgpt`
+for one serving datasets — and at most one server of each type may be configured, because a
+report's citation carries an id and never the server that issued it. A `generic_rag` server must
+also name its `file_sharing_tool` (`get_citation_url`, for a Generic RAG deployment): the reader
+opens a cited page through the copy that tool makes, so a document server without it would deliver
+every citation as plain text. Each server is one of two modes:
 
 - **deployment** — set `deployment_id`: the MCP is a DIAL application reached through Core
   by that deployment id, authenticated with the per-request api-key (the request bearer

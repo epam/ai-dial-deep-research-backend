@@ -125,43 +125,59 @@ change stays active rather than archived.
 
 ## 6. Research turn — wiring
 
-- [ ] 6.1 Add the optional `file_sharing_tool` string field to `MCPClientSettings` with its
-      description, and a validator rejecting more than one server that names one, its error naming
-      the offending servers. Regenerate `docs/generated-app-schema.json` with `make format`.
-- [ ] 6.2 Split `load_mcp_tools` so one `tools/list` fetch per server yields the agent's tools and
+- [x] 6.1 Add the `file_sharing_tool` string field to `MCPClientSettings` with its description.
+      Regenerate `docs/generated-app-schema.json` with `make format`.
+- [x] 6.1a Add the required `server_type` field (`generic_rag` or `statgpt`) to `MCPClientSettings`
+      with its description, and a validator rejecting more than one server of a type, its error
+      naming the type and the offending servers. Because the field is required, add it to both
+      channels of `dial_conf/core/applications-template.json` and to the `mcp_servers` paragraph of
+      the README, and regenerate the schema. Every channel configuration outside this repository
+      needs the field too, or its turns fail as not-configured.
+- [x] 6.1b Require `file_sharing_tool` on a `generic_rag` server and forbid it on every other
+      type, so that "at most one server names one" follows from the per-type limit instead of
+      needing a cross-server validator of its own. Put the check on `MCPClientSettings` so the
+      error points at the offending server entry, declared after the mode check so an unreachable
+      server is reported first.
+      Add the tool to the committed template's document server, note the requirement in the
+      README, and correct the three passages that promised a per-instance switch: the Migration
+      Plan's rollback paragraph, the StatGPT-relay risk's mitigation, and the proposal's build
+      order.
+- [x] 6.2 Split `load_mcp_tools` so one `tools/list` fetch per server yields the agent's tools and
       the application-called tool separately, resolving the named tool from the server's full
       advertised list rather than through `tools_to_include`, and set `handle_tool_error` to `False`
       on it explicitly — the adapter installs a handler by default.
-- [ ] 6.3 Follow that signature at its other callers: `app/playground/runner.py`, and
+- [x] 6.3 Follow that signature at its other callers: `app/playground/runner.py`, and
       `tests/test_mcp_client.py`, `tests/test_status_stages.py`, `tests/test_research_dispatch.py`.
-- [ ] 6.4 Call the file-sharing tool once per turn with the distinct integer document ids of the
+- [x] 6.4 Call the file-sharing tool once per turn with the distinct integer document ids of the
       citations that only need a URL, invoked tool-call-shaped so the `ToolMessage` carries its
-      artifact, and validate `artifact["structured_content"]` into a typed id-to-URL model.
-- [ ] 6.5 Add the no-hyperlink `ReportRule` to `report_rules.py`, importing the detection from
+      artifact, and validate `artifact["structured_content"]` as an id-to-URL mapping.
+- [x] 6.5 Add the no-hyperlink `ReportRule` to `report_rules.py`, importing the detection from
       `citations.py`, its writer instruction and its violation wording in the one class, its
       violations joining the review model's list.
-- [ ] 6.6 Update the report-review prompt: its "Not your job" paragraph names the hyperlinks beside
+- [x] 6.6 Update the report-review prompt: its "Not your job" paragraph names the hyperlinks beside
       the headings and the length. Keep its citation-format check — the app now parses the markers
       that check enforces.
-- [ ] 6.7 Run the citation step in `ResearchRunner` between the graph finishing and the report being
+- [x] 6.7 Run the citation step in `ResearchRunner` between the graph finishing and the report being
       appended: the post-processed text is what is appended and what is persisted, the annotations
       are emitted after it, and the step's activity stage opens only when it has work and closes
       before the content is appended.
-- [ ] 6.8 Implement the failure paths: DEBUG when no server names a tool, one WARNING for each of
+- [x] 6.8 Implement the failure paths: DEBUG when no server names a tool, one WARNING for each of
       the five real failure kinds, a failed link pass delivering the settled draft, a failed
       conversion delivering the link-free text, and a failed emission leaving its tags unclaimed.
       No citation failure fails the turn.
-- [ ] 6.9 Tests: the at-most-one-server validator, the agent's tools excluding the file-sharing tool
+- [x] 6.9 Tests: the at-most-one-server validator, the agent's tools excluding the file-sharing tool
       whatever `tools_to_include` says, the tool-call-shaped invocation, a partial response, an
       unreadable response, and each failure path's delivered text.
-- [ ] 6.10 Update `docs/architecture.md`: the report-delivery step and what it emits, the
+- [x] 6.10 Update `docs/architecture.md`: the report-delivery step and what it emits, the
       app-checked-rules bullet (now three rules, and what report-review is told), and the list of
       what report-review is left to judge.
 
 ## 7. Research turn — enabling it for a reader
 
-- [ ] 7.1 Name the file-sharing tool in one instance's `mcp_servers` entry and run a real research
-      turn, whose prose carries tables, bullets and emphasis unlike the demo's report.
+- [ ] 7.1 Run a real research turn on a configured instance, whose prose carries tables, bullets
+      and emphasis unlike the demo's report. Nothing is enabled here: a document server names its
+      file-sharing tool by requirement (6.1b), so conversion is on as soon as the channel's
+      `applicationProperties` carry `server_type` and that tool name.
 - [ ] 7.2 Check the same things as 5.2 on that report, plus whether the annotations survive a
       re-share — the half of the design's open question that a reload has now answered, and the one
       that changes what we can promise a client.

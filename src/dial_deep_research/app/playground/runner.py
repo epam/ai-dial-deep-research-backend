@@ -82,9 +82,12 @@ class PlaygroundRunner:
         per-user access; the api-key is handled by header propagation.
         """
         history = reconstruct_plain_history(request)
-        tools = await load_mcp_tools(mcp_servers=properties.mcp_servers, bearer_token=bearer_token)
+        # Only the agent's half of what the servers advertise: a tool the application calls
+        # itself, such as the file-sharing tool, reaches no model's tool list — the playground's
+        # included.
+        loaded = await load_mcp_tools(mcp_servers=properties.mcp_servers, bearer_token=bearer_token)
         agent = build_playground_agent(
-            tools=tools,
+            tools=loaded.agent_tools,
             prompts=properties.prompts,
             today_date=datetime.now().date().isoformat(),
         )

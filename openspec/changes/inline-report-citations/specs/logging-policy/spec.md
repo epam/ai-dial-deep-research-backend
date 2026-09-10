@@ -80,8 +80,9 @@ response, or ids the response omitted — beside the (8c) event, which fires eit
 does not wait for the step to resolve nothing: a response that answered two of three ids still cost
 the third document its pills, and the (8c) counts alone would leave that reading as a report that
 happened to cite less. The one case in that family that is **not** a warning is an instance naming
-no file-sharing tool at all: inline citations are switched off there, which is a routine expected
-outcome of every turn it serves, so it is recorded at DEBUG (see **report-citations**). Every record
+no file-sharing tool at all, which only a deployment with no document server can be: it has no
+document citations to convert, so this is a routine expected outcome of every turn it serves and is
+recorded at DEBUG (see **report-citations**). Every record
 of this step describes documents by count alone: the service's own call sites SHALL NOT log a
 returned URL or any part of one, a file name taken from one, a document title, or a cited document's
 id, at any level. The mapping is a tool response body, which the content allowlist keeps out of
@@ -171,7 +172,7 @@ every record, and how many ids a response omitted says everything a reader of th
 
 #### Scenario: An instance with no citation tool does not warn on every turn
 
-- **WHEN** an instance names no file-sharing tool and delivers a report carrying citation markers
+- **WHEN** an instance configured with no document server — and so with no file-sharing tool — delivers a report carrying dataset citation markers
 - **THEN** the (8c) event SHALL fire with zero resolved documents and zero annotations, the record naming the absent configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
 
 #### Scenario: A link removed from an unreviewed draft is still visible in the logs

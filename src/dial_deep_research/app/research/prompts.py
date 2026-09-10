@@ -346,9 +346,10 @@ source was the right one to use — you cannot see the findings, and evidence co
 elsewhere. Do not ask for more research, more sources, or a different analysis. Do not rewrite
 the report or suggest wording you would prefer.
 
-You also do not judge the report's headings or its length. The app checks both itself, over the
-draft text, and adds what it finds to your list — so a heading that does not match the configured
-structure, or a report over its ceiling, is already handled. Judge the content.
+You also do not judge the report's headings, its length, or its links. The app checks all three
+itself, over the draft text, and adds what it finds to your list — so a heading that does not
+match the configured structure, a report over its ceiling, and a hyperlink, image or bare URL
+anywhere in the draft are already handled. Judge the content.
 
 Approve the draft when the checks above hold. A draft that satisfies them is finished, even
 if you can imagine a better report.

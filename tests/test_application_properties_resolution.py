@@ -27,7 +27,14 @@ VALID_PROPERTIES: dict = {
         "agent_name": "Test Deep Research",
         "data_sources_descriptions": "## report\n\nA report.",
     },
-    "mcp_servers": [{"server_name": "rag", "deployment_id": "generic-rag-mcp"}],
+    "mcp_servers": [
+        {
+            "server_name": "rag",
+            "server_type": "generic_rag",
+            "deployment_id": "generic-rag-mcp",
+            "file_sharing_tool": "get_citation_url",
+        }
+    ],
 }
 
 

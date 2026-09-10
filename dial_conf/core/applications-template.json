@@ -6,8 +6,10 @@
       "applicationProperties": {
         "mcp_servers": [
           {
-            "server_name": "generic-rag",
-            "deployment_id": "generic-rag-mcp"
+            "server_name": "acme-publications",
+            "server_type": "generic_rag",
+            "deployment_id": "generic-rag-mcp",
+            "file_sharing_tool": "get_citation_url"
           }
         ],
         "prompts": {
@@ -23,8 +25,10 @@
       "applicationProperties": {
         "mcp_servers": [
           {
-            "server_name": "generic-rag",
-            "deployment_id": "generic-rag-mcp"
+            "server_name": "acme-publications",
+            "server_type": "generic_rag",
+            "deployment_id": "generic-rag-mcp",
+            "file_sharing_tool": "get_citation_url"
           }
         ],
         "prompts": {

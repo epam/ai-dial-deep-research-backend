@@ -17,6 +17,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from pytest import MonkeyPatch
 
 from dial_deep_research.app.history import Plan, PrepState
+from dial_deep_research.app.mcp_tools import LoadedMcpTools
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research import runner as runner_module
 from dial_deep_research.app.research.runner import _INITIAL_ACTIVITY, ResearchRunner
@@ -44,7 +45,14 @@ def _properties() -> ApplicationProperties:
                 "agent_name": "Test Deep Research",
                 "data_sources_descriptions": "## report\n\nA report.",
             },
-            "mcp_servers": [{"server_name": "rag", "deployment_id": "generic-rag-mcp"}],
+            "mcp_servers": [
+                {
+                    "server_name": "rag",
+                    "server_type": "generic_rag",
+                    "deployment_id": "generic-rag-mcp",
+                    "file_sharing_tool": "get_citation_url",
+                }
+            ],
         }
     )
 
@@ -236,8 +244,8 @@ class _FailingGraph:
 
 
 def _stub_graph(monkeypatch: MonkeyPatch, graph: Any) -> None:
-    async def _no_tools(**_kwargs: Any) -> list[Any]:
-        return []
+    async def _no_tools(**_kwargs: Any) -> LoadedMcpTools:
+        return LoadedMcpTools(agent_tools=[], file_sharing_tool=None)
 
     monkeypatch.setattr(runner_module, "load_mcp_tools", _no_tools)
     monkeypatch.setattr(runner_module, "build_research_graph", lambda **_kw: graph)
