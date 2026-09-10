@@ -3,14 +3,17 @@
 What is protected here: a rule states one thing to the writer and checks the same thing on the
 draft. The structure rule reports every way a heading can fail to match the configuration —
 missing, renamed, decorated, out of order, at the wrong level, or one section too many — and the
-length rule fires on the measured count alone.
+length rule fires on the measured count alone, and the hyperlink rule reports every form of
+link the report may not carry.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from dial_deep_research.app.research.citations import remove_hyperlinks
 from dial_deep_research.app.research.report_rules import (
+    ReportHyperlinkRule,
     ReportLengthRule,
     ReportStructureRule,
     build_report_rules,
@@ -151,15 +154,83 @@ def test_the_length_rule_measures_the_report_count_not_the_raw_text() -> None:
     assert ReportLengthRule(sections=_SECTIONS, max_words=6).violations(draft) == []
 
 
+# --- the hyperlink rule -------------------------------------------------------------------------
+
+
+def test_a_draft_without_a_link_has_no_hyperlink_violations() -> None:
+    draft = "The rate rose [doc 442, page 3], as the outlook noted [dataset IMF:WEO]."
+
+    assert ReportHyperlinkRule().violations(draft) == []
+
+
+def test_a_markdown_link_is_reported_as_a_rewrite_of_the_sentence() -> None:
+    """The review loop is where a link is properly fixed, so the ask is a rewrite."""
+    draft = "See the [latest outlook](https://example.org/outlook) for more."
+
+    violations = ReportHyperlinkRule().violations(draft)
+
+    assert len(violations) == 1
+    assert "a Markdown link" in violations[0]
+    assert "[latest outlook](https://example.org/outlook)" in violations[0]
+    assert "rewrite the sentence" in violations[0]
+
+
+@pytest.mark.parametrize(
+    ("draft", "form"),
+    [
+        ("![chart](https://example.org/c.png)", "a Markdown image"),
+        ("read <https://example.org/page> today", "an autolink"),
+        ("published at https://example.org/outlook", "a bare URL"),
+        ('see <a href="https://example.org">the note</a>', "a raw HTML anchor"),
+        ('<img src="https://example.org/c.png">', "a raw HTML image tag"),
+    ],
+)
+def test_every_hyperlink_form_is_a_violation(draft: str, form: str) -> None:
+    violations = ReportHyperlinkRule().violations(draft)
+
+    assert len(violations) == 1
+    assert form in violations[0]
+
+
+def test_a_reference_style_link_reports_its_use_and_its_definition() -> None:
+    """Both halves are text pointing outward, and both have to leave the draft."""
+    draft = "See the [outlook][ref] for more.\n\n[ref]: https://example.org/outlook\n"
+
+    forms = [
+        form
+        for form in ("a reference-style link", "a link definition line")
+        if any(form in violation for violation in ReportHyperlinkRule().violations(draft))
+    ]
+
+    assert forms == ["a reference-style link", "a link definition line"]
+
+
+def test_every_link_in_a_draft_is_reported_separately() -> None:
+    draft = "See the [outlook](https://example.org/a) and the [review](https://example.org/b)."
+
+    assert len(ReportHyperlinkRule().violations(draft)) == 2
+
+
+def test_the_rule_shares_its_detection_with_the_delivery_step() -> None:
+    """One definition of a hyperlink backs the violation and the removal at delivery."""
+    draft = "See the [outlook](https://example.org/a) and read https://example.org/b."
+
+    assert len(ReportHyperlinkRule().violations(draft)) == len(remove_hyperlinks(draft).hyperlinks)
+
+
 # --- what the writer is told --------------------------------------------------------------------
 
 
-def test_the_writer_instructions_carry_both_rules_in_order() -> None:
+def test_the_writer_instructions_carry_every_rule_in_order() -> None:
     instructions = render_writer_instructions(
         build_report_rules(sections=_SECTIONS, max_words=2750)
     )
 
-    assert instructions.index("## Report structure") < instructions.index("## Length")
+    assert (
+        instructions.index("## Report structure")
+        < instructions.index("## Length")
+        < instructions.index("## No links")
+    )
     # The structure is rendered as the template the writer copies, inside its tag.
     assert "<report_structure>\n## Overview" in instructions
     for section in _SECTIONS:

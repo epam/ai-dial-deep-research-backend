@@ -10,6 +10,11 @@ append-only, so no draft may reach the choice while the loop runs — the report
 the graph finishes, from its final state. Research-agent reasoning and both reviews' structured
 output never become content.
 
+Between the graph finishing and the report being appended, the runner runs the citation step:
+the hyperlinks a report may not carry are removed, each convertible citation marker becomes a
+marker tag, and the annotations claiming those tags are emitted once the text is appended (see
+`citations.py` and the report-citations capability). Nothing about it can fail the turn.
+
 Persistence is the caller's job — `run` returns the research message slice (the transcript plus
 the delivered report as an `AIMessage`) for the coordinator to persist with the preparation slice.
 """
@@ -18,6 +23,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -28,11 +35,14 @@ from langchain_core.messages import (
     ToolCall,
     ToolMessage,
 )
+from langchain_core.tools import BaseTool
 from langgraph.types import StreamPart
+from pydantic import BaseModel, Field
 
 from dial_deep_research.app.history import PrepState
 from dial_deep_research.app.mcp_tools import load_mcp_tools
 from dial_deep_research.app_properties import ApplicationProperties
+from dial_deep_research.utils.dial_annotations import send_annotations
 from dial_deep_research.utils.dial_stages import (
     DialStageReportFormatter,
     DialStageReportReviewFormatter,
@@ -42,6 +52,15 @@ from dial_deep_research.utils.dial_stages import (
     log_tool_call_completed,
 )
 
+from .citations import (
+    Annotation,
+    cited_document_ids,
+    convert_citations,
+    find_citation_markers,
+    log_citations_resolved,
+    remove_hyperlinks,
+)
+from .file_sharing import FileSharingError, share_documents
 from .graph import build_research_graph
 from .nodes import (
     ReportBudgetExhausted,
@@ -70,10 +89,51 @@ _FINISH_TOOL = FINISH_TOOL_NAME
 # research-agent's `update_status` calls or from a node announcing itself on entry.
 _INITIAL_ACTIVITY = "Starting research"
 
+# The activity stage of the citation step, opened only once that step has work: the file-sharing
+# call copies a document per cited id, which takes long enough that the turn would otherwise
+# look finished while it runs.
+CITATIONS_ACTIVITY = "Preparing the report's citations"
+
+# The citation step's failure kinds, as its warnings report them. Two more are decided by the
+# file-sharing call itself and named in `file_sharing.py`.
+_KIND_TOOL_NOT_ADVERTISED = "tool_not_advertised"
+_KIND_CALL_FAILED = "call_failed"
+_KIND_IDS_UNRESOLVED = "ids_unresolved"
+_KIND_LINK_PASS_FAILED = "link_pass_failed"
+_KIND_CONVERSION_FAILED = "conversion_failed"
+_KIND_EMISSION_FAILED = "emission_failed"
+
 # Joins the statuses of one assistant message into a single title. The model is told to send
 # one status per turn; this keeps the extras visible without opening a stage that would close
 # an instant later and so read as a finished step.
 _STATUS_JOIN = "; "
+
+
+class _ReportDelivery(BaseModel):
+    """The report as it will be delivered, and what the citation step counted on the way.
+
+    Filled in as the step gets through its passes, so a failure keeps the text the last
+    finished pass produced and every count already learned.
+    """
+
+    text: str
+    annotations: list[Annotation] = Field(default_factory=list)
+    documents_requested: int = 0
+    documents_resolved: int = 0
+    markers_left: int = 0
+    hyperlinks_removed: int = 0
+
+
+def _count_markers(text: str) -> int:
+    """How many citation markers the text still carries, for the step's own log event.
+
+    Guarded, because the only path that reaches it is one where the marker parsing already
+    failed once, and a count in a log record is not worth failing a delivered report over.
+    """
+    try:
+        return len(find_citation_markers(text))
+    except Exception:
+        return 0
 
 
 class ResearchRunner:
@@ -99,11 +159,14 @@ class ResearchRunner:
         opik_tracer: OpikTracer | None = None,
         bearer_token: str | None = None,
     ) -> list[BaseMessage]:
-        tools = await load_mcp_tools(mcp_servers=properties.mcp_servers, bearer_token=bearer_token)
+        loaded = await load_mcp_tools(mcp_servers=properties.mcp_servers, bearer_token=bearer_token)
         # Both are research-specific and app-owned: the sentinel ends an iteration, the status
         # tool tells the user what the agent is doing. Neither reaches an MCP server.
-        tools.append(build_finish_iteration_tool())
-        tools.append(build_update_status_tool())
+        tools = [
+            *loaded.agent_tools,
+            build_finish_iteration_tool(),
+            build_update_status_tool(),
+        ]
         graph = build_research_graph(
             tools=tools,
             today_date=datetime.now().date().isoformat(),
@@ -126,8 +189,9 @@ class ResearchRunner:
             config["callbacks"] = [opik_tracer]
 
         # Opened before the graph so the first model call is not silent. From here on some
-        # activity stage is always open, and `finally` is what guarantees none outlives the turn:
-        # an unclosed stage reaches the client with no status and spins there for good.
+        # activity stage is always open until the report is delivered, and every exit from here
+        # — the graph raising, the delivery raising, the delivery finishing — closes the open
+        # one: an unclosed stage reaches the client with no status and spins there for good.
         self._set_activity(_INITIAL_ACTIVITY)
         try:
             async for part in graph.astream(
@@ -141,26 +205,194 @@ class ResearchRunner:
         except BaseException:
             self._close_activity(Status.FAILED)
             raise
-        else:
-            self._close_activity(Status.COMPLETED)
 
-        self._deliver_report()
+        # The graph's last activity stage stays open into the citation step, which replaces it
+        # when it has work to announce and closes it before the report reaches the content.
+        await self._deliver_report(
+            file_sharing_tool=loaded.file_sharing_tool,
+            configured_tool_name=properties.file_sharing_tool,
+        )
         return self._messages
 
-    def _deliver_report(self) -> None:
-        """Append the settled report to the choice, and add it to the slice to persist.
+    async def _deliver_report(
+        self, *, file_sharing_tool: BaseTool | None, configured_tool_name: str | None
+    ) -> None:
+        """Post-process the settled report, append it to the choice, and emit its annotations.
 
         The graph state carries no draft `AIMessage` — drafts stay out of the transcript so a
         rejected one is neither re-sent to a model nor persisted — so the assistant message is
         built here, from the draft the loop settled on.
+
+        What is appended is that draft after the citation step, and the same text is what the
+        persisted message carries, so a later turn reads back what the user saw. The
+        annotations follow the content: the client reads them off a finished message, and a
+        marker tag no annotation claims is shown to the reader as text.
         """
         if not self._report:
+            self._close_activity(Status.COMPLETED)
             return
-        text = self._report
-        if self._content_already_streamed:
-            text = "\n\n" + text
-        self._choice.append_content(text)
-        self._messages = [*self._messages, AIMessage(content=self._report)]
+
+        started_at = time.monotonic()
+        try:
+            delivery = await self._run_citation_step(
+                self._report,
+                file_sharing_tool=file_sharing_tool,
+                configured_tool_name=configured_tool_name,
+            )
+        except BaseException:
+            # The step catches its own failures, so only something outside them reaches here —
+            # a cancelled turn, say. The stage closes as failed, as the graph's does.
+            self._close_activity(Status.FAILED)
+            raise
+        # Closed before the content, so the report never arrives under an open stage.
+        self._close_activity(Status.COMPLETED)
+
+        text = delivery.text
+        self._choice.append_content(f"\n\n{text}" if self._content_already_streamed else text)
+        self._messages = [*self._messages, AIMessage(content=text)]
+        self._send_annotations(delivery.annotations)
+        log_citations_resolved(
+            logger,
+            documents_requested=delivery.documents_requested,
+            documents_resolved=delivery.documents_resolved,
+            annotations=len(delivery.annotations),
+            markers_left=delivery.markers_left,
+            hyperlinks_removed=delivery.hyperlinks_removed,
+            duration_seconds=time.monotonic() - started_at,
+        )
+
+    async def _run_citation_step(
+        self,
+        draft: str,
+        *,
+        file_sharing_tool: BaseTool | None,
+        configured_tool_name: str | None,
+    ) -> _ReportDelivery:
+        """The two deterministic alterations of the settled draft, in their fixed order.
+
+        Link removal first, then the citation conversion over the text that pass produced. The
+        two fail independently, and each failure keeps what the pass before it finished: a
+        failed link pass delivers the draft exactly as the review settled it, and a failed
+        conversion delivers the link-free text with every citation marker in place.
+        """
+        try:
+            removal = remove_hyperlinks(draft)
+        except Exception as error:
+            self._warn_citation_failure(kind=_KIND_LINK_PASS_FAILED, error=error)
+            return _ReportDelivery(text=draft, markers_left=_count_markers(draft))
+
+        delivery = _ReportDelivery(text=removal.text, hyperlinks_removed=removal.removed)
+        try:
+            document_ids = cited_document_ids(removal.text)
+            delivery.documents_requested = len(document_ids)
+            # A file-sharing call to make, or edits already applied: either is work worth
+            # announcing. A draft that cites nothing and carried no link leaves the step with
+            # nothing to say, and a stage there would open and close in the same instant.
+            if removal.removed or (file_sharing_tool is not None and document_ids):
+                self._set_activity(CITATIONS_ACTIVITY)
+            document_urls = await self._share_cited_documents(
+                tool=file_sharing_tool,
+                configured_tool_name=configured_tool_name,
+                document_ids=document_ids,
+            )
+            delivery.documents_resolved = len(document_urls)
+            converted = convert_citations(removal.text, document_urls=document_urls)
+        except Exception as error:
+            self._warn_citation_failure(kind=_KIND_CONVERSION_FAILED, error=error)
+            delivery.markers_left = _count_markers(delivery.text)
+            return delivery
+
+        delivery.text = converted.text
+        delivery.annotations = converted.annotations
+        delivery.markers_left = converted.markers_left
+        return delivery
+
+    async def _share_cited_documents(
+        self,
+        *,
+        tool: BaseTool | None,
+        configured_tool_name: str | None,
+        document_ids: Sequence[int],
+    ) -> dict[int, str]:
+        """The URL of every cited document the file-sharing tool managed to share.
+
+        Empty whenever no URL can be obtained — no server names a tool, the named tool is not
+        advertised, the call failed, the answer could not be read — and every citation then
+        keeps its marker text. Only the first of those is routine rather than a fault: an
+        instance naming no tool has inline citations switched off, so it would otherwise warn
+        on every report it delivers.
+        """
+        if configured_tool_name is None:
+            logger.debug(
+                "Report citations: no MCP server names a file-sharing tool, so every citation"
+                " marker is delivered as the report writer wrote it"
+            )
+            return {}
+        if tool is None:
+            self._warn_citation_failure(
+                kind=_KIND_TOOL_NOT_ADVERTISED, tool_name=configured_tool_name
+            )
+            return {}
+        if not document_ids:
+            return {}
+        try:
+            document_urls = await share_documents(tool=tool, document_ids=document_ids)
+        except FileSharingError as failure:
+            self._warn_citation_failure(kind=failure.kind, tool_name=configured_tool_name)
+            return {}
+        except Exception as error:
+            self._warn_citation_failure(
+                kind=_KIND_CALL_FAILED, tool_name=configured_tool_name, error=error
+            )
+            return {}
+        unresolved = sum(1 for document_id in document_ids if document_id not in document_urls)
+        if unresolved:
+            # Warned even though the other documents got their pills: the report was written to
+            # offer this one's, and the counts alone would read as a report that cited less.
+            self._warn_citation_failure(
+                kind=_KIND_IDS_UNRESOLVED,
+                tool_name=configured_tool_name,
+                unresolved=unresolved,
+            )
+        return document_urls
+
+    def _send_annotations(self, annotations: Sequence[Annotation]) -> None:
+        """Emit the annotations claiming the marker tags of the text just appended.
+
+        A failure leaves those tags unclaimed, and the client shows an unclaimed tag to the
+        reader as text. The array is not re-sent and the appended content is not edited —
+        DIAL content is append-only, so neither is possible.
+        """
+        if not annotations:
+            return
+        try:
+            send_annotations(choice=self._choice, annotations=annotations)
+        except Exception as error:
+            self._warn_citation_failure(kind=_KIND_EMISSION_FAILED, error=error)
+
+    def _warn_citation_failure(
+        self,
+        *,
+        kind: str,
+        tool_name: str | None = None,
+        unresolved: int | None = None,
+        error: BaseException | None = None,
+    ) -> None:
+        """One WARNING per citation failure, naming the kind and nothing about a document.
+
+        What a record of this step may carry is the failure kind, counts, the configured tool's
+        name and the exception's class. A returned URL, any part of one, a file name taken from
+        one and a cited document's id never appear at any level: the mapping is a tool response
+        body, which the content allowlist keeps out of every record.
+        """
+        fields = [f"kind={kind}"]
+        if tool_name is not None:
+            fields.append(f"tool={tool_name}")
+        if unresolved is not None:
+            fields.append(f"ids_unresolved={unresolved}")
+        if error is not None:
+            fields.append(f"error={type(error).__name__}")
+        logger.warning("Report citations failed: %s", " ".join(fields))
 
     def _set_activity(self, title: str) -> None:
         """Replace the open activity stage with a new one titled `title`.

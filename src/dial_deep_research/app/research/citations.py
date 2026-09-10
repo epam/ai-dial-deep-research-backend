@@ -16,10 +16,12 @@ The order is fixed so the outcome is deterministic. It also keeps the marker par
 rule about a bracket followed by `(`: a Markdown link written `[doc 1 overview](url)` reaches the
 parser as the bare label `doc 1 overview`, which matches no marker.
 
-A citation becomes a pill only when both conditions of the `report-citations` capability hold —
-the cited document has a PDF URL the reader can open, and the marker stands where the client
-draws a pill. A citation failing either keeps its marker text, so the failure mode is a missing
-pill and never a lost citation.
+A citation becomes a pill when the cited document has a PDF URL the reader can open, and keeps
+its marker text when it does not, so the failure mode is a missing pill and never a lost
+citation. Where in the Markdown the marker stands is not a condition: the client parses a marker
+tag wherever it appears — a paragraph, a list item, a table cell, a heading, a blockquote. The
+exception is code, where Markdown parses no raw HTML: a marker inside a fenced block or a code
+span becomes a tag the reader sees as text.
 """
 
 from __future__ import annotations
@@ -27,16 +29,15 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from bisect import bisect_right
 from collections.abc import Callable, Mapping, Sequence
 from typing import Literal
 
 from pydantic import BaseModel
 
 # The tag written at each converted citation, and the tag name every annotation's selector
-# carries. The client rewrites a tag whose id an annotation claims into a pill, and removes a tag
-# no annotation claims. Note the asymmetry the client's contract fixes: the tag's attribute is
-# `data-id`, while the selector's field naming the same value is `id`.
+# carries. The client rewrites a tag whose id an annotation claims into a pill, and shows a tag
+# no annotation claims as text. Note the asymmetry the client's contract fixes: the tag's
+# attribute is `data-id`, while the selector's field naming the same value is `id`.
 CITATION_TAG_NAME = "cit"
 
 PDF_MIME_TYPE = "application/pdf"
@@ -60,13 +61,6 @@ _MARKER_RE = re.compile(f"{_DOCUMENT_MARKER}|{_DATASET_MARKER}", re.IGNORECASE)
 # What may stand between two markers of one run, matched in full. No newline: a citation on the
 # next line supports a different statement, as does one after a full stop or a word.
 _RUN_SEPARATOR_RE = re.compile(r"[ \t,;]*")
-
-_FENCE_RE = re.compile(r"^ {0,3}(```|~~~)")
-_ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(\s|$)")
-_BLOCKQUOTE_RE = re.compile(r"^ {0,3}>")
-_LIST_ITEM_RE = re.compile(r"^\s*([-*+]|\d+[.)])\s+")
-_SETEXT_UNDERLINE_RE = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
-_INDENTED_CODE_RE = re.compile(r"^(    |\t)")
 
 
 class CitationMarker(BaseModel):
@@ -138,7 +132,7 @@ class Annotation(BaseModel):
 
 
 class _ConvertibleCitation(BaseModel):
-    """A citation both conditions hold for: the document and page it names, and its PDF URL."""
+    """A citation the condition holds for: the document and page it names, and its PDF URL."""
 
     document_id: int
     page: int
@@ -151,8 +145,7 @@ class CitationConversion(BaseModel):
     text: str
     annotations: list[Annotation]
     # Citation markers still standing in `text`, in whatever form the writer wrote them —
-    # dataset markers, markers where no pill can be drawn, and markers whose document
-    # resolved no PDF URL.
+    # dataset markers, and markers whose document resolved no PDF URL.
     markers_left: int
 
 
@@ -216,18 +209,16 @@ def _sits_in_another_bracket(text: str, match: re.Match[str]) -> bool:
 
 
 def cited_document_ids(text: str) -> list[int]:
-    """The distinct document ids a URL is all their citations still need, in report order.
+    """The distinct document ids the text cites, in report order.
 
-    A document cited only where no pill can be drawn is left out: copying its file would buy the
-    reader nothing, since its markers stay as text either way.
+    Every one of them is asked for a URL: a citation becomes a pill wherever it stands, so no
+    document is cited only in places that cannot carry one.
     """
-    blocks = _BlockMap(text)
     ids: list[int] = []
     for marker in find_citation_markers(text):
         if marker.document_id is None or marker.document_id in ids:
             continue
-        if blocks.allows_pill(marker.start):
-            ids.append(marker.document_id)
+        ids.append(marker.document_id)
     return ids
 
 
@@ -247,7 +238,6 @@ def convert_citations(
             default is opaque and unique per tag.
     """
     markers = find_citation_markers(text)
-    blocks = _BlockMap(text)
 
     pieces: list[str] = []
     annotations: list[Annotation] = []
@@ -258,7 +248,7 @@ def convert_citations(
         convertible: list[_ConvertibleCitation] = []
         kept_as_text: list[CitationMarker] = []
         for marker in run:
-            citation = _convertible_citation(marker, document_urls=document_urls, blocks=blocks)
+            citation = _convertible_citation(marker, document_urls=document_urls)
             if citation is None:
                 kept_as_text.append(marker)
             else:
@@ -369,17 +359,15 @@ def _build_annotation(*, index: int, tag_id: str, citation: _ConvertibleCitation
 
 
 def _convertible_citation(
-    marker: CitationMarker, *, document_urls: Mapping[int, str], blocks: _BlockMap
+    marker: CitationMarker, *, document_urls: Mapping[int, str]
 ) -> _ConvertibleCitation | None:
     """This citation's document, page and URL, or None when it cannot become a pill.
 
-    The two conditions are decided here, and they are independent: a dataset marker or a
-    document with no PDF URL fails the first, and a marker standing where the client draws no
-    pill fails the second.
+    One condition, decided here: the marker names a document and a page, and that document has a
+    PDF URL. A dataset marker fails it because it names no page, and so does a document no URL
+    resolved for.
     """
     if marker.document_id is None or marker.page is None:
-        return None
-    if not blocks.allows_pill(marker.start):
         return None
     url = document_urls.get(marker.document_id)
     if url is None or not is_pdf_url(url):
@@ -410,80 +398,6 @@ def _group_into_runs(markers: Sequence[CitationMarker], *, text: str) -> list[li
         else:
             runs.append([marker])
     return runs
-
-
-class _BlockMap:
-    """Which offsets of one text stand where the client draws a pill.
-
-    A line scan rather than a Markdown parse: the only question asked is which block a marker
-    sits in, and the replacement itself is a string operation on the raw text. A construct the
-    scan cannot place is treated as ineligible, so its citation keeps a readable marker rather
-    than risking visible placeholder text.
-    """
-
-    def __init__(self, text: str) -> None:
-        self._text = text
-        lines = text.split("\n")
-        self._line_starts: list[int] = []
-        offset = 0
-        for line in lines:
-            self._line_starts.append(offset)
-            offset += len(line) + 1
-        self._allowed = _classify_lines(lines)
-
-    def allows_pill(self, offset: int) -> bool:
-        line_index = bisect_right(self._line_starts, offset) - 1
-        if not self._allowed[line_index]:
-            return False
-        # An odd number of backticks before the marker on its line puts it inside a code span,
-        # where the client shows the tag's placeholder text instead of a pill.
-        prefix = self._text[self._line_starts[line_index] : offset]
-        return prefix.count("`") % 2 == 0
-
-
-def _classify_lines(lines: Sequence[str]) -> list[bool]:
-    """Whether each line may carry a pill: a paragraph or a list item, and nothing else."""
-    allowed: list[bool] = []
-    in_fence = False
-    for index, line in enumerate(lines):
-        if _FENCE_RE.match(line):
-            in_fence = not in_fence
-            allowed.append(False)
-            continue
-        if in_fence:
-            allowed.append(False)
-            continue
-        allowed.append(_line_allows_pill(line, next_line=_next(lines, index)))
-    return allowed
-
-
-def _next(lines: Sequence[str], index: int) -> str | None:
-    return lines[index + 1] if index + 1 < len(lines) else None
-
-
-def _line_allows_pill(line: str, *, next_line: str | None) -> bool:
-    if not line.strip():
-        return False
-    if _ATX_HEADING_RE.match(line):
-        return False
-    if _BLOCKQUOTE_RE.match(line):
-        return False
-    # A setext heading is a text line underlined with `=` or `-`; the underline itself is part of
-    # the heading rather than a line of its own.
-    if next_line is not None and _SETEXT_UNDERLINE_RE.match(next_line):
-        return False
-    if _SETEXT_UNDERLINE_RE.match(line):
-        return False
-    # A pipe anywhere makes this a table row or a delimiter row. Deliberately broad: a paragraph
-    # carrying a pipe is rare in a report, and the cost of reading one as a table is a marker
-    # left as text.
-    if "|" in line:
-        return False
-    if _LIST_ITEM_RE.match(line):
-        return True
-    # Four spaces open an indented code block. A list item is matched first, so a nested bullet
-    # keeps its pill; a wrapped continuation line indented that far is read as code and loses it.
-    return not _INDENTED_CODE_RE.match(line)
 
 
 # A Markdown image, a Markdown link, a raw HTML image tag, a raw HTML anchor, an autolink and a

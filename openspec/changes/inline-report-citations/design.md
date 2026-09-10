@@ -18,23 +18,21 @@ document id — for the Generic RAG implementation, `RetrievedDocument.source_id
 `enumerate(pdf.pages, start=1)`. So both halves of a marker are already the values the
 file-sharing tool and the PDF viewer need, with no translation.
 
-**How DIAL Chat renders a citation.** Read from `epam/ai-dial-chat`, branch
-`feat/cit-html-tag-annotations` (head `c04fe21`), `libs/quotations` and `libs/chat-hooks`:
+**How DIAL Chat renders a citation.** Read from `epam/ai-dial-chat`, branch `development` once
+pull requests #8560 (2026-09-08) and #8681 (2026-09-09) had merged, in `libs/quotations`,
+`libs/chat-shared` and `libs/chat-hooks`:
 
 - An annotation says where its pill belongs in one of two ways. The older way is a
   `text_character_range` selector holding a character offset into the message. The newer way, which
   this design uses, is an `html_tag` selector naming a marker tag the producer put in its own text:
   `{type: 'html_tag', tag: 'cit', id}` matching a `<cit data-id="…">` tag. Note the asymmetry: the
   selector's field is `id`, the tag's attribute is `data-id`.
-- `stripAndReplaceCitTags` (in `citation-injection.ts`) rewrites every marker tag it finds in the
-  raw Markdown, into that annotation's sentinel when an annotation claims its id and into nothing
-  when none does. Its matcher on the branch as read, `/<cit\s+id="([^"]*)"\s*\/?>/g`, accepts the
-  attribute `id`; the DIAL Chat team has since confirmed `data-id` as the intended attribute and is
-  pushing that change, which is the form this design targets. A closing `</cit>` is not part of the
-  matcher either way and is dropped later by the renderer's
-  `rehypeRaw` + `rehypeSanitize` pass, which allowlists no `cit` element. Emitting the pair, which
-  is what the DIAL Chat team's integration instruction asks for, therefore renders identically to
-  emitting the opening tag alone.
+- The one markup shape the client interprets is the pair `<cit data-id="…"></cit>`, matched in
+  `citation-injection.ts`. Every other `cit` shape — an unpaired tag, one written with `id` instead
+  of `data-id`, a fragment still arriving mid-stream — is escaped by `escapeUnsupportedCitTags` and
+  shown to the reader as literal text. The attribute is `data-id` and not `id` because
+  `rehype-sanitize`'s default schema rewrites `id` to `user-content-…` to prevent DOM clobbering,
+  while `data-*` attributes are exempt from that rewrite.
 - `groupAnnotationsByCitId` groups tag-anchored annotations **by tag id** — one group per id, and
   `groupAnnotations` concatenates those with the URL-grouped ones. The producer therefore controls
   grouping outright: two ids never merge even when they cite the same document, and several
@@ -42,24 +40,30 @@ file-sharing tool and the PDF viewer need, with no translation.
 - `CitationDropdown` renders one `CitationMarker` per group, labelled from
   `body.source.attachment.title` (falling back to the URL's last path segment, percent-decoded, then
   its hostname), and `body.title` labels the entry inside the popup.
-- The sentinel is substituted into the rendered tree by `useCitationMarkdownComponents`, which
-  overrides `p` and `li` only, through `replaceSentinelsInChildren`, which substitutes only in a
-  plain string child and returns a React element child untouched.
+- A marker tag reaches the rendered tree as a real element: `MarkdownRenderer` allow-lists `cit`
+  and its `data-id` attribute through `rehype-raw` and `rehype-sanitize`, and
+  `useCitationMarkdownComponents` registers a `cit` component override that looks the group up by
+  that attribute. The override is keyed by tag name alone, with no Markdown context in it, so a tag
+  draws its pill wherever the parser puts an element — a paragraph, a list item, a table cell, a
+  heading, a blockquote. The hook's `p` and `li` overrides serve the older offset-anchored
+  citations only.
 - `resolveMessageAnnotations` reads `custom_content.annotations` when non-empty and keeps only
   entries carrying `body.source.attachment.url`; a flat `body.source = {type, url}` is valid only in
-  the other container, `custom_fields.annotations`, whose normalizer additionally drops
-  `body.selector` and forces `index` to undefined. A producer that streams its own response writes
-  the nested shape and keeps the page.
+  the other container, `custom_fields.annotations`, which is normalized into the same internal shape
+  with `body.selector` and any supplied `index` retained. A producer that streams its own response
+  writes the nested shape directly.
 - `annotationToPdfCanvasContent` (`libs/chat-hooks/src/files/attachment-canvas.ts`) opens the cited
-  PDF only when `body.source.attachment.type` is exactly `application/pdf`, and takes the page from
-  `body.selector` through `annotationsToPdfHighlights` — which reads it regardless of what kind of
-  target selector the annotation carries.
+  PDF and sets the page to navigate to from the clicked annotation's own `body.selector`, taking the
+  first `pdf_bbox` entry whose `page` is an integer of at least 1. The page travels in
+  `PdfCanvasContent.page`, independently of whether a highlight can be drawn, so a zero-area box
+  navigates and draws nothing. The annotation the user selected in a grouped popup is the one read,
+  never the group's first.
 
 Three consequences shape this design: the producer chooses the anchor position by placing a tag, so
-no offsets are involved; only paragraphs and list items can render a pill, and a tag anywhere else —
-or inside an inline span such as `**…**` or a code span — shows the reader raw sentinel text; and a
-tag no annotation claims is removed, so a missing annotation costs its citation but never leaves
-debris.
+no offsets are involved; a pill is drawn wherever the Markdown parser parses the tag, so the step
+needs no rule about which block a citation may stand in; and a tag no annotation claims is shown to
+the reader as text, so a missing annotation costs its citation and leaves the tag visible where it
+stood.
 
 **The second reader is the same renderer.** The DIAL overlay (`libs/chat-overlay`,
 `@epam/ai-dial-chat-overlay`, replacing the legacy `@epam/ai-dial-overlay`) embeds a deployed
@@ -110,8 +114,8 @@ path, and the page never comes from the URL. Everything it validated about the a
 carries over unchanged; only how the pill's position is expressed differs.
 
 **One thing the spike's report did not have.** Its fixed text was headings and paragraphs only. A
-real report carries tables, bullets and emphasis, which is where the paragraph-and-list-item
-constraint above starts to bite, so that is the case the plan has to handle rather than discover.
+real report carries tables, bullets and emphasis, so the demo covers those placements and a real
+report is the case that checks them at length.
 
 ## Goals / Non-Goals
 
@@ -120,8 +124,11 @@ constraint above starts to bite, so that is the case the plan has to handle rath
 - One pill per cited position, anchored where the citation stood, opening the cited page of a file
   the reader can actually read — and one pill, not a row of them, where a statement cites several
   sources at once.
-- Deep Research depends on a tool contract, so the retrieval server can be replaced without
-  re-deriving the citation mechanism.
+- Deep Research depends on a tool **contract** rather than on one server's tool names, so a server
+  that attributes its results the way the citation format expects — documents with integer ids and
+  1-based pages — is reached by naming its file-sharing tool in configuration, with no code change.
+  This is not a claim that any MCP server can be plugged in: which attribution shapes the citation
+  format can express is a closed list, stated as the supported server types (see D5a).
 - The report the review loop settled on is otherwise untouched, and no citation problem can cost a
   finished report.
 - The parsing, the eligibility conditions, the tag replacement and the payload are testable without
@@ -159,12 +166,11 @@ The runner therefore orchestrates, and everything decidable from strings lives i
 ### D2. Two independent conditions decide whether a citation becomes a pill
 
 The rule is in the spec (**report-citations**); it is a decision rather than a detail because the
-conditions are what make the step predictable, and because an earlier cut of them was not
-orthogonal. Two, each failing on its own and each decided by something different: the cited
-document has a URL from the file-sharing tool and that file is a PDF (ours, and the reason a dataset
-never qualifies — it is not a file); and the marker stands where the client draws a pill, meaning in
-a paragraph or list item in ordinary text (the client's renderer). A citation failing either of them
-keeps its `[doc <id>, page <ix>]` text.
+condition is what makes the step predictable, and because earlier cuts of it carried tests that were
+not independent. One condition: the cited document has a URL from the file-sharing tool and that
+file is a PDF — which is also the reason a dataset never qualifies, since it is not a file. A
+citation failing it keeps its `[doc <id>, page <ix>]` text. Where in the Markdown the marker stands
+is not a condition, because the client draws a pill wherever it parses the tag.
 
 An earlier cut carried a third condition — that the bracketed text is a citation rather than a
 Markdown link label. It is unnecessary once the deterministic edits run in the order D12 fixes: link
@@ -187,11 +193,11 @@ single-source-of-truth rule would otherwise read as an instruction to share one 
   only a URL, the test is that URL's path ending in `.pdf`, which errs toward keeping the marker.
 - *A third condition, splitting "has a URL" from "the annotation model accepts that source"* —
   rejected: the model's single-attachment source shape is why a non-file citation has nothing to
-  point at, which is a reason behind the first condition, not a second test a citation could fail
+  point at, which is a reason behind the URL condition, not a second test a citation could fail
   independently. Two conditions that never fail apart are one condition described twice.
-- *Convert every document marker* — rejected. A tag whose placeholder the client cannot substitute
-  shows the reader raw placeholder text, and a tag for a document with no URL claims a pill that
-  opens nothing.
+- *Convert every document marker, including one whose document resolved no URL* — rejected: the
+  client shows a tag no annotation claims as text, so such a marker would deliver visible markup
+  where a readable citation could have stood.
 - *Keep every marker and put a pill beside it* — rejected by the product decision in the proposal:
   the pill is meant to be the marker, and `[doc 442, page 3] 📄 file.pdf, page 3` says it twice.
 - *Make eligibility configurable per reader* — rejected: both intended readers are the same renderer
@@ -246,31 +252,27 @@ single entry.
   boundary supports a different statement, and folding the two would attach a source to a claim it
   was not offered for.
 
-### D4. Where a tag may be placed is decided by a line-based Markdown classifier
+### D4. A tag is placed wherever the citation stands, and no Markdown block is classified
 
-The position condition needs to know which Markdown block each marker sits in. A line-based scan is
-enough: track fenced-code state, and classify a line as an ATX heading (`#`), a table row
-(pipe-delimited, or the delimiter row), a blockquote (`>`), a list item (`-`, `*`, `+`, or an
-ordinal), or a paragraph. A
-marker on a table, heading, blockquote or code line is left as text; a marker inside an inline code
-span on an otherwise eligible line is also left as text, detected by an odd number of backticks
-before it on that line.
+The step reads the draft as a string and replaces every convertible marker, wherever it sits. It
+holds no model of Markdown blocks: the client's `cit` component override is keyed by tag name, so
+the pill is drawn in a table cell, a heading, a blockquote or an emphasis span as readily as in a
+paragraph.
 
-- *A real Markdown parser* — rejected for now: a new dependency to answer one question ("what block
-  is this marker in?"), when the replacement itself is a string operation on the raw text.
-- *Ask the report writer to cite only in prose* — rejected as the mechanism: nothing enforces a
-  prompt rule, a table of figures legitimately needs per-cell sourcing, and the report-review step
-  would have to grow a rule for it. It stays available as a later refinement if tables turn out to
-  swallow many citations in practice.
-- *Place tags everywhere and accept the debris* — rejected: raw sentinel text in a delivered report
-  is worse than a text marker.
+The one place a tag does not become a pill is code — a fenced block, an indented block, or an inline
+code span — because Markdown parses no raw HTML there and the reader sees the tag as written. That
+is accepted rather than detected: a report cites its sources in prose, lists and tables, and paying
+for a line scan of every draft to protect a case that does not arise buys nothing.
 
-The residual gap is a marker inside an emphasis span (`*…[doc 1, page 2]*`), which the classifier
-does not detect and where `replaceSentinelsInChildren` would leave the sentinel visible. The report
-prompt puts citations after a fact, at the end of a sentence, so this is unlikely; it is listed as a
-risk with a cheap check rather than designed around.
+- *Keep the line-based classifier that skipped tables, headings, blockquotes and code* — rejected
+  once the client shipped native `cit` rendering: the classifier's whole purpose was to avoid
+  placeholder text where the client could not substitute a sentinel, and the client now substitutes
+  everywhere its parser reaches. Keeping it would suppress pills a report's tables and headings can
+  carry.
+- *A real Markdown parser* — rejected: a new dependency to answer a question the step no longer
+  asks.
 
-### D5. The tool is named per MCP server in configuration, and at most one server may name it
+### D5. The tool is named per MCP server in configuration
 
 One optional string field on `MCPClientSettings`, `file_sharing_tool`, both opts the server in and
 says which tool to call. Flat rather than nested, because the DIAL application-type schema generator
@@ -287,10 +289,125 @@ inlines a root property's model and raises on a model nested below that (`_inlin
 - *A single top-level property naming server and tool* — rejected: it duplicates an association the
   server entry already expresses, and two properties could then disagree.
 
-The at-most-one rule is not a simplification but a correctness requirement: a `[doc 442, page 3]`
-marker names no server, so two servers issuing integer ids would make 442 ambiguous, and the report
-writer has no way to qualify it. A configuration that wants two document servers needs the marker
-format to carry a source first — a change to the **research-execution** citation requirement.
+Only one server may end up naming a tool, and that is a correctness requirement rather than a
+simplification: a `[doc 442, page 3]` marker names no server, so two servers issuing integer ids
+would make 442 ambiguous, and the report writer has no way to qualify it. It needs no check of its
+own, though — D5a bounds the configuration to one server per type and D5b makes the tool the
+document server's alone, so a second namer is unreachable. A configuration that wants two document
+servers needs the marker format to carry a source first — a change to the **research-execution**
+citation requirement.
+
+### D5a. The supported server types are named in configuration, one of each at most
+
+At-most-one *file-sharing tool* is weaker than what correctness needs, and the gap is not
+hypothetical. One server naming a file-sharing tool while a **second** server also serves documents
+passes that check, and then a `[doc 442, page 3]` marker written from the second server's results is
+resolved against the first, which answers with **its own** document 442 — a pill that opens the
+wrong document, silently. Generic RAG's document id is documented as "unique id of this document
+within the channel" (`generic_rag/types.py`), so every channel numbers from 1 and a collision is the
+likely case rather than the exotic one; the contract's absent-id path, which keeps the marker as
+text and warns, only saves the configuration where the ids happen not to collide.
+
+`MCPClientSettings` therefore carries a required `server_type`, one of a closed list —
+`generic_rag` and `statgpt` — and `ApplicationProperties` rejects more than one server of a type
+(**application-config-schema** owns the field and the rule). The same rule covers dataset servers:
+`[dataset <id>]` markers are converted into nothing today, but two dataset servers could ship the
+same dataset id, and one rule that holds for every type is smaller than a rule per type.
+
+Naming implementations in configuration is a real cost, and it is paid for a real reason: the app is
+**already** coupled to a retrieval server's attribution shape, and pretending otherwise is the more
+expensive mistake. The citation format fixes an integer document id and a 1-based page, and the
+report prompt teaches the writer to translate the compact `(doc_id, page_ix)` tuples one particular
+server returns (`app/research/prompts.py`). A server that attributed its results with page-less
+documents, or with web pages, could not be expressed in that format at all. So the tool **contract**
+is what stays open — any server may name its file-sharing tool anything, which is what D5 protects —
+while the set of attribution shapes the report format can express is closed, and the type field is
+where that is said out loud.
+
+- *A capability flag instead of a type* (`serves_cited_documents: bool`, required only when more than
+  one server is configured) — rejected, though it costs no migration for today's single-server
+  channels. It describes one property of a server the app cannot verify, while the real constraint is
+  broader: whether this server's attribution fits the citation format at all. An operator can also
+  answer "which server is this" reliably, and "does this server serve the documents the report cites
+  by id" only after reading the citation spec.
+- *Qualifying the citation with its source* (`[doc rag_a:442, page 3]`) — deferred, and the durable
+  fix, since it is the only one that makes several servers of one type work. It needs the report
+  writer to emit the qualifier reliably, and a wrong qualifier is worse than none: it resolves
+  against the wrong server rather than merely losing a pill. Not worth its cost while every
+  deployment runs one document server.
+- *Stating the constraint in prose only* — rejected: the constraint was already in prose, in this
+  decision's own closing sentence, and nothing enforced it. The next person to add a second server
+  gets a wrong pill rather than a validation error.
+- *A runtime check when the servers are loaded* — rejected as the place for it. The whole condition
+  is decidable from configuration, so it belongs in `ApplicationProperties` validation with the other
+  server rules, where it fails before any model call and reaches the operator as the
+  application-not-configured error rather than mid-turn.
+
+A cost worth stating: `server_type` is required, so **every** channel's `applicationProperties` must
+carry it, including the committed `applications-template.json`, whose test asserts it sets exactly
+the required properties. A default would have removed that migration and reintroduced the silent
+case — an unlabelled dataset server counted as the document server — which is the thing this rule
+exists to prevent.
+
+### D5b. The file-sharing tool is the document server's, and it must name one
+
+`file_sharing_tool` is required of a `generic_rag` server and forbidden on every other type: the
+configuration is rejected both when a document server does not name one and when a dataset server
+does (**application-config-schema** owns the rule).
+
+Those two halves replace the cross-server check an earlier cut of this design carried, which
+rejected a configuration where more than one server named a tool. That check is now provable
+rather than written: only the document server may name one, and D5a allows at most one server of
+each type, so a second namer cannot be configured. Keeping it would have been a third validator
+guarding a state the other two make unreachable — and the per-server error it replaces is the more
+actionable one, because it names the offending server and says why a dataset server has no file to
+share.
+
+The reason is that the two readings of an unset field cannot be told apart, and only one of them
+is real. A document server whose tool is unnamed delivers **every** document citation as plain
+text, which is what a broken deployment looks like, not what an operator chooses; and the tool it
+would name is part of that server — Generic RAG advertises `get_citation_url` taking
+`document_ids` and returning `{id: url}`, exactly the contract. Leaving the field optional means a
+missing name reads as "citations off" when it almost always means "somebody forgot", and the
+symptom reaches the reader rather than the operator: a report full of `[doc 442, page 3]` markers
+looks like a product without pills, not like a misconfiguration.
+
+The check is on `MCPClientSettings`, so the error points at the offending server entry, and it is
+declared **after** `_validate_mode`, since pydantic runs `mode="after"` validators in declaration
+order and a server with no usable connection at all is the more fundamental misconfiguration to
+report first.
+
+**What this costs, stated rather than discovered later.** Requiring the name removes the
+per-instance switch that three earlier passages leaned on, and each has been corrected:
+
+- *Rollback.* The Migration Plan promised that rolling back the citation half was a configuration
+  edit. It is not any more: a deployment serving documents converts its citations, so turning that
+  off means reverting code, exactly as with the hyperlink rule.
+- *The StatGPT relay.* The risk register mitigated the dropped-annotations problem with "conversion
+  is inert unless an instance names a file-sharing tool". That mitigation is gone, and an instance
+  behind that relay now delivers an empty marker tag where a readable marker used to stand.
+- *Reader readiness.* The marker-tag rendering is on DIAL Chat's development branch and in no
+  release, and the Risks section makes "confirming which chat version a reader gets" a precondition
+  for enabling the feature. An operator can no longer honour that per instance by withholding the
+  tool name.
+
+Whether that is the right trade is a product decision, and it was taken deliberately: a document
+server without file sharing is a broken document server. The alternative, if the switch is wanted
+back, is a property of its own — an instance-level flag that turns conversion off while the tool
+stays named — which is a small addition and is **not** part of this change.
+
+- *Requiring at least one file-sharing tool across the configuration* — rejected: it would forbid a
+  dataset-only deployment, which has no documents to share and no document citations to convert.
+- *Letting a dataset server name one too, in case StatGPT later serves documents* — rejected: a
+  tool named there would never be called for a dataset citation, and a StatGPT server that did
+  serve documents would put a second integer id space beside the document server's, which is
+  exactly what D5a refuses. That future needs source-qualified citations first, so the option it
+  was being kept open for does not exist.
+- *Failing the turn when the named tool is absent from the server's advertised list* — rejected.
+  Configuration can only require the name; whether the tool is really advertised is known per turn,
+  and turning that into a hard failure would contradict the rule that no citation problem costs a
+  finished report — a retrieval server redeployed without the tool would take every turn down
+  instead of delivering reports with plain markers and a warning.
 
 ### D6. The tool is invoked as a LangChain tool, and only its structured result is read
 
@@ -546,12 +663,42 @@ any of this can be looked at.
 - *Keep swapping and restart to compare* — rejected: the comparison is the requirement, and a
   restart between two renderings of one reply makes it a memory test.
 
-One constraint of the swap-style overlay does not obviously carry over and SHALL be re-checked when
-this is written: the current file states that the app must not run on host port 5000 under it,
-because the chat image is one container whose backend-for-frontend listens there. With the
-next-generation chat on 4207 and the base chat still on 3000, that reason may no longer apply. It is
-recorded here rather than dropped silently, and it is a five-minute check against a running stack
-rather than an argument to settle on paper.
+One constraint of the swap-style overlay does not carry over: it stated that the app must not run on
+host port 5000, because the chat image is one container whose backend-for-frontend listens there.
+That container now publishes port 5000 on host port 4207, so nothing in the overlay binds host 5000
+and the app keeps its default. The overlay file records this where the ports are set.
+
+### D15. The report stays in the message content, and the canvas is only for cited files
+
+A long report takes a lot of vertical space in the chat, and the client has a canvas — a resizable
+side panel that renders an attachment's content, `text/markdown` included — so delivering the report
+as an attachment and letting the canvas display it is an obvious idea. It is rejected: the report is
+message content (**research-execution**), because the canvas cannot carry inline citations.
+
+Three independent reasons, each sufficient:
+
+- **The pill injection exists only in the message bubble.** The `cit` component override and the
+  marker injection live in `libs/quotations`'s `useCitationMarkdownComponents`, whose one consumer
+  is the conversation's message item. The canvas renders Markdown through `libs/attachment-canvas`,
+  which does not depend on the quotations library and, under that repository's library-isolation
+  rule, cannot reach the app state the injection needs.
+- **The annotation model cannot address an attachment.** `target.selector` either indexes the
+  message text or names a marker tag inside it, and `AnnotationTarget.source` is declared as
+  `source?: unknown` and never interpreted. There is no way to say "this position inside
+  attachment 0".
+- **The canvas is already where a citation click goes.** Clicking Preview in a citation's popup
+  opens the canvas with the cited file, and the canvas holds one content at a time. The report and
+  the file it cites would compete for the same panel, so opening a citation would replace the
+  report.
+
+Two alternatives were weighed and are worth keeping visible:
+
+- *Report in the message content plus a duplicate `text/markdown` attachment* — pills work in the
+  bubble, and the attachment offers a full-panel read without them. Costs one attachment and no
+  other change, so it stays available if a reader asks for it.
+- *Report in the canvas with working pills* — needs client work we do not own: interpreting
+  `target.source`, injecting markers inside `attachment-canvas` across its isolation boundary, and
+  resolving two contents wanting one panel. A feature request, not a configuration.
 
 ## Risks / Trade-offs
 
@@ -559,11 +706,16 @@ rather than an argument to settle on paper.
   them** → `OpenAiToDialStreamer._process_custom_content` forwards only `state`, `attachments` and
   `stages`, so a relayed report loses `custom_content.annotations`, and with them the document, the
   page and the label of every converted citation — the delivered text holds only an empty marker tag
-  at that spot. Mitigation: citation conversion is inert unless an instance names a file-sharing
-  tool, so that switch is per instance, and this change deliberately does not attempt that chain —
-  the relay stays deferred work. Link removal has no such switch (see D12), but it leaves nothing
-  for a relay to drop: the delivered text is plain prose either way. The fix on that side is small (one branch, plus a passthrough method on its choice
-  protocol), and until it lands the feature serves readers who reach Deep Research directly.
+  at that spot. **This risk has no mitigation left on our side.** An earlier cut of this design
+  leaned on one — conversion was inert until an instance named a file-sharing tool, so a relayed
+  instance could simply not name it — and requiring the tool on every document server (D5b) took
+  that switch away. A Deep Research instance relayed through StatGPT therefore converts its
+  citations, the relay drops the annotations, and the reader is left with an empty marker tag where
+  a readable `[doc 442, page 3]` used to stand. Link removal was never switchable (see D12) but
+  leaves nothing for a relay to drop: the delivered text is plain prose either way. The fix belongs
+  on the relay side and is small there (one branch, plus a passthrough method on its choice
+  protocol); until it lands, this feature serves readers who reach Deep Research directly, and an
+  instance behind that relay needs the fix or a code change here.
 - **Preview lands on the wrong page for every repeat citation of one document** → Read from
   `feat/cit-html-tag-annotations`, not observed: `annotationToPdfCanvasContent` resolves the clicked
   annotation's group with `groups.find((g) => g.sourceUrl === source.url)`, which is ambiguous now
@@ -578,11 +730,11 @@ rather than an argument to settle on paper.
   tag is small, empty, and placed where a citation marker already stood, so the worst case is a
   visible `<cit data-id="…">` rather than damaged prose. This is the price of anchoring by tag instead of
   by offset, taken deliberately for one pill per occurrence.
-- **A mis-classified block would show raw sentinel text to the reader** → The classifier converts
-  only what it is sure about, so its failure mode is a missing pill rather than debris; the
-  inline-span gap in D4 is the one case that could still leak. Mitigation: one local end-to-end run
-  of a real report — which contains tables, bullets and emphasis, unlike the spike's fixed report —
-  inspected in the chat before this is enabled anywhere.
+- **A citation written inside code delivers a visible tag** → Markdown parses no raw HTML in a
+  fenced block, an indented block or a code span, so a tag placed there is shown as written (D4).
+  Mitigation: none by design — a report cites in prose, lists and tables. One local end-to-end run
+  of a real report, inspected in the chat, is what would surface it if a report ever cites inside
+  code.
 - **A hallucinated page number opens the wrong page** → The page comes from the model copying a
   retrieval marker, and nothing validates it against the document's page count. Mitigation: none in
   this change; the document metadata contract would make a bound available later.
@@ -608,10 +760,10 @@ rather than an argument to settle on paper.
   intended readers — DIAL Chat and the overlay both stream, and the spike confirmed the streaming
   path keeps the field. The limitation is stated in the **report-citations** payload requirement so
   the index rule is not read as holding for every caller.
-- **The tag format lives on an unmerged DIAL Chat branch** → `feat/cit-html-tag-annotations` is not
-  in a release as read. Mitigation: confirm which chat version carries it before enabling the feature
-  for a reader, and note that the annotation body is identical either way — only the selector differs,
-  so falling back to the offset form would be a contained change if the branch were abandoned.
+- **The tag rendering is on DIAL Chat's development branch but in no release** → it merged there on
+  2026-09-08 and 2026-09-09, after the newest release was built. Mitigation: the overlay runs the
+  `development` image tag, and confirming which chat version a reader gets stays a precondition for
+  enabling the feature for them.
 
 ## Migration Plan
 
@@ -620,9 +772,9 @@ product wiring, because it is what makes the mechanism verifiable at all.
 
 1. **Ship the shared citation code and the demo completion**, with the demo's flag off by default.
    Nothing about a research turn changes yet.
-2. **Verify the mechanism through the demo**, against a chat build carrying the marker-tag rendering
-   and the `data-id` attribute. No DIAL Chat release contains either yet, so this step waits on a
-   build from that team; the demo is what they can run against it. What to look for: a pill at every
+2. **Verify the mechanism through the demo**, against a chat build carrying the marker-tag
+   rendering. That is the `development` image tag, which the overlay runs: the rendering is on DIAL
+   Chat's development branch and in no release yet. What to look for: a pill at every
    convertible citation and none where a citation was left as text, a run rendering one pill with
    several sources, one document cited in several places rendering separate pills, each pill opening
    its own page, no raw marker tag or placeholder anywhere, and the fixtures opening for a user other
@@ -631,23 +783,33 @@ product wiring, because it is what makes the mechanism verifiable at all.
    hyperlink rule in the report rules, and the delivery step. From this step on, every deployment
    gets the hyperlink rule — the writer instruction, the review violation and the removal at
    delivery — whether or not it names a file-sharing tool, because that rule has no configuration
-   switch (see D12). What an instance that names no tool does not get is citation conversion: its
-   reports carry every citation marker exactly as the writer wrote it.
-4. **Name the tool in one instance's `mcp_servers` entry** and check a real report — whose prose
-   carries tables, bullets and emphasis, unlike any fixture — for the same things, plus whether
-   annotations survive a reload and a re-share.
+   switch (see D12). Citation conversion arrives with it wherever a document server is configured,
+   since that server must name its file-sharing tool (D5b); only a deployment with no document
+   server delivers every citation marker as the writer wrote it.
+4. **Check a real report** — whose prose carries tables, bullets and emphasis, unlike any fixture —
+   for the same things, plus whether annotations survive a re-share. Every channel's
+   `applicationProperties` needs `server_type`, and a document server needs `file_sharing_tool`,
+   before it serves any request at all.
 5. **Later, and out of this change**: the relay through StatGPT, which drops `annotations` today.
 
-Rolling back the citation half is a configuration edit at each stage: unset the demo's flag, or clear
-the file-sharing tool name on the instance, and no report gets a marker tag or an annotation, with no
-code change or redeploy. The hyperlink rule has no such switch — rolling it back means reverting
-code, which is the trade-off D12 states and accepts.
+Rolling back the demo is a configuration edit: unset its flag, and it is not registered. **Rolling
+back citation conversion is not**, because a document server must name its file-sharing tool
+(D5b): every deployment that serves documents converts its citations, so returning one to plain
+markers means reverting code. The hyperlink rule is in the same position, which is the trade-off
+D12 states and accepts. The staged rollout above therefore stages the *verification*, not the
+exposure — step 3 turns conversion on everywhere a document server is configured, and step 4 is
+where a real report is inspected rather than where the feature is first enabled.
 
 ## Open Questions
 
-- Whether inline annotations survive a conversation reload and a re-share. The spike confirmed the
-  older reference-attachment convention survives a share, and annotations ride on the same message
-  snapshot, but this was never exercised. It changes nothing in this design; it changes what we
-  promise a client.
-- Whether DIAL Chat will offer a page-only selector, which would retire the zero-size `pdf_bbox`
-  workaround. Cosmetic here — the payload keeps working either way.
+- Whether inline annotations survive a re-share. A reload keeps them, and a share was exercised
+  only for the older reference-attachment convention, which survived it; annotations ride on the
+  same message snapshot, but that is reasoning rather than an observation. It changes nothing in
+  this design; it changes what we promise a client.
+- Whether the DIAL overlay — the portal page's embedded panel, the second intended reader — renders
+  a pill and its citation canvas usably. Nothing about it has been exercised: every check so far is
+  DIAL Chat in a full browser tab, where the canvas has the width of a window rather than of a panel
+  inside an iframe, and where closing the sources and history panels costs the reader less. The
+  canvas is mutually exclusive with the conversation-sources panel and the conversation-history
+  panel — opening any one of the three closes the other two — which is a layout nuisance in a full
+  tab and an open question inside a narrow embedded panel.

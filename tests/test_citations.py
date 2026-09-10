@@ -1,9 +1,9 @@
 """The shared citation code: what becomes a pill, what stays as text, and what the payload says.
 
-What is protected here: a citation is converted only when the two conditions of the
-report-citations capability hold, and a citation that fails either keeps the exact text the
-report writer wrote. Everything else — the marker grammar, the block classification, the run
-folding, the hyperlink removal and the payload's shape — exists to make that outcome predictable.
+What is protected here: a citation is converted when the condition of the report-citations
+capability holds — the document it names has a PDF URL — and a citation that fails it keeps the
+exact text the report writer wrote. Everything else — the marker grammar, the run folding, the
+hyperlink removal and the payload's shape — exists to make that outcome predictable.
 """
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ def test_a_nested_bracket_leaves_the_inner_marker_readable() -> None:
     assert converted.text == "A sentence. [[doc 101, page 3]]"
 
 
-# --- where a pill may be drawn ------------------------------------------------------------------
+# --- where a citation is converted --------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -94,52 +94,24 @@ def test_a_nested_bracket_leaves_the_inner_marker_readable() -> None:
     [
         pytest.param("A cited sentence. [doc 101, page 3]", id="paragraph"),
         pytest.param("- a cited bullet [doc 101, page 3]", id="list-item"),
-        pytest.param("* a cited bullet [doc 101, page 3]", id="list-item-asterisk"),
         pytest.param("1. a cited bullet [doc 101, page 3]", id="ordered-list-item"),
         pytest.param("  - a nested bullet [doc 101, page 3]", id="nested-list-item"),
-        pytest.param("    - a deeper bullet [doc 101, page 3]", id="four-space-list-item"),
+        pytest.param("| 2.4% | [doc 101, page 3] |", id="table-row"),
+        pytest.param("## A heading [doc 101, page 3]", id="atx-heading"),
+        pytest.param("A setext heading [doc 101, page 3]\n===", id="setext-heading"),
+        pytest.param("> a quoted claim [doc 101, page 3]", id="blockquote"),
+        pytest.param("**bold and cited [doc 101, page 3]**", id="emphasis-span"),
+        # Markdown parses no raw HTML inside code, so the reader sees the tag as text in these
+        # two. Converted all the same: where a marker stands is not a condition of conversion.
+        pytest.param("a `span [doc 101, page 3]` here", id="inline-code-span"),
+        pytest.param("```\ncode [doc 101, page 3]\n```", id="fenced-code-block"),
     ],
 )
-def test_a_citation_in_a_paragraph_or_list_item_is_converted(draft: str) -> None:
+def test_a_citation_is_converted_wherever_it_stands(draft: str) -> None:
     converted = _convert(draft)
     assert converted.text == draft.replace("[doc 101, page 3]", _tag("tag-0"))
     assert len(converted.annotations) == 1
     assert converted.markers_left == 0
-
-
-@pytest.mark.parametrize(
-    "draft",
-    [
-        pytest.param("| 2.4% | [doc 101, page 3] |", id="table-row"),
-        pytest.param("| --- | [doc 101, page 3] |", id="table-delimiter-row"),
-        pytest.param("## A heading [doc 101, page 3]", id="atx-heading"),
-        pytest.param("###### A deep heading [doc 101, page 3]", id="atx-heading-level-six"),
-        pytest.param("A setext heading [doc 101, page 3]\n===", id="setext-heading-equals"),
-        pytest.param("A setext heading [doc 101, page 3]\n---", id="setext-heading-dashes"),
-        pytest.param("> a quoted claim [doc 101, page 3]", id="blockquote"),
-        pytest.param("```\ncode [doc 101, page 3]\n```", id="fenced-code-block"),
-        pytest.param("~~~\ncode [doc 101, page 3]\n~~~", id="tilde-fenced-code-block"),
-        pytest.param("    code [doc 101, page 3]", id="indented-code-block"),
-        pytest.param("a `span [doc 101, page 3]` here", id="inline-code-span"),
-    ],
-)
-def test_a_citation_where_no_pill_can_be_drawn_keeps_its_text(draft: str) -> None:
-    converted = _convert(draft)
-    assert converted.text == draft
-    assert converted.annotations == []
-    assert converted.markers_left == 1
-
-
-def test_a_citation_after_a_closed_code_span_is_still_converted() -> None:
-    converted = _convert("a `span` and then a claim [doc 101, page 3]")
-    assert converted.text == f"a `span` and then a claim {_tag('tag-0')}"
-
-
-def test_a_citation_after_a_fenced_block_is_still_converted() -> None:
-    draft = "```\ncode\n```\n\nA cited sentence. [doc 101, page 3]"
-    converted = _convert(draft)
-    assert converted.text.endswith(_tag("tag-0"))
-    assert len(converted.annotations) == 1
 
 
 # --- the URL condition --------------------------------------------------------------------------
@@ -170,7 +142,7 @@ def test_a_dataset_citation_is_never_converted() -> None:
 # --- which documents a URL is asked for ---------------------------------------------------------
 
 
-def test_the_requested_ids_are_the_documents_a_pill_could_be_drawn_for() -> None:
+def test_the_requested_ids_are_every_cited_document_in_report_order() -> None:
     draft = (
         "First. [doc 101, page 1]\n\n"
         "Second, the same document. [doc 101, page 2]\n\n"
@@ -179,9 +151,9 @@ def test_the_requested_ids_are_the_documents_a_pill_could_be_drawn_for() -> None
         "## in a heading [doc 104, page 1]\n\n"
         "A dataset [dataset ABC:DEF] and an unresolved document. [doc 999, page 1]"
     )
-    # 103 and 104 are cited only where no pill can be drawn, so copying their files would buy
-    # the reader nothing. 999 is asked for: whether a URL comes back is the tool's answer.
-    assert cited_document_ids(draft) == [101, 102, 999]
+    # A dataset is not a document and is never asked for. 999 is asked for like the rest:
+    # whether a URL comes back is the tool's answer.
+    assert cited_document_ids(draft) == [101, 102, 103, 104, 999]
 
 
 # --- runs ---------------------------------------------------------------------------------------
