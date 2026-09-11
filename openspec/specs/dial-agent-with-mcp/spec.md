@@ -54,7 +54,22 @@ The research-agent node SHALL be a fresh per-request LangChain `create_agent` ov
 tools fetched from a freshly-constructed MCP client, plus one sentinel tool
 (`finish_iteration`). It SHALL have access only to MCP-loaded tools and that
 sentinel — no other built-in tools, subagents, skills, or persistent memory beyond
-the graph state. Research-agent SHALL be run with **forced tool choice** — every model
+the graph state.
+
+A tool an MCP server advertises for the **application** to call, rather than for an agent to call,
+SHALL be excluded from every list bound to a model — today that is the file-sharing tool of the
+**report-citations** capability. Such a tool SHALL be resolved from the server's full advertised
+tool list rather than through that server's `tools_to_include` filter, which states which tools the
+research agent may call; naming it in that filter SHALL NOT cause the agent to be offered it, and
+omitting it SHALL NOT stop the app from calling it. An application-called tool SHALL have the agent tools'
+error handling **disabled** on it: the agent tools convert a tool error into an error result message
+so the model can retry, whereas the app needs the failure itself so it can fall back (see
+**report-citations**). Disabling is an explicit act rather than an omission, because the MCP tool
+adapter installs that conversion by default — a tool nobody touches still answers an error as
+ordinary result content — so the app SHALL clear it on this tool rather than rely on it being
+absent.
+
+Research-agent SHALL be run with **forced tool choice** — every model
 call re-issued with `tool_choice="any"` by an in-process `AgentMiddleware` — so every
 model step emits a tool call and the model can never emit a free-form assistant
 message.
@@ -98,6 +113,16 @@ features (long-lived sessions, `Mcp-Session-Id`, `Last-Event-ID` resumability,
 - **WHEN** the app processes two requests that each construct an MCP client
 - **THEN** the app SHALL construct a new MCP client for the second rather than reusing the first's, the second's MCP traffic SHALL NOT carry an `Mcp-Session-Id` derived from the first, and any in-flight notifications received during the first request's POST SSE response SHALL have terminated with that request
 
+#### Scenario: An application-called tool is kept out of the agent's tools
+
+- **WHEN** a configured MCP server advertises a file-sharing tool and a research turn starts
+- **THEN** the tools bound to research-agent SHALL exclude it, whether or not that server's `tools_to_include` names it, and the app SHALL still be able to invoke it outside the agent
+
+#### Scenario: One tool-list fetch serves both the agent and the app
+
+- **WHEN** the app loads tools for a server that advertises search tools and a file-sharing tool
+- **THEN** the server's advertised tool list SHALL be fetched for that turn and split into the agent's tools and the application-called tool, without a second `tools/list` round trip for the same server
+
 ### Requirement: Tool execution surfaced as timed DIAL stages
 For every tool the agent invokes during a request, the app SHALL emit a single DIAL "result" stage carrying both the input arguments and the tool's output. The one exception is `update_status`, which carries no result and SHALL produce no result stage — it is surfaced as the activity stage described in **Research progress surfaced as one open activity stage**, and the app SHALL NOT render its arguments or its acknowledgement anywhere in the stage channel. Titles follow the normalized form `[TOOL] <tool_name> <emoji> (<elapsed>s, start: HH:MM:SS, end: HH:MM:SS)`, where emoji ∈ `{✅, ❌}` marks success and failure. The mark carries the outcome on its own, so the title SHALL NOT spend width on a word for it. Stage timestamps SHALL bracket the actual execution window (start when the call is dispatched to the MCP server, end when the result is received). When the tool returns an error (caught by `handle_tool_error` instead of bubbling), the stage SHALL be marked ❌ so the failure stands out in the chat UI. Stage content is rendered as markdown by DIAL, so both the input arguments and the tool output SHALL be wrapped in fenced code blocks (single newlines would otherwise collapse), making multi-line payloads — JSON args, plain-text results, error tracebacks — readable verbatim.
 
@@ -115,13 +140,15 @@ For every tool the agent invokes during a request, the app SHALL emit a single D
 
 ### Requirement: Research progress surfaced as one open activity stage
 
-While the research graph runs, the app SHALL keep exactly one DIAL stage open at all times, whose title names what research is doing at that moment. The app SHALL open the first such stage before the graph starts, and SHALL replace it — closing the open one, then opening a new one — each time research-agent announces a step through `update_status` and each time research-review, report or report-review is entered. Replacement SHALL be the only way the title changes, since a DIAL stage name can be appended to but never rewritten.
+From the moment the research graph starts until the report is delivered, the app SHALL keep exactly one DIAL stage open at all times, whose title names what the turn is doing at that moment. The app SHALL open the first such stage before the graph starts, and SHALL replace it — closing the open one, then opening a new one — each time research-agent announces a step through `update_status`, each time research-review, report or report-review is entered, and once more when the graph has finished and the citation step begins (see **report-citations**), whose server-side copies can take a moment while the turn would otherwise look finished. Replacement SHALL be the only way the title changes, since a DIAL stage name can be appended to but never rewritten.
 
 The activity stage SHALL carry a title only: no stage content, no bracketed prefix of the kind result stages use, and no elapsed time or timestamps. A closing activity stage means a new step has started, not that the closed step finished — work announced earlier may still be running — so the app SHALL NOT stamp it with any duration, and SHALL NOT open and close an activity stage at the same instant, which would render as a completed step.
 
 One assistant message SHALL change the activity stage at most once. When a message carries several `update_status` calls, the app SHALL join their texts into one title and open a single stage. When a message calls `update_status` together with `finish_iteration`, the app SHALL leave the activity stage untouched.
 
-The app SHALL close the open activity stage before the turn ends, on both the success and the failure path, using the failed status when the run is ending in an error. No activity stage SHALL be left open when the response completes.
+The app SHALL close the open activity stage before the turn ends, on both the success and the failure path, using the failed status when the run is ending in an error. No activity stage SHALL be left open when the response completes. The citation step's stage SHALL be closed before the report text is appended, so the content never arrives under an open stage.
+
+A step with nothing to do SHALL open no stage. The citation step on a turn whose draft cites nothing and carries no hyperlink finishes in microseconds, and opening a stage there would open and close it at the same instant — the thing this requirement forbids two paragraphs above. The app SHALL therefore open the citation step's stage only once it has work: a file-sharing call to make, or edits to apply to the draft.
 
 #### Scenario: A status announcement replaces the open stage
 
@@ -157,6 +184,16 @@ The app SHALL close the open activity stage before the turn ends, on both the su
 
 - **WHEN** the research graph raises and the turn is delivered as a DIAL error
 - **THEN** the app SHALL close the open activity stage with the failed status before the error is raised, and SHALL NOT leave a stage whose status is still unset
+
+#### Scenario: The citation step is announced while it works
+
+- **WHEN** the research graph has finished and the citation step has cited documents to resolve through the file-sharing tool
+- **THEN** the app SHALL replace the graph's last activity stage with one naming the citation work, and SHALL close it before the report text is appended to the assistant content
+
+#### Scenario: A citation step with nothing to do opens no stage
+
+- **WHEN** the settled draft cites no document and carries no hyperlink, so the citation step has neither a call to make nor an edit to apply
+- **THEN** the app SHALL open no activity stage for it, rather than one that opens and closes at the same instant
 
 ### Requirement: Assistant message content contains only model text
 The DIAL response message content SHALL, in chronological order, contain only the
