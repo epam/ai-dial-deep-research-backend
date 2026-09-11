@@ -24,8 +24,10 @@ from dial_deep_research.app.research.citations import Annotation
 def send_annotations(*, choice: Choice, annotations: Sequence[Annotation]) -> None:
     """Emit the annotations array as one delta on `choice`.
 
-    Called after the report content has been appended: the client reads the annotations off a
-    finished assistant message, and a tag no annotation claims is removed from the text.
+    Called after the report content has been appended. The client resolves annotations only once
+    the message has finished streaming, hiding every marker tag until then. On the finished
+    message a tag an annotation claims becomes a pill, and a tag no annotation claims is rendered
+    as literal text.
     """
     choice.send_chunk(
         ArbitraryChunk(
