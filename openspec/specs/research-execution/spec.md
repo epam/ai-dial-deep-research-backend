@@ -292,11 +292,17 @@ instructions and the draft they refer to.
 Citations SHALL use inline `[doc <id>, page <ix>]` for document-sourced facts and
 `[dataset <id>]` for dataset-sourced facts.
 
+**Those two forms SHALL be the only way the report references a source.** The report cites what the
+research retrieved and nothing else, so it SHALL carry no hyperlink in any form. Which forms count,
+what the writer is told, what the app checks and what is removed before delivery are owned by the
+**report-composition** capability.
+
 **The inline citation format SHALL NOT be configurable, per instance or otherwise.** It is not a
-style choice but a machine-readable interface: DIAL chat will render citations from it, so a
-deployment that emitted a different form would break that rendering rather than merely look
-different. Every report from every instance therefore carries the same inline form, and only a
-change to this requirement may change it.
+style choice but a machine-readable interface: the app parses these markers out of the delivered
+report to build DIAL inline citation annotations from them (see the **report-citations**
+capability), so a deployment that emitted a different form would break that step rather than
+merely look different. Every report from every instance therefore carries the same inline form,
+and only a change to this requirement may change it.
 
 Every cited source SHALL be decoded in the report's references section, whenever the configured
 structure includes one (the default does). How that decoding is rendered is carried by that
@@ -313,10 +319,31 @@ surface as DIAL stages, and report-review's findings SHALL surface as a DIAL sta
 carries what the user needs to see about how the answer was produced. A blank-line separator SHALL precede the report only when text was already streamed
 into the assistant content earlier in the same turn.
 
+What is appended is the settled draft **after the citation step**, which removes the hyperlinks the
+report may not carry, replaces each convertible citation marker with that citation's marker tag, and
+leaves every other character alone (see the **report-citations** capability). That step is the single permitted transformation between the draft
+the review settled on and the text the user reads; nothing else may alter a settled draft, and the
+annotations it emits SHALL be the only other thing the app adds to the message alongside that text.
+
+**The report SHALL be delivered as assistant message content, never as an attachment.** A citation
+pill is drawn only inside the assistant message bubble, where the client injects it while rendering
+that message's Markdown; an attachment opened in the client's side canvas is rendered by a path that
+resolves no annotations. A report moved into a `text/markdown` attachment would therefore show as
+plain text with no pill anywhere, and the annotations, which name marker tags standing in the
+message text, would have nothing to anchor to.
+
+The delivered content therefore carries markup a reader's client is expected to resolve: a client
+that understands the marker tags renders a pill for each, and one that does not either drops a tag
+or shows it. A converted citation's readable text lives in its annotation rather than in the report
+text, so a client that discards the annotations loses that citation rather than degrading to a
+visible marker. Which citations are converted at all is decided by the **report-citations**
+capability's two conditions, whose deliberate consequence is that every citation left unconverted
+stays fully readable in the text.
+
 #### Scenario: Report is the assistant answer
 
 - **WHEN** the report review loop settles on a draft
-- **THEN** exactly that draft's text SHALL be appended to the assistant message content as the answer, with inline citations and a references section decoding them
+- **THEN** exactly that draft's text SHALL be appended to the assistant message content as the answer — with each converted citation's marker replaced by its marker tag, every unconverted citation marker in place as written, and a references section decoding them
 
 #### Scenario: Drafts under review are not visible
 
@@ -386,8 +413,9 @@ is part of the contract, not an accident of implementation.
 **3. report** (one call per draft: the first, and each revision)
 
 - System prompt: the report instructions, filled with today's date — the configured section
-  structure, the protected sections, the word ceiling, the prohibited meta-annotations, and the
-  citation rules (see **report-composition**).
+  structure, the protected sections, the word ceiling, the prohibited meta-annotations, the
+  citation rules, and the rule that a source is referenced only by an inline citation form and
+  never by a hyperlink (see **report-composition**).
 - Messages: the accumulated `messages` transcript **including images** (already clamped by
   the image budget) with the `update_status` calls and their acknowledgements removed, then the
   report request carrying the aligned query and the plans pursued. Removal is deterministic, so
@@ -416,8 +444,9 @@ is part of the contract, not an accident of implementation.
   user's formatting instruction. The draft comes **last**, being the only part that differs between
   the calls of one run.
 - **Neither the measured word count nor the ceiling is included**, and the message tells this call
-  that the app checks the headings and the length itself. Length is not its to judge: the app
-  measures the draft and adds the length violation on its own (see **report-composition**).
+  that the app checks the headings, the length and the hyperlinks itself. None of the three is
+  its to judge: the app checks the draft and adds their violations on its own (see
+  **report-composition**).
 - **The research findings are NOT included** — no transcript, no tool results, no images, and so
   no status announcements either. Every criterion this call judges is decidable from the draft, the
   configuration, and the query and plan.

@@ -118,10 +118,11 @@ change stays active rather than archived.
 - [x] 5.3 Confirm the annotations survive a conversation reload: the pills come back after the
       conversation is reopened, so the client persists the `custom_content.annotations` this app
       writes and not only the raw wire form. Checked on 2026-09-09.
-- [ ] 5.4 Open the same reply in the DIAL overlay — the portal page's embedded panel, the second
+- [x] 5.4 Open the same reply in the DIAL overlay — the portal page's embedded panel, the second
       intended reader — and check what nothing has exercised yet: whether the pill is usable at that
       width, how the citation canvas renders inside a panel that is itself inside an iframe, and
       whether the canvas closing the sources and history panels is tolerable there.
+      Checked on 2026-09-11: the pills render and open their page in the overlay.
 
 ## 6. Research turn — wiring
 
@@ -174,10 +175,13 @@ change stays active rather than archived.
 
 ## 7. Research turn — enabling it for a reader
 
-- [ ] 7.1 Run a real research turn on a configured instance, whose prose carries tables, bullets
+- [x] 7.1 Run a real research turn on a configured instance, whose prose carries tables, bullets
       and emphasis unlike the demo's report. Nothing is enabled here: a document server names its
       file-sharing tool by requirement (6.1b), so conversion is on as soon as the channel's
       `applicationProperties` carry `server_type` and that tool name.
-- [ ] 7.2 Check the same things as 5.2 on that report, plus whether the annotations survive a
-      re-share — the half of the design's open question that a reload has now answered, and the one
-      that changes what we can promise a client.
+      Done on 2026-09-11 through a StatGPT channel, which relays the annotations since
+      `epam/statgpt-backend` #659 (merged as its PR #663).
+- [x] 7.2 Check the same things as 5.2 on that report. Checked on 2026-09-11: the pills render on
+      a real research report, both in the chat and in the overlay. The re-share half of the design's
+      open question is tracked in the roadmap of `deep_research/inline_annotations.md` in the team
+      documentation, which owns the chain across its four components.
