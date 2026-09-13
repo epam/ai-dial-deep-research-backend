@@ -15,8 +15,8 @@ pydantic extra. Generic RAG now serves a templated MCP resource, `documents://me
 which answers with each requested document's stored metadata. Reading
 `documents://metadata/1,5,9` against a deployed Generic RAG channel returns a
 JSON object keyed by document id whose values carry `publication_title` and `publication_date`, and
-that read goes through DIAL Core, which settles the one thing the cross-repository feature notes had
-recorded as never exercised.
+that read goes through DIAL Core. Reading a resource through Core is new here: every MCP call this
+repository made through it until now listed or invoked a tool.
 
 Building against that resource forces a second question into the open, and it is the more important
 of the two. Deep Research is not independent of the servers plugged into it. It assumes a document
@@ -127,6 +127,5 @@ of it.
   this repository's prompt paragraph once it is fixed, is tracked as the next roadmap step rather
   than done here.
 - **Out of scope, in the order the work is planned**: converting dataset citations into pills backed
-  by a portal link, which the cross-repository feature document already specifies and which would
-  change this capability's "dataset citations are never converted" rule; building the References
-  section in code; and the Generic RAG `rag_search` fix above.
+  by a portal link, which would change this capability's "dataset citations are never converted"
+  rule; building the References section in code; and the Generic RAG `rag_search` fix above.

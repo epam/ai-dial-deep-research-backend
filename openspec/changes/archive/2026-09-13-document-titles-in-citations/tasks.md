@@ -42,5 +42,5 @@
 
 - [x] 7.1 Run `make format`, `make lint` and the full test suite.
 - [x] 7.2 Run `openspec validate document-titles-in-citations --strict`.
-- [ ] 7.3 Drive a real report through a configured channel and confirm the pill and the popup entry both read the publication title with the cited page, using `scripts/send_conversation.py` against a running server.
+- [x] 7.3 Drive a real report through a configured channel and confirm the pill and the popup entry both read the publication title with the cited page, using `scripts/send_conversation.py` against a running server.
 - [x] 7.4 Measured in DIAL Chat against a real report: the client does **not** shorten a long pill label, and the pills ran off. The app therefore shortens the pill's copy of the title to `max_pill_title_chars`, a channel property defaulting to 20, and appends the page afterwards; the citation card keeps the title whole.

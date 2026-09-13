@@ -114,15 +114,19 @@ makes no review call, so no report-reviewed event can carry it, and the router t
 hand-off is where its research counterpart (7a) is owned too; (8c) report citations resolved —
 the number of distinct document ids the step requested, which is the documents cited where a pill
 can be drawn rather than every document the report names, the number of those the file-sharing
-tool returned a URL for, the number of citations converted into annotations, the number of citation
+tool returned a URL for, the number of those a publication title resolved for through the
+document-metadata resource, the number of citations converted into annotations, the number of citation
 markers left in the delivered text as written, the number of hyperlinks the step removed from the
 draft — links, images, autolinks and bare URLs counted together, since the same pass removes them
 all and a delivered report may reach a reader having had one taken out with no review record behind
 it — and the step's duration, owned by the citation step
 (see **report-citations**), and fired on every turn that delivers a report, including one that
-converted nothing. The step is shared with the annotations demo completion, so the event fires there
+converted nothing. The titled count is bounded by the resolved count rather than by the requested
+one, because the step asks for titles only for the documents a URL resolved for; the two being equal
+is the ordinary case, and a gap between them is how a channel with incomplete metadata reads. The
+step is shared with the annotations demo completion, so the event fires there
 too; its resolved-document count means documents a URL was obtained for, by whatever means that
-caller uses; (9) request completed — outcome
+caller uses, and its titled count is zero there, that caller resolving no titles; (9) request completed — outcome
 (`completed`/`failed`), total duration, and on failure the same `error_reference` as the ERROR
 record. Neither the `finish_iteration` sentinel tool nor the `update_status` tool SHALL produce a
 tool-call event above DEBUG: neither performs research, and `update_status` is surfaced to the user
@@ -159,10 +163,23 @@ the third document its pills, and the (8c) counts alone would leave that reading
 happened to cite less. The one case in that family that is **not** a warning is an instance naming
 no file-sharing tool at all, which only a deployment with no document server can be: it has no
 document citations to convert, so this is a routine expected outcome of every turn it serves and is
-recorded at DEBUG (see **report-citations**). Every record
+recorded at DEBUG (see **report-citations**).
+
+A **title that could not be resolved** is graded one step lower throughout, because it costs a label
+and never a pill. The document-metadata read raising, and an answer that cannot be read as an
+id-to-metadata object, SHALL each be one WARNING naming the failure kind, beside the (8c) event. An
+instance naming no document-metadata resource SHALL be recorded at DEBUG, for the reason the absent
+file-sharing tool is: naming the resource is optional configuration, so an instance without one would
+otherwise warn on every report it delivers. A **document that simply carries no title** SHALL NOT
+warn at all — a channel's metadata schema is its own and a key missing there is data variance rather
+than a fault — and the gap between the resolved count and the titled count on the (8c) event is the
+whole record of it.
+
+Every record
 of this step describes documents by count alone: the service's own call sites SHALL NOT log a
 returned URL or any part of one, a file name taken from one, a document title, or a cited document's
-id, at any level. The mapping is a tool response body, which the content allowlist keeps out of
+id, at any level. The mapping is a tool response body and the metadata object is a resource body,
+both of which the content allowlist keeps out of
 every record, and how many ids a response omitted says everything a reader of the logs can act on.
 
 #### Scenario: Successful research turn reads as a skeleton at INFO
@@ -234,13 +251,13 @@ every record, and how many ids a response omitted says everything a reader of th
 
 #### Scenario: The citation step is readable in the skeleton
 
-- **WHEN** a turn delivers a report citing three documents, the file-sharing tool resolves two of them, and nine citations are annotated
-- **THEN** the (8c) event SHALL state three document ids requested, two resolved, nine annotations emitted, the number of markers left in the text, the number of hyperlinks removed, and the step's duration — and SHALL carry no URL and no report text
+- **WHEN** a turn delivers a report citing three documents, the file-sharing tool resolves two of them, both of those resolve a title, and nine citations are annotated
+- **THEN** the (8c) event SHALL state three document ids requested, two resolved, two titled, nine annotations emitted, the number of markers left in the text, the number of hyperlinks removed, and the step's duration — and SHALL carry no URL, no document title and no report text
 
 #### Scenario: A citation step that resolved nothing still reports
 
 - **WHEN** the file-sharing tool call fails and the report is delivered with every marker in place
-- **THEN** the (8c) event SHALL fire with zero resolved documents and zero annotations, and one WARNING SHALL name the failure kind
+- **THEN** the (8c) event SHALL fire with zero resolved documents, zero titled documents and zero annotations, and one WARNING SHALL name the failure kind
 
 #### Scenario: A partial response warns even though the other pills were drawn
 
@@ -251,6 +268,16 @@ every record, and how many ids a response omitted says everything a reader of th
 
 - **WHEN** an instance configured with no document server — and so with no file-sharing tool — delivers a report carrying dataset citation markers
 - **THEN** the (8c) event SHALL fire with zero resolved documents and zero annotations, the record naming the absent configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
+
+#### Scenario: A missing title is a count, not a warning
+
+- **WHEN** three documents resolve URLs and the metadata answer carries a usable title for two of them
+- **THEN** the (8c) event SHALL state three resolved and two titled, and no WARNING SHALL be emitted for the third, whose citations keep their marker label
+
+#### Scenario: An instance naming no metadata resource does not warn on every turn
+
+- **WHEN** an instance whose document server names a file-sharing tool but no document-metadata resource delivers a report citing two documents
+- **THEN** the (8c) event SHALL fire with two resolved documents and zero titled, the record naming the absent configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
 
 #### Scenario: A link removed from an unreviewed draft is still visible in the logs
 

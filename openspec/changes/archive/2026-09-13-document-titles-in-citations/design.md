@@ -10,8 +10,8 @@ same step, not a fourth alteration of the text.
 
 **The resource answers with the channel's raw metadata.** Generic RAG's merged handler returns
 `document.metadata` unchanged, so a value arrives under the channel's own key — `publication_title`
-in the channel this was built against — and there is no canonical `title`. The cross-repository resources note had
-decided the opposite ("the title is canonical"), and the implementation went the other way; this
+in the channel this was built against — and there is no canonical `title`. An earlier design had
+the server answer under a canonical `title`; the implementation went the other way, and this
 design follows the implementation, because that is what a deployed server actually serves.
 
 **The MCP client is built per turn and thrown away.** `load_mcp_tools` constructs a
@@ -51,10 +51,10 @@ consumer (a field on the MCP server entry).
 deployed resource already serves. The cost is that a channel-specific key name appears in Deep
 Research's configuration, which is the thing the server-side alternative would have avoided.
 
-Rejected: **canonicalise in Generic RAG.** It is the tidier contract and the resources note argued
-for it, but it needs a channel config field there plus a release before anything here can use it, and
-it stops at the title — the References section's other columns are open-ended, which is the argument
-that made the note reject a fully canonical shape in the first place.
+Rejected: **canonicalise in Generic RAG.** It is the tidier contract, but it needs a channel config
+field there plus a release before anything here can use it, and it stops at the title — the
+References section's other columns are open-ended, which is the same argument that tells against a
+fully canonical shape.
 
 ### The two configuration fields are optional and validated as a pair
 

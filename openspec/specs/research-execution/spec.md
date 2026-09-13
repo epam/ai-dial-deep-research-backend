@@ -292,6 +292,13 @@ instructions and the draft they refer to.
 Citations SHALL use inline `[doc <id>, page <ix>]` for document-sourced facts and
 `[dataset <id>]` for dataset-sourced facts.
 
+**How the writer gets from a tool's attribution to those forms is owned by the
+**source-attribution** capability**, and its rule bears on this prompt directly: the instructions
+SHALL describe what a tool's attribution conveys — which part names the document or dataset, which
+part names the page — and SHALL present any concrete spelling as one example among others. They
+SHALL NOT state that the tools report attribution in one particular form, because that makes one
+server's formatting load-bearing for this application while breaking no test when it changes.
+
 **Those two forms SHALL be the only way the report references a source.** The report cites what the
 research retrieved and nothing else, so it SHALL carry no hyperlink in any form. Which forms count,
 what the writer is told, what the app checks and what is removed before delivery are owned by the
@@ -344,6 +351,13 @@ stays fully readable in the text.
 
 - **WHEN** the report review loop settles on a draft
 - **THEN** exactly that draft's text SHALL be appended to the assistant message content as the answer — with each converted citation's marker replaced by its marker tag, every unconverted citation marker in place as written, and a references section decoding them
+
+#### Scenario: An unfamiliar attribution spelling still yields correct markers
+
+- **WHEN** a tool message attributes a fact in a labelled form the writer's instructions never named,
+  such as `[Document 207, Page 1]` where the examples showed another spelling
+- **THEN** the draft SHALL cite that fact as `[doc 207, page 1]`, because the instructions describe
+  what the attribution conveys rather than the characters one server writes it in
 
 #### Scenario: Drafts under review are not visible
 
