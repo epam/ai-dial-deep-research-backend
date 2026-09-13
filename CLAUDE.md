@@ -7,13 +7,17 @@ See `pyproject.toml` for `make`-equivalent targets
 
 ## Never commit sensitive info
 
-Never commit secrets, real application properties, or anything else sensitive: API keys,
-endpoints, client names, production details. Real per-channel application properties live in
-DIAL Core, and the DIAL core `config.json` stays untracked; only generic examples like
-`dial_conf/core/applications-template.json` are committed.
+This repo is public.
+Never commit secrets, real application properties, or anything else sensitive:
+API keys, endpoints, client names, production details.
+Never reference non-public resources in committed content
+(code, comments, docs, tests, specs and planning artifacts, commit messages).
 
-This repo is public. Never reference non-public resources in committed content (code,
-comments, docs, commit messages). Committed content must be self-contained.
+Real per-channel application properties live in DIAL Core,
+and the DIAL core `config.json` stays untracked.
+Only generic values are allowed, for example `ACME` as a client
+or `Market Outlook 2025` as a document title.
+`IMF:WEO` is the id of a public dataset and is also allowed.
 
 ## Rules for coding agents (Claude Code, etc)
 

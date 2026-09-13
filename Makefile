@@ -118,21 +118,21 @@ all-down: ## Stop infra + the app container
 all-logs: ## Tail logs from the infra + the app container
 	docker compose $(APP_COMPOSE) logs -f
 
-## -------- inline citations (opt-in) -------- ##
+## -------- next-generation chat (opt-in) -------- ##
 
 # Infra plus a next-generation chat UI beside the base one, and the inline-citations demo
-# registered in core. See docker-compose.annotations.yml for what it adds and what .env
+# registered in core. See docker-compose.chat-nextgen.yml for what it adds and what .env
 # must carry.
-ANNOTATIONS_COMPOSE = -f docker-compose.yml -f docker-compose.annotations.yml
+CHAT_NG_COMPOSE = -f docker-compose.yml -f docker-compose.chat-nextgen.yml
 
-annotations-up: ## Start infra with both chat generations and the inline-citations demo
-	docker compose $(ANNOTATIONS_COMPOSE) up -d
+chat-ng-up: ## Start infra with both chat generations and the inline-citations demo
+	docker compose $(CHAT_NG_COMPOSE) up -d
 
-annotations-down: ## Stop the infra + both chat generations
-	docker compose $(ANNOTATIONS_COMPOSE) down
+chat-ng-down: ## Stop the infra + both chat generations
+	docker compose $(CHAT_NG_COMPOSE) down
 
-annotations-logs: ## Tail logs from the infra + both chat generations
-	docker compose $(ANNOTATIONS_COMPOSE) logs -f
+chat-ng-logs: ## Tail logs from the infra + both chat generations
+	docker compose $(CHAT_NG_COMPOSE) logs -f
 
 ## -------- opik -------- ##
 

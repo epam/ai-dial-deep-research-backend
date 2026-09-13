@@ -186,7 +186,8 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   research-agent tool calls surface as timed DIAL stages. What reaches the user is that draft after
   the delivery step below, the one permitted transformation between the two.
 - **Report delivery** (`ResearchRunner._deliver_report`, `app/research/citations.py`,
-  `app/research/file_sharing.py`): the citation step, run once per turn between the graph finishing
+  `app/research/file_sharing.py`, `app/research/document_metadata.py`): the citation step, run once
+  per turn between the graph finishing
   and the report being appended. It makes two alterations to the settled draft, in this order:
   every hyperlink form goes (a link keeps its label, an image is dropped whole, an autolink or bare
   URL is deleted), then each convertible citation marker is replaced by an empty marker tag,
@@ -196,7 +197,19 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   only by spaces, commas or semicolons, share one tag and render as one pill. The post-processed
   text is what is appended **and** what is persisted, so a later turn reads back what the user saw.
   One `custom_content.annotations` array follows the content, one entry per converted citation,
-  each naming its tag's id and carrying the cited page in a zero-size `pdf_bbox` selector. The
+  each naming its tag's id and carrying the cited page in a zero-size `pdf_bbox` selector. A pill
+  and its popup entry both read `<publication title>, page <ix>`, falling back to the marker's own
+  `doc <id>, page <ix>` for a document no title resolved for. The pill's copy of the title is
+  shortened to `max_pill_title_chars` (default 20, null to switch it off) because the client does not trim an
+  overflowing label, with the page appended afterwards so it is never lost; the card keeps the
+  title whole. The
+  titles come from one MCP resource read per turn, at the URI named by
+  `mcp_servers[].document_metadata_resource` with the cited ids substituted, taking the value under
+  `mcp_servers[].document_title_key`. Both fields are optional, and the read asks only for the
+  documents a URL came back for, since only those become pills. Its failures are graded one step
+  below the file-sharing ones because a title costs a label rather than a link: naming no resource
+  is DEBUG, a failed or unreadable read is one WARNING, and a document whose metadata simply
+  carries no title is recorded only as the gap between the resolved and titled counts. The
   document URLs come from one call per turn to the tool named by `mcp_servers[].file_sharing_tool`,
   invoked tool-call-shaped so its structured result is reachable, and with the agent tools' error
   handling cleared so a failure reaches the app instead of arriving as result text. An instance

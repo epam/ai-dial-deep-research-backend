@@ -126,6 +126,24 @@
         "dial:propertyOrder": 5
       }
     },
+    "max_pill_title_chars": {
+      "anyOf": [
+        {
+          "minimum": 10,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": 20,
+      "description": "How much of a cited document's title the inline citation pill shows, the ellipsis counted within it. A pill is a narrow element in the middle of a sentence and also carries the client's own count marker when it stands for several sources, so a long publication title runs off it; the client does not shorten the label itself. The cited page is appended after the shortening and is never lost to a long title, and the citation card keeps the whole title regardless of this value. Raise it if the pills read too short in your client, or set it to null to show every title whole.",
+      "title": "Max Pill Title Chars",
+      "dial:meta": {
+        "dial:propertyKind": "server",
+        "dial:propertyOrder": 6
+      }
+    },
     "mcp_servers": {
       "description": "MCP servers the research agent connects to. At least one is required; server_name must be unique across the list.",
       "items": {
@@ -194,6 +212,32 @@
             "default": null,
             "description": "Name of this server's tool that copies a cited document into the DIAL storage of the person reading the report and returns the URL of that copy, so a citation in the report can open the cited page. The application calls this tool itself when it delivers a report and never offers it to the research agent, so it does not have to appear in tools_to_include. Required on a generic_rag server, whose documents a report cites by id and page: without it every one of those citations is delivered as plain text, which is a broken document server rather than a choice. No other server type may set it — a dataset citation has no file to open — so exactly one configured server names one whenever any document is served at all.",
             "title": "File Sharing Tool"
+          },
+          "document_metadata_resource": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Name of this server's MCP resource serving document metadata, written as a URI template with a {document_ids} placeholder — for example documents://metadata/{document_ids}. The application reads it when it delivers a report, substituting the cited document ids joined with commas, and takes each document's title from it so a citation pill names the publication instead of its id. Set it together with document_title_key, which says where the title sits in the answer. Only a generic_rag server may set it. Leaving both unset is valid and costs only the labels: every citation still becomes a pill, reading doc <id>, page <ix>.",
+            "title": "Document Metadata Resource"
+          },
+          "document_title_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Key holding a document's human title in this channel's metadata, for example publication_title. The metadata resource answers with each document's metadata under the channel's own key names, so this says which of them to read. A document whose metadata has no usable value under this key keeps the doc <id>, page <ix> label. Set it together with document_metadata_resource; only a generic_rag server may set it.",
+            "title": "Document Title Key"
           }
         },
         "required": [
@@ -208,7 +252,7 @@
       "type": "array",
       "dial:meta": {
         "dial:propertyKind": "server",
-        "dial:propertyOrder": 6
+        "dial:propertyOrder": 7
       }
     },
     "prompts": {
@@ -242,7 +286,7 @@
       "type": "object",
       "dial:meta": {
         "dial:propertyKind": "server",
-        "dial:propertyOrder": 7
+        "dial:propertyOrder": 8
       }
     }
   },

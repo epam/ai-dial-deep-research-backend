@@ -36,12 +36,13 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.types import StreamPart
 from pydantic import BaseModel, Field
 
 from dial_deep_research.app.history import PrepState
 from dial_deep_research.app.mcp_tools import load_mcp_tools
-from dial_deep_research.app_properties import ApplicationProperties
+from dial_deep_research.app_properties import ApplicationProperties, DocumentMetadataSource
 from dial_deep_research.utils.dial_annotations import send_annotations
 from dial_deep_research.utils.dial_stages import (
     DialStageReportFormatter,
@@ -59,6 +60,11 @@ from .citations import (
     find_citation_markers,
     log_citations_resolved,
     remove_hyperlinks,
+)
+from .document_metadata import (
+    KIND_METADATA_READ_FAILED,
+    DocumentMetadataError,
+    read_document_titles,
 )
 from .file_sharing import FileSharingError, share_documents
 from .graph import build_research_graph
@@ -102,6 +108,7 @@ _KIND_IDS_UNRESOLVED = "ids_unresolved"
 _KIND_LINK_PASS_FAILED = "link_pass_failed"
 _KIND_CONVERSION_FAILED = "conversion_failed"
 _KIND_EMISSION_FAILED = "emission_failed"
+# Kinds the title read decides are named in `document_metadata.py`, beside the read itself.
 
 # Joins the statuses of one assistant message into a single title. The model is told to send
 # one status per turn; this keeps the extras visible without opening a stage that would close
@@ -120,6 +127,7 @@ class _ReportDelivery(BaseModel):
     annotations: list[Annotation] = Field(default_factory=list)
     documents_requested: int = 0
     documents_resolved: int = 0
+    documents_titled: int = 0
     markers_left: int = 0
     hyperlinks_removed: int = 0
 
@@ -211,11 +219,20 @@ class ResearchRunner:
         await self._deliver_report(
             file_sharing_tool=loaded.file_sharing_tool,
             configured_tool_name=properties.file_sharing_tool,
+            mcp_client=loaded.client,
+            metadata_source=properties.document_metadata,
+            pill_title_max_chars=properties.max_pill_title_chars,
         )
         return self._messages
 
     async def _deliver_report(
-        self, *, file_sharing_tool: BaseTool | None, configured_tool_name: str | None
+        self,
+        *,
+        file_sharing_tool: BaseTool | None,
+        configured_tool_name: str | None,
+        mcp_client: MultiServerMCPClient,
+        metadata_source: DocumentMetadataSource | None,
+        pill_title_max_chars: int | None,
     ) -> None:
         """Post-process the settled report, append it to the choice, and emit its annotations.
 
@@ -238,6 +255,9 @@ class ResearchRunner:
                 self._report,
                 file_sharing_tool=file_sharing_tool,
                 configured_tool_name=configured_tool_name,
+                mcp_client=mcp_client,
+                metadata_source=metadata_source,
+                pill_title_max_chars=pill_title_max_chars,
             )
         except BaseException:
             # The step catches its own failures, so only something outside them reaches here —
@@ -255,6 +275,7 @@ class ResearchRunner:
             logger,
             documents_requested=delivery.documents_requested,
             documents_resolved=delivery.documents_resolved,
+            documents_titled=delivery.documents_titled,
             annotations=len(delivery.annotations),
             markers_left=delivery.markers_left,
             hyperlinks_removed=delivery.hyperlinks_removed,
@@ -267,6 +288,9 @@ class ResearchRunner:
         *,
         file_sharing_tool: BaseTool | None,
         configured_tool_name: str | None,
+        mcp_client: MultiServerMCPClient,
+        metadata_source: DocumentMetadataSource | None,
+        pill_title_max_chars: int | None,
     ) -> _ReportDelivery:
         """The two deterministic alterations of the settled draft, in their fixed order.
 
@@ -296,7 +320,16 @@ class ResearchRunner:
                 document_ids=document_ids,
             )
             delivery.documents_resolved = len(document_urls)
-            converted = convert_citations(removal.text, document_urls=document_urls)
+            document_titles = await self._read_document_titles(
+                client=mcp_client, source=metadata_source, document_ids=list(document_urls)
+            )
+            delivery.documents_titled = len(document_titles)
+            converted = convert_citations(
+                removal.text,
+                document_urls=document_urls,
+                document_titles=document_titles,
+                pill_title_max_chars=pill_title_max_chars,
+            )
         except Exception as error:
             self._warn_citation_failure(kind=_KIND_CONVERSION_FAILED, error=error)
             delivery.markers_left = _count_markers(delivery.text)
@@ -355,6 +388,43 @@ class ResearchRunner:
                 unresolved=unresolved,
             )
         return document_urls
+
+    async def _read_document_titles(
+        self,
+        *,
+        client: MultiServerMCPClient,
+        source: DocumentMetadataSource | None,
+        document_ids: Sequence[int],
+    ) -> dict[int, str]:
+        """The publication title of every cited document one could be obtained for.
+
+        Asked only for the documents a URL resolved for, because only those become pills. Empty
+        whenever no title can be obtained — no server names a metadata resource, the read failed,
+        the answer could not be read — and every citation is then labelled from its marker.
+
+        Graded one step below the file-sharing failures throughout, because a title costs a label
+        rather than a link: naming no resource is routine and recorded at DEBUG, and a document
+        the answer simply carries no title for is not a failure at all — the gap between the
+        resolved and titled counts on the step's own event is the record of it.
+        """
+        if source is None:
+            logger.debug(
+                "Report citations: no MCP server names a document-metadata resource, so every"
+                " citation is labelled from the marker the report writer wrote"
+            )
+            return {}
+        if not document_ids:
+            return {}
+        try:
+            return await read_document_titles(
+                client=client, source=source, document_ids=document_ids
+            )
+        except DocumentMetadataError as failure:
+            self._warn_citation_failure(kind=failure.kind)
+            return {}
+        except Exception as error:
+            self._warn_citation_failure(kind=KIND_METADATA_READ_FAILED, error=error)
+            return {}
 
     def _send_annotations(self, annotations: Sequence[Annotation]) -> None:
         """Emit the annotations claiming the marker tags of the text just appended.

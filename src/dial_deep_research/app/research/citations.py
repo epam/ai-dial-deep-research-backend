@@ -9,8 +9,13 @@ The delivered text is produced by two alterations, in this order:
 
 1. `remove_hyperlinks`, which leaves nothing in the report pointing the reader outward.
 2. the citation conversion — `cited_document_ids` over the link-free text, a URL resolved for
-   each id it reports, then `convert_citations` — which replaces each convertible marker with a
-   marker tag and returns the annotations that claim those tags.
+   each id it reports, a title resolved for each id a URL came back for, then
+   `convert_citations` — which replaces each convertible marker with a marker tag and returns
+   the annotations that claim those tags.
+
+A pill and its popup entry read the cited publication's title with the cited page. A document no
+title resolved for is labelled `doc <id>, page <ix>` instead, so the cost of a missing title is a
+plainer pill rather than a missing one.
 
 The order is fixed so the outcome is deterministic. It also keeps the marker parser free of any
 rule about a bracket followed by `(`: a Markdown link written `[doc 1 overview](url)` reaches the
@@ -42,6 +47,10 @@ CITATION_TAG_NAME = "cit"
 
 PDF_MIME_TYPE = "application/pdf"
 
+# What marks a title the pill shows only part of. One character, so it costs the caller's
+# budget as little as possible.
+_ELLIPSIS = "…"
+
 # The two inline citation forms the report is written in (see the research-execution capability).
 # The document form takes a positive integer id and a positive integer page, because both halves
 # are used: the id is what the file-sharing tool is asked for, and the page is what the reader is
@@ -50,7 +59,11 @@ PDF_MIME_TYPE = "application/pdf"
 # form. This is deliberately stricter than `report_length._CITATION_RE`, which errs the other way:
 # matching too much only keeps citation text out of a word count, while matching too much here
 # would claim a pill for something that is not a citation.
-_DOCUMENT_MARKER = r"\[[ \t]*doc[ \t]+(?P<doc_id>[1-9][0-9]*)[ \t]*,[ \t]*page[ \t]+(?P<page>[1-9][0-9]*)[ \t]*\]"  # noqa: E501
+# `document` is accepted beside `doc` as a guard against one predictable mistake, not as a second
+# report format: a retrieval server's own attribution may read `[Document 12, Page 1]`, which is
+# close enough to the report's form that the writer may copy it through instead of translating it.
+# Rejecting the copy would cost that citation its pill silently.
+_DOCUMENT_MARKER = r"\[[ \t]*doc(?:ument)?[ \t]+(?P<doc_id>[1-9][0-9]*)[ \t]*,[ \t]*page[ \t]+(?P<page>[1-9][0-9]*)[ \t]*\]"  # noqa: E501
 # A dataset id is not an integer — the report writes the id the dataset-query tool reports, such
 # as `IMF:WEO`. The id is never read: a dataset is not a file, so a dataset citation is never
 # converted. The form is recognized only so that a dataset marker standing beside a document
@@ -226,6 +239,8 @@ def convert_citations(
     text: str,
     *,
     document_urls: Mapping[int, str],
+    document_titles: Mapping[int, str] | None = None,
+    pill_title_max_chars: int | None = None,
     make_tag_id: Callable[[], str] = lambda: uuid.uuid4().hex[:12],
 ) -> CitationConversion:
     """Replace every convertible citation with its marker tag, and build the annotations.
@@ -234,9 +249,16 @@ def convert_citations(
         text: the settled draft, with its hyperlinks already removed.
         document_urls: the DIAL file URL of each document a URL was obtained for, by document id.
             An id that is absent, or whose URL is not a PDF, keeps its citations as text.
+        document_titles: the publication title of each document one was obtained for, by document
+            id. An absent id is labelled from its marker instead; a caller that resolves no
+            titles at all passes nothing and every label reads as the marker did.
+        pill_title_max_chars: how much of a title the pill's own label shows, the ellipsis
+            counted within it. `None` shows the title whole. The popup card's label carries the
+            whole title either way.
         make_tag_id: source of tag ids. Injectable so a test can read the ids it expects; the
             default is opaque and unique per tag.
     """
+    titles = document_titles or {}
     markers = find_citation_markers(text)
 
     pieces: list[str] = []
@@ -271,7 +293,13 @@ def convert_citations(
                 continue
             sources_seen.add(source)
             annotations.append(
-                _build_annotation(index=len(annotations), tag_id=tag_id, citation=citation)
+                _build_annotation(
+                    index=len(annotations),
+                    tag_id=tag_id,
+                    citation=citation,
+                    title=titles.get(citation.document_id),
+                    pill_title_max_chars=pill_title_max_chars,
+                )
             )
 
         # The separators inside the run went with the markers they joined, so each surviving
@@ -316,6 +344,7 @@ def log_citations_resolved(
     *,
     documents_requested: int,
     documents_resolved: int,
+    documents_titled: int,
     annotations: int,
     markers_left: int,
     hyperlinks_removed: int,
@@ -324,13 +353,21 @@ def log_citations_resolved(
     """Emit the citation-step event (8c) of the logging-policy INFO skeleton.
 
     One renderer for every caller, so the event's shape cannot drift between the research turn
-    and the demo. Counts only: no URL, no file name, no document id and no report text.
+    and the demo. Counts only: no URL, no file name, no document id, no document title and no
+    report text.
+
+    `documents_titled` is bounded by `documents_resolved` rather than by `documents_requested`,
+    because titles are asked for only where a URL came back. The two being equal is the ordinary
+    case; a gap between them is how a channel with incomplete metadata reads, and it is the only
+    record a document without a title gets.
     """
     log.info(
-        "Report citations resolved: documents_requested=%d documents_resolved=%d annotations=%d"
+        "Report citations resolved: documents_requested=%d documents_resolved=%d"
+        " documents_titled=%d annotations=%d"
         " markers_left=%d hyperlinks_removed=%d duration=%.1fs",
         documents_requested,
         documents_resolved,
+        documents_titled,
         annotations,
         markers_left,
         hyperlinks_removed,
@@ -338,21 +375,58 @@ def log_citations_resolved(
     )
 
 
-def _build_annotation(*, index: int, tag_id: str, citation: _ConvertibleCitation) -> Annotation:
+def _shorten_for_pill(title: str, max_chars: int | None) -> str:
+    """The title as the pill shows it: `max_chars` at most, the ellipsis counted within it.
+
+    `None` returns the title unchanged, for a caller whose client has room for it or which
+    shortens labels itself.
+
+    Whitespace left at the cut goes with it, so a title broken at a space does not read as a
+    gap before the ellipsis. The cut is by character rather than at a word boundary: a budget
+    this small would often leave one word, and a ragged edge costs the reader less than a label
+    whose length swings with where the spaces happen to fall.
+    """
+    if max_chars is None or len(title) <= max_chars:
+        return title
+    return title[: max_chars - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
+
+
+def _build_annotation(
+    *,
+    index: int,
+    tag_id: str,
+    citation: _ConvertibleCitation,
+    title: str | None,
+    pill_title_max_chars: int | None,
+) -> Annotation:
     """One annotation for one converted citation.
 
-    Both labels read `doc <id>, page <ix>` — the text the marker carried — because the app holds
-    no document title. The file name inside the URL is a storage path segment rather than a
-    title, so no label is derived from the URL and no part of it is decoded. The client labels
-    the pill from the attachment title and the popup entry from the body title.
+    The client labels the pill from the attachment title and the popup entry from the body
+    title, and the two differ only in length: the pill's copy of the publication title is
+    shortened to `pill_title_max_chars`, the popup's carries it whole. A citation no title
+    resolved for reads `doc <id>, page <ix>` in both, the text the marker carried.
+
+    The page belongs in both labels, because a document server attributes at page level: two
+    pages of one publication are two sources, and a run folding them behind one pill must still
+    read as two entries in its popup. It is appended after the shortening, so the pill never
+    loses the page to a long title.
+
+    The file name inside the URL is a storage path segment rather than a title, so no label is
+    derived from the URL and no part of it is decoded.
     """
-    label = f"doc {citation.document_id}, page {citation.page}"
+    if title:
+        card_label = f"{title}, page {citation.page}"
+        pill_label = f"{_shorten_for_pill(title, pill_title_max_chars)}, page {citation.page}"
+    else:
+        card_label = pill_label = f"doc {citation.document_id}, page {citation.page}"
     return Annotation(
         index=index,
         target=AnnotationTarget(selector=HtmlTagSelector(tag=CITATION_TAG_NAME, id=tag_id)),
         body=AnnotationBody(
-            title=label,
-            source=AnnotationSource(attachment=AnnotationAttachment(url=citation.url, title=label)),
+            title=card_label,
+            source=AnnotationSource(
+                attachment=AnnotationAttachment(url=citation.url, title=pill_label)
+            ),
             selector=PdfPageSelector(page=citation.page),
         ),
     )

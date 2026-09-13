@@ -73,7 +73,16 @@ defines: `[doc <id>, page <ix>]` for a document and `[dataset <id>]` for a datas
 
 **What the step recognizes as a marker** is exactly those two forms, with a positive integer id and,
 for the document form, a positive integer page; the keyword SHALL be matched without regard to case.
-Anything resembling a marker without matching — a non-numeric id, a page range
+The document keyword SHALL also be recognized written out in full, so `[document 12, page 3]` is a
+citation exactly as `[doc 12, page 3]` is. That tolerance is not a second report format — the
+writer's instructions and the review's format check name the short form alone — but a guard against
+one predictable mistake. A retrieval server's own attribution may read `[Document 12, Page 1]` (see
+**source-attribution**, which requires attribution to be self-describing and leaves its spelling to
+the server), which is close enough to the report's form that a writer may copy it through instead of
+translating it. Rejecting the copy would cost that citation its pill silently, while accepting it
+converts something that is unambiguously a citation of a document and a page.
+
+Anything else resembling a marker without matching — a non-numeric id, a page range
 (`[doc 12, pages 3-4]`), a document citation with no page (`[doc 12]`), a nested bracket — SHALL NOT
 be treated as a citation: it keeps its text, produces no annotation, and contributes no id to the
 file-sharing call. The bias is deliberately conservative, and the layer that pushes a malformed
@@ -122,6 +131,13 @@ one behaviour, not one per reader, and the step SHALL NOT be configurable per co
   resolves for document 442
 - **THEN** that marker SHALL be replaced by a marker tag carrying a unique id, and one annotation
   naming that id SHALL be emitted
+
+#### Scenario: The document keyword written out in full is still a citation
+
+- **WHEN** the settled draft carries `[document 12, page 3]` or `[Document 12, Page 3]`, copied
+  through from a tool's own attribution, and a URL resolves for document 12
+- **THEN** each SHALL be converted exactly as `[doc 12, page 3]` is, so the copy costs the reader no
+  pill
 
 #### Scenario: A cited bullet is converted
 
@@ -399,6 +415,80 @@ still not result in the agent being offered it.
 - **WHEN** a server's `tools_to_include` names the file-sharing tool alongside its search tools
 - **THEN** the agent's bound tools SHALL still exclude it
 
+### Requirement: A cited document's title comes from a contracted metadata resource
+
+A citation's labels name the publication the reader is about to open. The app holds no such name of
+its own: the only human-readable string it has per cited document is the file name inside the shared
+URL, which is a storage path segment. It SHALL obtain the name by reading one **MCP resource**, the
+document-metadata resource, and SHALL depend on nothing about that resource beyond the contract
+stated here.
+
+**Both the resource and the key come from configuration.** An MCP server entry SHALL be able to name
+the resource's URI template and the metadata key holding the human title, and the app SHALL read
+exactly what that entry names (**application-config-schema** owns the two fields). There SHALL be no
+default URI, no default key, and no discovery by convention: the app SHALL NOT infer either from what
+a server advertises, from a key's name, or from any naming pattern. A channel's metadata schema is
+its own, so which key carries the title is configuration rather than a constant.
+
+**Naming them is optional**, which is what separates this contract from the file-sharing one. A
+document server that names no resource delivers pills labelled from the marker, which is a plainer
+label rather than a broken link, and a channel whose metadata genuinely carries no title has nothing
+to name.
+
+**The contract.** A resource named as a server's document-metadata resource SHALL satisfy all of the
+following. These are requirements on the server, not observations of any one implementation: a named
+resource that breaks any of them SHALL fail the way the delivery-failure requirement below
+prescribes rather than degrade the report.
+
+- **Address**: a resource URI template carrying exactly one placeholder, `{document_ids}`. The app
+  SHALL build the concrete URI by substituting the cited ids joined with commas and nothing else,
+  and SHALL send the identifiers verbatim as the **source-attribution** capability requires.
+- **Output**: one JSON object at the top level, with no wrapper key, mapping each known document id
+  to that document's metadata object. Keys MAY arrive as JSON strings rather than numbers, and the
+  app SHALL accept either.
+- **The title**: the configured key's value within a document's metadata object, when present and a
+  non-empty string. Every other key SHALL be ignored. The app SHALL NOT fall back to another key, and
+  SHALL NOT derive a title from the shared URL or from any part of it.
+- **Partial answers**: an id the resource does not know MAY be absent from the object, and a document
+  present but carrying no usable value under the configured key is equally permitted. Neither SHALL
+  make the read fail, and neither SHALL invalidate the titles that did resolve.
+- **No side effect**: the read SHALL change nothing on the server. This is why it is a resource
+  rather than a tool, and why the app may read it for every turn that delivers a cited report.
+
+The app SHALL read it **once per turn**, after the file-sharing call, and SHALL ask only for the
+documents that resolved a URL. Those are exactly the documents whose citations become pills, so a
+title for any other document would be read and never shown.
+
+The resource SHALL NOT be offered to any LLM. It is read by application code at the citation step,
+and an MCP resource does not appear in a tool listing, so nothing has to be filtered out of the
+agent's tools for this to hold.
+
+#### Scenario: One read carries the documents that became pills
+
+- **WHEN** the settled draft cites five documents and the file-sharing tool returned URLs for three
+  of them
+- **THEN** the app SHALL make exactly one document-metadata read, asking for those three ids and no
+  others
+
+#### Scenario: The configured key decides which value is the title
+
+- **WHEN** a document's metadata object carries several string values and the configuration names one
+  key
+- **THEN** the label SHALL be built from that key's value, and no other key SHALL be read as a title
+
+#### Scenario: A document with no usable title keeps the marker label
+
+- **WHEN** the answer omits one requested id, or carries it with the configured key absent, empty, or
+  holding something that is not a string
+- **THEN** that document's citations SHALL still become pills, labelled from the marker, and the other
+  documents' titles SHALL be unaffected
+
+#### Scenario: An instance naming no resource still converts its citations
+
+- **WHEN** a configured document server names a file-sharing tool but no document-metadata resource
+- **THEN** no metadata read SHALL be made, every convertible citation SHALL still become a pill, and
+  every label SHALL read as the marker did
+
 ### Requirement: A converted citation is a marker tag in the text and an annotation that names it
 
 Conversion produces two halves that find each other by a shared id.
@@ -427,23 +517,32 @@ behind one tag contributes three entries that share that tag's id — carrying:
   carries renders nothing, and a tag no annotation names is shown to the reader as text. The
   selector's field is `id` while the tag's attribute is `data-id` — an asymmetry of the client's
   contract, not a choice open to this app.
-- **`body.title`** — the label of this citation's entry inside the pill's popup, reading
-  `doc <id>, page <ix>` for the cited document and page, so a reader can tie the entry to the
-  report's references section now that the inline marker is gone. In a run's popup these labels are
-  what tells the sources apart.
+- **`body.title`** — the label of this citation's entry inside the pill's popup. It SHALL read
+  **`<title>, page <ix>`**, naming the cited document's publication title and the cited page, when a
+  title resolved for that document through the document-metadata resource; and **`doc <id>, page
+  <ix>`**, the text the marker carried, when none did. In a run's popup these labels are what tells
+  the sources apart, and the page belongs in the label because a document server attributes at page
+  level: two pages of one publication are two sources and must read as two entries.
 - **`body.source.attachment`** — `{type, url, title}`, nested under `source`: the DIAL file URL
   from the file-sharing tool, carried verbatim; the type `application/pdf` stated explicitly — the
   client opens a citation only for exactly that type, and only PDFs are converted at all — and the
-  label the pill itself shows, which SHALL read `doc <id>, page <ix>`, the same string as this
-  citation's `body.title`. The app has no document title to show: the only human-readable text it
-  holds is the file name inside the shared URL, which is a storage path segment rather than the
-  document's title, and the document-metadata contract this change leaves out is what would supply
-  a real one. So the app SHALL derive no label from the URL, and SHALL decode no part of it. Both
-  fields carry the same string deliberately, because the client uses one to label the pill and the
-  other to label the entry inside its popup. A flat source without the nested attachment
-  is not a valid entry in this container and is discarded by the client before rendering. A pill
-  behind a run takes its label from the run's first citation and marks how many further sources it
-  carries, which the client does on its own.
+  label the pill itself shows. It SHALL carry the same two parts as `body.title` — the title and
+  the cited page — differing only in that **the title is shortened to a configured budget**, the
+  ellipsis counted within it, or carried whole where the channel names no budget
+  (**application-config-schema** owns the field, its default and its null case). The
+  page SHALL be appended after the shortening, so a long title never costs the reader the page. A
+  citation no title resolved for SHALL NOT be shortened at all: its `doc <id>, page <ix>` is short
+  by construction, and cutting it would lose the id or the page.
+
+  The app shortens because the client does not: a pill is a narrow inline element carrying the
+  client's own count marker when it stands for a run, and a label that overflows is not trimmed for
+  it. The popup card has the room, which is why `body.title` keeps the title whole — a reader who
+  needs the full name opens the pill. The app SHALL derive no label from the URL and SHALL decode no
+  part of it: the file name inside a shared URL is a storage path segment rather than a title, and
+  the document-metadata resource is the only source of a real one. A pill behind a run takes its
+  label from the run's first citation and marks how many further sources it carries, which the
+  client does on its own. A flat source without the nested attachment is not a valid entry in this
+  container and is discarded by the client before rendering.
 - **`body.selector`** — a `pdf_bbox` carrying the cited page, with a zero-size box
   (`x1 = y1 = x2 = y2 = 0`). The page is carried here and nowhere else: the tag in the text carries
   no page, and the page SHALL NOT be appended to the URL as a `#page=N` fragment, which the client's
@@ -466,11 +565,42 @@ when the message finishes rather than as the report streams.
 - **THEN** the delivered text SHALL carry `<cit data-id="X"></cit>` where the marker stood, and the
   annotations array SHALL carry exactly one entry whose `target.selector` names tag `cit` and id `X`
 
-#### Scenario: The pill and its popup entry are labelled from the marker
+#### Scenario: A titled document labels both halves with its publication title
 
-- **WHEN** the step converts a citation of document 12, page 13
+- **WHEN** the step converts a citation of document 12, page 13, and the document-metadata resource
+  reported that document's title as `Market Outlook 2025`
 - **THEN** the annotation's `body.title` and its `body.source.attachment.title` SHALL both read
-  `doc 12, page 13`, and no part of the shared URL SHALL appear in either
+  `Market Outlook 2025, page 13`, and no part of the shared URL SHALL appear in
+  either
+
+#### Scenario: An untitled document falls back to the marker's own text
+
+- **WHEN** the step converts a citation of document 12, page 13, and no title resolved for that
+  document
+- **THEN** both labels SHALL read `doc 12, page 13`, and the citation SHALL still become a pill
+
+#### Scenario: A long title is shortened on the pill and whole on the card
+
+- **WHEN** a resolved publication title is longer than the configured pill budget
+- **THEN** `body.source.attachment.title` SHALL carry the title shortened to that budget with an
+  ellipsis, followed by the cited page, and `body.title` SHALL carry the whole title with the page
+
+#### Scenario: A title within the budget is untouched
+
+- **WHEN** a resolved title is no longer than the configured budget
+- **THEN** both labels SHALL read identically, with no ellipsis
+
+#### Scenario: The pill keeps the page however long the title
+
+- **WHEN** a resolved title is many times the budget
+- **THEN** the pill's label SHALL still end with the cited page, because the page is appended after
+  the shortening
+
+#### Scenario: Two pages of one publication are two entries
+
+- **WHEN** two adjacent citations name pages 4 and 9 of one titled document and fold into one pill
+- **THEN** the pill's popup SHALL carry two entries, their labels differing only in the page, so the
+  reader can tell the two cited pages apart
 
 #### Scenario: A run's annotations share one tag id and keep separate indices
 
@@ -620,15 +750,33 @@ than warning on each report. The other
 five SHALL each be a WARNING — an id missing from an otherwise valid response included, since it
 costs the reader a pill the report was written to offer.
 
+**A failure of the document-metadata read costs a label and never a pill**, so it is graded one step
+lower throughout. On any of the following the app SHALL convert every citation it otherwise would,
+labelling from the marker whatever it could not label from a title:
+
+- no configured document-metadata resource, or no configured title key;
+- the read raises, times out, or reports an error;
+- the answer cannot be read as an id-to-metadata object;
+- a requested id is absent from the answer, or carries no usable value under the configured key.
+
+**No configured resource is not a failure** and SHALL be recorded at DEBUG, for the same reason the
+absent file-sharing tool is: naming the resource is optional, so an instance that names none would
+otherwise warn on every report it delivers. The read raising and an unreadable answer SHALL each be a
+WARNING, both being misconfiguration or a server in breach of its contract. **A document that simply
+has no title SHALL NOT warn**: a channel's metadata is its own, a missing key there is data variance
+rather than a fault, and it costs a plainer label rather than anything the reader loses. How many
+titles resolved is carried by the step's own event instead (see **logging-policy**).
+
 **Every record the citation step emits carries counts and the failure kind, and nothing drawn from
 a document.** The service's own call sites SHALL NOT log, at any level: a returned URL, any part of
 one, a file name taken from one, a document title, or a cited document's id. The mapping is a tool
-response body, which the content allowlist keeps out of log records, and the allowlist's permission
-for DIAL relative `files/...` paths covers URLs the service handles itself elsewhere — a failed
-image download it reports — and does not reach into this response. What a record may carry about
-documents is therefore how many: how many were cited, how many resolved, how many ids the response
-omitted. The one name a record may carry is the configured tool's, which the allowlist allows as a
-tool name and which is what makes a misconfiguration warning actionable.
+response body and the metadata object is a resource body, which the content allowlist keeps out of
+log records, and the allowlist's permission for DIAL relative `files/...` paths covers URLs the
+service handles itself elsewhere — a failed image download it reports — and does not reach into
+either. What a record may carry about documents is therefore how many: how many were cited, how many
+resolved, how many ids the response omitted, how many titles were found. The one name a record may
+carry is the configured tool's, which the allowlist allows as a tool name and which is what makes a
+misconfiguration warning actionable.
 
 The step SHALL NOT emit a marker tag it has no annotation for. A tag whose annotation never reaches
 the reader — because the step could not emit the array, or because something downstream dropped it —
@@ -670,6 +818,25 @@ turn.
 - **THEN** the turn SHALL run normally, the report SHALL be delivered with every marker as text, and
   one warning SHALL name the missing tool
 
+#### Scenario: A failing metadata read still delivers every pill
+
+- **WHEN** the file-sharing tool resolved three documents and the document-metadata read then raises
+- **THEN** every citation of those three documents SHALL still become a pill, every label SHALL read
+  as the marker did, the turn SHALL complete successfully, and one WARNING SHALL name the failure
+
+#### Scenario: An unreadable metadata answer still delivers every pill
+
+- **WHEN** the metadata read answers with something that is not an id-to-metadata object
+- **THEN** every convertible citation SHALL still become a pill labelled from its marker, and one
+  WARNING SHALL name the failure
+
+#### Scenario: A document without a title does not warn
+
+- **WHEN** the metadata answer carries two of the three requested documents with a usable title and
+  the third without one
+- **THEN** two documents' citations SHALL be labelled with their titles, the third's with its marker
+  text, and no WARNING SHALL be emitted for the missing title
+
 #### Scenario: An exception in the link pass delivers the settled draft
 
 - **WHEN** the link removal raises on the settled draft
@@ -692,6 +859,6 @@ turn.
 #### Scenario: A report with no citations gets no tag and no annotation
 
 - **WHEN** the settled draft cites no document at all
-- **THEN** no file-sharing call SHALL be made, no annotations SHALL be emitted, and the delivered
-  text SHALL carry no marker tag — differing from the settled draft only where the link pass
-  removed something
+- **THEN** no file-sharing call SHALL be made, no metadata read SHALL be made, no annotations SHALL
+  be emitted, and the delivered text SHALL carry no marker tag — differing from the settled draft
+  only where the link pass removed something

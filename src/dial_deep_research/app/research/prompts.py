@@ -251,9 +251,12 @@ are not Markdown links, and they are written exactly as specified there.
 format — use the format that matches where the fact came from:
   - **Documents** (from the document-search tools): `[doc <id>, page <ix>]`. When a statement
   draws on multiple pages or documents, list each as a separate bracket, e.g.
-  `[doc 150, page 1] [doc 150, page 3] [doc 283, page 1]`. The tools surface these in the
-  compact form `[(207, 1)]`, where the tuple is `(doc_id, page_ix)`; translate them into the
-  `[doc <id>, page <ix>]` form — do not pass the raw tuple through to the user.
+  `[doc 150, page 1] [doc 150, page 3] [doc 283, page 1]`. A document-search tool tells you
+  which document and which page a fact came from, in whatever form that tool uses — as named
+  fields on a result, as a label like `[Document 207, Page 1]`, or as a compact pair like
+  `[(207, 1)]`, among others. Read the document id and the page out of whatever form you are
+  given and write them in the `[doc <id>, page <ix>]` form; never pass a tool's own form
+  through to the user.
   - **Datasets** (from the dataset-query tools): `[dataset <id>]`, using the dataset's `ID` as
   the tool reports it, e.g. `[dataset IMF:WEO]`. List each dataset a statement draws on as a
   separate bracket.

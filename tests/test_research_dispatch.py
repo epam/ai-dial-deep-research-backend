@@ -37,7 +37,13 @@ def _make_runner(*, content_already_streamed: bool = False) -> tuple[ResearchRun
 
 async def _deliver(runner: ResearchRunner) -> None:
     """Deliver the settled report the way `run` does, with inline citations switched off."""
-    await runner._deliver_report(file_sharing_tool=None, configured_tool_name=None)
+    await runner._deliver_report(
+        file_sharing_tool=None,
+        configured_tool_name=None,
+        mcp_client=None,
+        metadata_source=None,
+        pill_title_max_chars=20,
+    )
 
 
 async def test_settled_report_is_appended_once_with_no_separator() -> None:
@@ -201,7 +207,7 @@ class _GraphStub:
 
 def _stub_graph_build(monkeypatch: MonkeyPatch, captured: dict[str, Any]) -> None:
     async def _no_tools(**_kwargs: Any) -> LoadedMcpTools:
-        return LoadedMcpTools(agent_tools=[], file_sharing_tool=None)
+        return LoadedMcpTools(agent_tools=[], file_sharing_tool=None, client=None)
 
     monkeypatch.setattr(runner_module, "load_mcp_tools", _no_tools)
     monkeypatch.setattr(runner_module, "build_research_graph", lambda **_kw: _GraphStub(captured))

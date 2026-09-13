@@ -9,20 +9,29 @@ is about what the runner does with them.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import pytest
 from aidial_sdk.chat_completion import Status
+from langchain_core.documents.base import Blob
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import ValuesStreamPart
 
 from dial_deep_research.app.research import runner as runner_module
 from dial_deep_research.app.research.runner import CITATIONS_ACTIVITY, ResearchRunner
+from dial_deep_research.app_properties import DocumentMetadataSource
 from tests.dial_spies import ChoiceSpy
 
 _TOOL_NAME = "share_documents"
+_TITLE_KEY = "publication_title"
+_METADATA_SOURCE = DocumentMetadataSource(
+    server_name="publications",
+    resource_template="documents://metadata/{document_ids}",
+    title_key=_TITLE_KEY,
+)
 _URL = "files/bucket/appdata/deep-research/docs/outlook.pdf"
 _OTHER_URL = "files/bucket/appdata/deep-research/docs/review.pdf"
 
@@ -75,13 +84,50 @@ def _sharing_tool(
     )
 
 
+class _MetadataClient:
+    """Answers the document-metadata read, and records the URIs it was asked for.
+
+    A stub rather than a live client: what the read costs the delivery is decided by the answer,
+    and every answer shape is exercised in `test_document_metadata.py`.
+    """
+
+    def __init__(
+        self, titles: dict[int, str] | None = None, *, raises: Exception | None = None
+    ) -> None:
+        self._titles = titles or {}
+        self._raises = raises
+        self.requested_uris: list[str] = []
+
+    async def get_resources(self, server_name: str, *, uris: list[str]) -> list[Blob]:
+        self.requested_uris.extend(uris)
+        if self._raises is not None:
+            raise self._raises
+        body = {str(i): {_TITLE_KEY: title} for i, title in self._titles.items()}
+        return [Blob.from_data(data=json.dumps(body), mime_type="application/json")]
+
+
+class _UnreadableMetadataClient(_MetadataClient):
+    async def get_resources(self, server_name: str, *, uris: list[str]) -> list[Blob]:
+        self.requested_uris.extend(uris)
+        return [Blob.from_data(data="not json at all", mime_type="application/json")]
+
+
 async def _deliver(
     runner: ResearchRunner,
     *,
     tool: BaseTool | None = None,
     configured_tool_name: str | None = _TOOL_NAME,
+    mcp_client: Any = None,
+    metadata_source: DocumentMetadataSource | None = None,
+    pill_title_max_chars: int | None = 20,
 ) -> None:
-    await runner._deliver_report(file_sharing_tool=tool, configured_tool_name=configured_tool_name)
+    await runner._deliver_report(
+        file_sharing_tool=tool,
+        configured_tool_name=configured_tool_name,
+        mcp_client=mcp_client or _MetadataClient(),
+        metadata_source=metadata_source,
+        pill_title_max_chars=pill_title_max_chars,
+    )
 
 
 # --- the delivered text -------------------------------------------------------------------------
@@ -441,3 +487,142 @@ def _one_warning(caplog: pytest.LogCaptureFixture) -> str:
     ]
     assert len(warnings) == 1, warnings
     return warnings[0]
+
+
+# --- document titles ----------------------------------------------------------------------------
+
+
+_TITLE = "Market Outlook 2025"
+
+
+async def test_a_resolved_title_labels_the_pill_and_its_popup_entry() -> None:
+    runner, choice = _make_runner()
+    _settle(runner, "Defaults rise. [doc 442, page 3]")
+
+    await _deliver(
+        runner,
+        tool=_sharing_tool(urls={"442": _URL}),
+        mcp_client=_MetadataClient({442: _TITLE}),
+        metadata_source=_METADATA_SOURCE,
+    )
+
+    annotations = choice.chunks[0]["choices"][0]["delta"]["custom_content"]["annotations"]
+    assert [a["body"]["title"] for a in annotations] == [f"{_TITLE}, page 3"]
+    assert annotations[0]["body"]["source"]["attachment"]["title"] == f"{_TITLE}, page 3"
+
+
+async def test_titles_are_asked_for_only_where_a_url_resolved() -> None:
+    """A document with no URL draws no pill, so a title for it would be read and never shown."""
+    runner, _ = _make_runner()
+    _settle(runner, "One [doc 442, page 3]. Two [doc 12, page 1].")
+    client = _MetadataClient({442: _TITLE})
+
+    await _deliver(
+        runner,
+        tool=_sharing_tool(urls={"442": _URL}),
+        mcp_client=client,
+        metadata_source=_METADATA_SOURCE,
+    )
+
+    assert client.requested_uris == ["documents://metadata/442"]
+
+
+async def test_no_configured_metadata_source_labels_every_pill_from_its_marker(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Naming a source is optional, so an instance without one must not warn on every report."""
+    runner, choice = _make_runner()
+    _settle(runner, "Defaults rise. [doc 442, page 3]")
+    client = _MetadataClient({442: _TITLE})
+
+    with caplog.at_level(logging.DEBUG, logger=runner_module.logger.name):
+        await _deliver(
+            runner,
+            tool=_sharing_tool(urls={"442": _URL}),
+            mcp_client=client,
+            metadata_source=None,
+        )
+
+    annotations = choice.chunks[0]["choices"][0]["delta"]["custom_content"]["annotations"]
+    assert [a["body"]["title"] for a in annotations] == ["doc 442, page 3"]
+    assert client.requested_uris == []
+    assert [r.levelno for r in caplog.records if r.levelno >= logging.WARNING] == []
+    assert any(
+        "no MCP server names a document-metadata resource" in r.message for r in caplog.records
+    )
+
+
+async def test_a_failing_metadata_read_still_delivers_every_pill(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runner, choice = _make_runner()
+    _settle(runner, "Defaults rise. [doc 442, page 3]")
+
+    with caplog.at_level(logging.WARNING, logger=runner_module.logger.name):
+        await _deliver(
+            runner,
+            tool=_sharing_tool(urls={"442": _URL}),
+            mcp_client=_MetadataClient(raises=RuntimeError("connection reset")),
+            metadata_source=_METADATA_SOURCE,
+        )
+
+    annotations = choice.chunks[0]["choices"][0]["delta"]["custom_content"]["annotations"]
+    assert [a["body"]["title"] for a in annotations] == ["doc 442, page 3"]
+    assert "kind=metadata_read_failed" in _one_warning(caplog)
+
+
+async def test_an_unreadable_metadata_answer_still_delivers_every_pill(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runner, choice = _make_runner()
+    _settle(runner, "Defaults rise. [doc 442, page 3]")
+
+    with caplog.at_level(logging.WARNING, logger=runner_module.logger.name):
+        await _deliver(
+            runner,
+            tool=_sharing_tool(urls={"442": _URL}),
+            mcp_client=_UnreadableMetadataClient(),
+            metadata_source=_METADATA_SOURCE,
+        )
+
+    assert '<cit data-id="' in choice.content
+    assert "kind=metadata_unreadable_result" in _one_warning(caplog)
+
+
+async def test_a_document_carrying_no_title_does_not_warn(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A channel's metadata is its own; a missing key there costs a label, not a pill."""
+    runner, choice = _make_runner()
+    _settle(runner, "One [doc 442, page 3]. Two [doc 12, page 1].")
+
+    with caplog.at_level(logging.DEBUG, logger=runner_module.logger.name):
+        await _deliver(
+            runner,
+            tool=_sharing_tool(urls={"442": _URL, "12": _OTHER_URL}),
+            mcp_client=_MetadataClient({442: _TITLE}),
+            metadata_source=_METADATA_SOURCE,
+        )
+
+    annotations = choice.chunks[0]["choices"][0]["delta"]["custom_content"]["annotations"]
+    assert [a["body"]["title"] for a in annotations] == [f"{_TITLE}, page 3", "doc 12, page 1"]
+    assert [r.levelno for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+async def test_the_step_event_counts_resolved_and_titled_documents(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runner, _ = _make_runner()
+    _settle(runner, "One [doc 442, page 3]. Two [doc 12, page 1].")
+
+    with caplog.at_level(logging.INFO):
+        await _deliver(
+            runner,
+            tool=_sharing_tool(urls={"442": _URL, "12": _OTHER_URL}),
+            mcp_client=_MetadataClient({442: _TITLE}),
+            metadata_source=_METADATA_SOURCE,
+        )
+
+    event = next(r.message for r in caplog.records if "Report citations resolved" in r.message)
+    assert "documents_requested=2 documents_resolved=2 documents_titled=1" in event
+    assert _TITLE not in event

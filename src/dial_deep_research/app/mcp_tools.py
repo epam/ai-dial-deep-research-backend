@@ -30,16 +30,22 @@ logger = logging.getLogger(__name__)
 
 
 class LoadedMcpTools(NamedTuple):
-    """One turn's MCP tools, split by who may call them.
+    """One turn's MCP tools, split by who may call them, and the client they came from.
 
     `agent_tools` is what a model is offered. `file_sharing_tool` is the tool the configuration
     named for the application to call at report delivery, or `None` when no server named one or
     the named tool is absent from what its server advertises — the caller tells those two apart
     by the configured name, and warns only for the second (see the report-citations capability).
+
+    `client` is the same per-request client the tools were fetched with, kept because the
+    citation step reads an MCP resource through it later in the turn (see
+    `research/document_metadata.py`). It holds only the connection map, so a later read opens a
+    session of its own with the same credentials.
     """
 
     agent_tools: list[BaseTool]
     file_sharing_tool: BaseTool | None
+    client: MultiServerMCPClient
 
 
 def build_mcp_client(
@@ -181,4 +187,6 @@ async def load_mcp_tools(
         # handler on every tool it builds, which turns an MCP error into ordinary result
         # content. The app reads this tool's result itself and needs the failure to reach it.
         file_sharing_tool.handle_tool_error = False
-    return LoadedMcpTools(agent_tools=agent_tools, file_sharing_tool=file_sharing_tool)
+    return LoadedMcpTools(
+        agent_tools=agent_tools, file_sharing_tool=file_sharing_tool, client=mcp_client
+    )

@@ -1,8 +1,9 @@
-# Opt-in overlay for inline citations: it **adds** a next-generation chat UI and a themes service
-# of its own beside the base pair, and registers the inline-citations demo in DIAL core.
+# Opt-in overlay that **adds** a next-generation chat UI and a themes service of its own beside
+# the base pair. It also registers the inline-citations demo in DIAL core, because that demo is
+# only worth opening in a chat that draws the pills.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.annotations.yml up -d
-#   (or `make annotations-up`)
+#   docker compose -f docker-compose.yml -f docker-compose.chat-nextgen.yml up -d
+#   (or `make chat-ng-up`)
 #
 # Plain `docker compose up` / `make infra-up` starts the base stack alone: no next-generation
 # service, no demo application in core, and nothing failing for the values this file needs.
@@ -15,7 +16,7 @@
 # every time, so comparing the two needs no shared conversation.
 #
 # DIAL core needs no change beyond the demo's application entry: annotation attachment
-# auto-sharing entered core in 0.44.0 and docker-compose.yml already pins 0.45.1.
+# auto-sharing entered core in 0.44.0 and docker-compose.yml already pins 0.47.1.
 #
 # The app's own host port is untouched by this overlay. The next-generation chat's
 # backend-for-frontend listens on container port 5000, which is published on host port 4207, so

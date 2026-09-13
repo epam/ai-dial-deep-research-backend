@@ -185,7 +185,7 @@ The repository SHALL keep application instances (client configs) in a gitignored
   `applications-template.json` and `application-schemas-template.json` remain tracked
 
 ### Requirement: Pinned infrastructure images
-The compose file SHALL pin concrete image tags (not `latest`) for the upstream DIAL core, chat UI, themes, redis, and DIAL adapter services: `epam/ai-dial-core:0.45.1`, `epam/ai-dial-chat:0.47.2`, `epam/ai-dial-chat-themes:0.17.0`, `redis:7.2.4-alpine3.19`, `epam/ai-dial-adapter-dial:0.16.0`.
+The compose file SHALL pin concrete image tags (not `latest`) for the upstream DIAL core, chat UI, themes, redis, and DIAL adapter services: `epam/ai-dial-core:0.47.1`, `epam/ai-dial-chat:0.47.2`, `epam/ai-dial-chat-themes:0.17.0`, `redis:7.2.4-alpine3.19`, `epam/ai-dial-adapter-dial:0.16.0`.
 
 The opt-in overlay that adds the next-generation chat (see the two-generations requirement) SHALL pin its themes service the same way, to the `epam/ai-dial-chat-themes` tag that chat line expects, and SHALL run its chat service on the moving `development` tag of `epam/ai-dial-chat`. That tag SHALL be the only image in the repository not pinned to a version, and the reason SHALL be recorded where it is set: no released chat renders marker-tag annotations, because that rendering reached the chat's development branch after its newest release was built. The overlay SHALL move to a `1.0.x` tag once one carries the rendering. The reproducibility this requirement otherwise guarantees therefore covers the base stack, which the scenario below exercises, and deliberately not the overlay's chat.
 
@@ -317,7 +317,7 @@ shared conversation, because the demo completion's reply is the same every time.
 
 The demo completion (see the **report-citations** capability) SHALL be reachable from the local stack
 without being present in a default one. Two switches, both off by default and both flipped by
-choosing the annotations workflow:
+bringing up the next-generation chat overlay:
 
 - **In the app**, its registration SHALL be gated by its own environment flag, as the playground
   channel's is.
@@ -336,8 +336,8 @@ is the unit tests' job, over the shared citation code, not a direct call's.
 
 #### Scenario: A default stack shows no demo application
 
-- **WHEN** a contributor generates the core config and runs `make infra-up` without the annotations
-  overlay
+- **WHEN** a contributor generates the core config and runs `make infra-up` without the
+  next-generation chat overlay
 - **THEN** core SHALL NOT load the demo's application entry, and the chat UI SHALL NOT list it
 
 #### Scenario: The overlay registers it and the app serves it
