@@ -16,7 +16,7 @@
 # every time, so comparing the two needs no shared conversation.
 #
 # DIAL core needs no change beyond the demo's application entry: annotation attachment
-# auto-sharing entered core in 0.44.0 and docker-compose.yml already pins 0.45.1.
+# auto-sharing entered core in 0.44.0 and docker-compose.yml already pins 0.47.1.
 #
 # The app's own host port is untouched by this overlay. The next-generation chat's
 # backend-for-frontend listens on container port 5000, which is published on host port 4207, so
