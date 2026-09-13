@@ -47,6 +47,10 @@ CITATION_TAG_NAME = "cit"
 
 PDF_MIME_TYPE = "application/pdf"
 
+# What marks a title the pill shows only part of. One character, so it costs the caller's
+# budget as little as possible.
+_ELLIPSIS = "…"
+
 # The two inline citation forms the report is written in (see the research-execution capability).
 # The document form takes a positive integer id and a positive integer page, because both halves
 # are used: the id is what the file-sharing tool is asked for, and the page is what the reader is
@@ -236,6 +240,7 @@ def convert_citations(
     *,
     document_urls: Mapping[int, str],
     document_titles: Mapping[int, str] | None = None,
+    pill_title_max_chars: int | None = None,
     make_tag_id: Callable[[], str] = lambda: uuid.uuid4().hex[:12],
 ) -> CitationConversion:
     """Replace every convertible citation with its marker tag, and build the annotations.
@@ -247,6 +252,9 @@ def convert_citations(
         document_titles: the publication title of each document one was obtained for, by document
             id. An absent id is labelled from its marker instead; a caller that resolves no
             titles at all passes nothing and every label reads as the marker did.
+        pill_title_max_chars: how much of a title the pill's own label shows, the ellipsis
+            counted within it. `None` shows the title whole. The popup card's label carries the
+            whole title either way.
         make_tag_id: source of tag ids. Injectable so a test can read the ids it expects; the
             default is opaque and unique per tag.
     """
@@ -290,6 +298,7 @@ def convert_citations(
                     tag_id=tag_id,
                     citation=citation,
                     title=titles.get(citation.document_id),
+                    pill_title_max_chars=pill_title_max_chars,
                 )
             )
 
@@ -366,33 +375,58 @@ def log_citations_resolved(
     )
 
 
+def _shorten_for_pill(title: str, max_chars: int | None) -> str:
+    """The title as the pill shows it: `max_chars` at most, the ellipsis counted within it.
+
+    `None` returns the title unchanged, for a caller whose client has room for it or which
+    shortens labels itself.
+
+    Whitespace left at the cut goes with it, so a title broken at a space does not read as a
+    gap before the ellipsis. The cut is by character rather than at a word boundary: a budget
+    this small would often leave one word, and a ragged edge costs the reader less than a label
+    whose length swings with where the spaces happen to fall.
+    """
+    if max_chars is None or len(title) <= max_chars:
+        return title
+    return title[: max_chars - len(_ELLIPSIS)].rstrip() + _ELLIPSIS
+
+
 def _build_annotation(
-    *, index: int, tag_id: str, citation: _ConvertibleCitation, title: str | None
+    *,
+    index: int,
+    tag_id: str,
+    citation: _ConvertibleCitation,
+    title: str | None,
+    pill_title_max_chars: int | None,
 ) -> Annotation:
     """One annotation for one converted citation.
 
-    Both labels carry the same string: the client labels the pill from the attachment title and
-    the popup entry from the body title. That string is the publication's title with the cited
-    page when a title resolved, and the text the marker carried when none did.
+    The client labels the pill from the attachment title and the popup entry from the body
+    title, and the two differ only in length: the pill's copy of the publication title is
+    shortened to `pill_title_max_chars`, the popup's carries it whole. A citation no title
+    resolved for reads `doc <id>, page <ix>` in both, the text the marker carried.
 
-    The page belongs in the label either way, because a document server attributes at page
-    level: two pages of one publication are two sources, and a run folding them behind one pill
-    must still read as two entries in its popup.
+    The page belongs in both labels, because a document server attributes at page level: two
+    pages of one publication are two sources, and a run folding them behind one pill must still
+    read as two entries in its popup. It is appended after the shortening, so the pill never
+    loses the page to a long title.
 
-    Neither label is shortened here. The file name inside the URL is a storage path segment
-    rather than a title, so no label is derived from the URL and no part of it is decoded.
+    The file name inside the URL is a storage path segment rather than a title, so no label is
+    derived from the URL and no part of it is decoded.
     """
-    label = (
-        f"{title}, page {citation.page}"
-        if title
-        else f"doc {citation.document_id}, page {citation.page}"
-    )
+    if title:
+        card_label = f"{title}, page {citation.page}"
+        pill_label = f"{_shorten_for_pill(title, pill_title_max_chars)}, page {citation.page}"
+    else:
+        card_label = pill_label = f"doc {citation.document_id}, page {citation.page}"
     return Annotation(
         index=index,
         target=AnnotationTarget(selector=HtmlTagSelector(tag=CITATION_TAG_NAME, id=tag_id)),
         body=AnnotationBody(
-            title=label,
-            source=AnnotationSource(attachment=AnnotationAttachment(url=citation.url, title=label)),
+            title=card_label,
+            source=AnnotationSource(
+                attachment=AnnotationAttachment(url=citation.url, title=pill_label)
+            ),
             selector=PdfPageSelector(page=citation.page),
         ),
     )

@@ -460,6 +460,17 @@ class ApplicationProperties(BaseModel):
         " verdict could not be acted on. 1 means the first draft is delivered unreviewed, with no"
         " review at all.",
     )
+    max_pill_title_chars: int | None = Field(
+        default=20,
+        ge=10,
+        description="How much of a cited document's title the inline citation pill shows, the"
+        " ellipsis counted within it. A pill is a narrow element in the middle of a sentence and"
+        " also carries the client's own count marker when it stands for several sources, so a long"
+        " publication title runs off it; the client does not shorten the label itself. The cited"
+        " page is appended after the shortening and is never lost to a long title, and the"
+        " citation card keeps the whole title regardless of this value. Raise it if the pills read"
+        " too short in your client, or set it to null to show every title whole.",
+    )
     mcp_servers: list[MCPClientSettings] = Field(
         min_length=1,
         description="MCP servers the research agent connects to. At least one is required;"

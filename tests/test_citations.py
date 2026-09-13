@@ -511,12 +511,76 @@ def test_two_pages_of_one_titled_document_differ_only_in_the_page() -> None:
     assert {annotation.target.selector.id for annotation in converted.annotations} == {"tag-0"}
 
 
-def test_a_long_title_is_carried_whole() -> None:
-    """The app shortens neither label; what a client does with a long one is the client's business."""
-    long_title = "A publication title long enough not to fit on a narrow pill"
-    converted = _convert_titled("A claim. [doc 101, page 1]", {101: long_title})
-    assert converted.annotations[0].body.title == f"{long_title}, page 1"
-    assert "…" not in converted.annotations[0].body.source.attachment.title
+_LONG_TITLE = "A publication title long enough not to fit on a narrow pill"
+
+
+def _convert_with_budget(title: str, budget: int | None):
+    return convert_citations(
+        "A claim. [doc 101, page 1]",
+        document_urls=_URLS,
+        document_titles={101: title},
+        pill_title_max_chars=budget,
+        make_tag_id=_tag_ids(),
+    )
+
+
+def test_a_long_title_is_shortened_on_the_pill_and_whole_on_the_card() -> None:
+    """DIAL Chat does not shorten an overflowing label, so the app shortens the pill's copy."""
+    body = _convert_with_budget(_LONG_TITLE, 20).annotations[0].body
+
+    assert body.title == f"{_LONG_TITLE}, page 1"
+    assert body.source.attachment.title == "A publication title…, page 1"
+
+
+def test_no_budget_shows_every_title_whole() -> None:
+    """For a client with the room, or one that shortens labels itself."""
+    body = _convert_with_budget(_LONG_TITLE, None).annotations[0].body
+    assert body.title == body.source.attachment.title == f"{_LONG_TITLE}, page 1"
+
+
+def test_no_budget_is_the_default_for_a_caller_that_names_none() -> None:
+    converted = _convert_titled("A claim. [doc 101, page 1]", {101: _LONG_TITLE})
+    assert converted.annotations[0].body.source.attachment.title == f"{_LONG_TITLE}, page 1"
+
+
+def test_a_title_within_the_budget_is_untouched_on_both() -> None:
+    body = _convert_with_budget("Market Outlook 2025", 20).annotations[0].body
+    assert body.title == body.source.attachment.title == "Market Outlook 2025, page 1"
+
+
+def test_the_pill_keeps_the_page_however_long_the_title() -> None:
+    """The page is appended after the shortening, so a long title never costs the reader it."""
+    converted = convert_citations(
+        "A claim. [doc 101, page 7]",
+        document_urls=_URLS,
+        document_titles={101: "x" * 500},
+        pill_title_max_chars=20,
+        make_tag_id=_tag_ids(),
+    )
+    assert converted.annotations[0].body.source.attachment.title.endswith(", page 7")
+
+
+def test_the_pill_budget_is_configurable() -> None:
+    body = _convert_with_budget(_LONG_TITLE, 10).annotations[0].body
+    assert body.source.attachment.title == "A publica…, page 1"
+
+
+def test_whitespace_at_the_cut_goes_with_it() -> None:
+    """Otherwise the label reads as a gap before the ellipsis."""
+    body = _convert_with_budget("Market Outlook 2025 and more", 20).annotations[0].body
+    assert body.source.attachment.title == "Market Outlook 2025…, page 1"
+
+
+def test_an_untitled_citation_is_not_shortened() -> None:
+    """The marker label is short by construction, and cutting it would lose the id or the page."""
+    converted = convert_citations(
+        "A claim. [doc 101, page 1]",
+        document_urls=_URLS,
+        pill_title_max_chars=4,
+        make_tag_id=_tag_ids(),
+    )
+    body = converted.annotations[0].body
+    assert body.title == body.source.attachment.title == "doc 101, page 1"
 
 
 def test_a_title_for_a_document_that_resolved_no_url_changes_nothing() -> None:

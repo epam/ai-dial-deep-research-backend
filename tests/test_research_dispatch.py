@@ -42,6 +42,7 @@ async def _deliver(runner: ResearchRunner) -> None:
         configured_tool_name=None,
         mcp_client=None,
         metadata_source=None,
+        pill_title_max_chars=20,
     )
 
 

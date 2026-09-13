@@ -75,10 +75,12 @@ of it.
   unlike the required `file_sharing_tool`, because a channel's metadata schema may genuinely carry
   no title key, and a missing title costs a label rather than a link.
 
-- **No label is shortened in the app.** Whether DIAL Chat trims a long pill label is still
-  unmeasured, and the longest publication title in that channel is 121 characters, so an ordinary
-  report produces one to read off the screen. Trimming, if it turns out to be wanted at all, is
-  written after that measurement rather than guessed at now.
+- **The pill's copy of the title is shortened; the card's is not.** DIAL Chat does not trim a
+  label that overflows — measured in the browser against a real report, where the pills ran long —
+  so the app shortens the one copy that has no room. The budget is the channel property
+  `max_pill_title_chars`, defaulting to 20, because what fits on a pill depends on the client the
+  channel's readers use. The cited page is appended after the shortening and is never lost to a
+  long title.
 
 - **The annotations demo is untouched.** `convert_citations` takes the titles as a parameter that
   defaults to empty, so the demo keeps calling the same code and keeps rendering the marker labels —

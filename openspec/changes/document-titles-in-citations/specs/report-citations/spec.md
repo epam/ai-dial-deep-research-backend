@@ -234,16 +234,23 @@ behind one tag contributes three entries that share that tag's id — carrying:
 - **`body.source.attachment`** — `{type, url, title}`, nested under `source`: the DIAL file URL
   from the file-sharing tool, carried verbatim; the type `application/pdf` stated explicitly — the
   client opens a citation only for exactly that type, and only PDFs are converted at all — and the
-  label the pill itself shows, which SHALL be **the same string as this citation's `body.title`**,
-  under both of that field's cases. Both fields carry the same string deliberately, because the
-  client uses one to label the pill and the other to label the entry inside its popup. The app SHALL
-  derive no label from the URL and SHALL decode no part of it: the file name inside a shared URL is a
-  storage path segment rather than a title, and the document-metadata resource is the only source of
-  a real one. **The app SHALL NOT shorten either label.** A pill behind a run takes its label from
-  the run's first citation and marks how many further sources it carries, which the client does on
-  its own; whether that client also shortens a long label is the client's business, and shortening in
-  the app would either duplicate or fight it. A flat source without the nested attachment is not a
-  valid entry in this container and is discarded by the client before rendering.
+  label the pill itself shows. It SHALL carry the same two parts as `body.title` — the title and
+  the cited page — differing only in that **the title is shortened to a configured budget**, the
+  ellipsis counted within it, or carried whole where the channel names no budget
+  (**application-config-schema** owns the field, its default and its null case). The
+  page SHALL be appended after the shortening, so a long title never costs the reader the page. A
+  citation no title resolved for SHALL NOT be shortened at all: its `doc <id>, page <ix>` is short
+  by construction, and cutting it would lose the id or the page.
+
+  The app shortens because the client does not: a pill is a narrow inline element carrying the
+  client's own count marker when it stands for a run, and a label that overflows is not trimmed for
+  it. The popup card has the room, which is why `body.title` keeps the title whole — a reader who
+  needs the full name opens the pill. The app SHALL derive no label from the URL and SHALL decode no
+  part of it: the file name inside a shared URL is a storage path segment rather than a title, and
+  the document-metadata resource is the only source of a real one. A pill behind a run takes its
+  label from the run's first citation and marks how many further sources it carries, which the
+  client does on its own. A flat source without the nested attachment is not a valid entry in this
+  container and is discarded by the client before rendering.
 - **`body.selector`** — a `pdf_bbox` carrying the cited page, with a zero-size box
   (`x1 = y1 = x2 = y2 = 0`). The page is carried here and nowhere else: the tag in the text carries
   no page, and the page SHALL NOT be appended to the URL as a `#page=N` fragment, which the client's
@@ -280,12 +287,22 @@ when the message finishes rather than as the report streams.
   document
 - **THEN** both labels SHALL read `doc 12, page 13`, and the citation SHALL still become a pill
 
-#### Scenario: A long title is carried whole
+#### Scenario: A long title is shortened on the pill and whole on the card
 
-- **WHEN** a resolved publication title is long enough that a client may have to shorten it on the
-  pill
-- **THEN** both labels SHALL carry the full title with the page, and the app SHALL truncate neither
-  and add no ellipsis of its own
+- **WHEN** a resolved publication title is longer than the configured pill budget
+- **THEN** `body.source.attachment.title` SHALL carry the title shortened to that budget with an
+  ellipsis, followed by the cited page, and `body.title` SHALL carry the whole title with the page
+
+#### Scenario: A title within the budget is untouched
+
+- **WHEN** a resolved title is no longer than the configured budget
+- **THEN** both labels SHALL read identically, with no ellipsis
+
+#### Scenario: The pill keeps the page however long the title
+
+- **WHEN** a resolved title is many times the budget
+- **THEN** the pill's label SHALL still end with the cited page, because the page is appended after
+  the shortening
 
 #### Scenario: Two pages of one publication are two entries
 

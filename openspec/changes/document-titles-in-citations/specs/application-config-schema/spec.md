@@ -71,3 +71,41 @@ than a validation error — what a server serves is known only when it is read, 
   `document_title_key`
 - **THEN** validation SHALL raise a pydantic `ValidationError` stating that only a document server
   may set them
+
+### Requirement: The citation pill's title budget is per channel
+
+`ApplicationProperties` SHALL expose a nullable integer field, `max_pill_title_chars`, saying how
+much of a cited document's title the inline citation pill shows, the ellipsis counted within it. It
+SHALL carry a default, so a channel that names nothing still gets pills that fit, and SHALL have a
+floor below which a shortened title conveys nothing.
+
+It is a **channel** setting rather than a server one: what fits on a pill depends on the client the
+channel's readers use, not on which server the document came from. **report-citations** owns what
+the app does with it — the popup card keeps the whole title whatever this says, and the cited page
+is appended after the shortening.
+
+**Null SHALL mean no shortening**, showing every title whole — for a client with the room, or one
+that shortens labels itself. That is the supported way to switch it off, and there SHALL be no
+separate flag for it.
+
+#### Scenario: A channel narrows the pill label
+
+- **WHEN** a channel sets `max_pill_title_chars` below the default and a report cites a document
+  whose title is longer than that
+- **THEN** the pill's label SHALL be shortened to that budget, and the citation card's SHALL still
+  carry the whole title
+
+#### Scenario: A channel naming nothing gets the default
+
+- **WHEN** `ApplicationProperties.model_validate` receives properties with no `max_pill_title_chars`
+- **THEN** validation SHALL succeed and the field SHALL hold the code's default
+
+#### Scenario: A channel switches shortening off
+
+- **WHEN** a channel sets `max_pill_title_chars` to null
+- **THEN** validation SHALL succeed, and every pill SHALL carry its title whole
+
+#### Scenario: A budget too small to be useful is rejected
+
+- **WHEN** a channel sets `max_pill_title_chars` to a number below the floor
+- **THEN** validation SHALL raise a pydantic `ValidationError`

@@ -703,3 +703,25 @@ def test_properties_expose_the_one_configured_title_source() -> None:
 def test_properties_expose_no_title_source_when_none_is_configured() -> None:
     data = {**VALID_PROPERTIES, "mcp_servers": [_document_server()]}
     assert ApplicationProperties.model_validate(data).document_metadata is None
+
+
+def test_the_pill_title_budget_has_a_default() -> None:
+    properties = ApplicationProperties.model_validate(VALID_PROPERTIES)
+    assert properties.max_pill_title_chars == 20
+
+
+def test_a_channel_may_narrow_the_pill_title_budget() -> None:
+    data = {**VALID_PROPERTIES, "max_pill_title_chars": 12}
+    assert ApplicationProperties.model_validate(data).max_pill_title_chars == 12
+
+
+def test_a_channel_may_switch_pill_shortening_off() -> None:
+    """Null shows every title whole, for a client with the room or one that shortens itself."""
+    data = {**VALID_PROPERTIES, "max_pill_title_chars": None}
+    assert ApplicationProperties.model_validate(data).max_pill_title_chars is None
+
+
+def test_a_pill_title_budget_too_small_to_be_useful_is_rejected() -> None:
+    """Below the floor a shortened title is an ellipsis and a letter or two."""
+    with pytest.raises(ValidationError):
+        ApplicationProperties.model_validate({**VALID_PROPERTIES, "max_pill_title_chars": 3})

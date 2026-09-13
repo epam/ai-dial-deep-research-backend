@@ -119,12 +119,14 @@ async def _deliver(
     configured_tool_name: str | None = _TOOL_NAME,
     mcp_client: Any = None,
     metadata_source: DocumentMetadataSource | None = None,
+    pill_title_max_chars: int | None = 20,
 ) -> None:
     await runner._deliver_report(
         file_sharing_tool=tool,
         configured_tool_name=configured_tool_name,
         mcp_client=mcp_client or _MetadataClient(),
         metadata_source=metadata_source,
+        pill_title_max_chars=pill_title_max_chars,
     )
 
 

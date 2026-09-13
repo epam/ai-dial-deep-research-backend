@@ -43,4 +43,4 @@
 - [x] 7.1 Run `make format`, `make lint` and the full test suite.
 - [x] 7.2 Run `openspec validate document-titles-in-citations --strict`.
 - [ ] 7.3 Drive a real report through a configured channel and confirm the pill and the popup entry both read the publication title with the cited page, using `scripts/send_conversation.py` against a running server.
-- [ ] 7.4 While looking at that report in DIAL Chat, read off the screen whether the client shortens a long pill label — the longest publication title in that channel is 121 characters, so an ordinary report will produce one. The app shortens nothing by design, so this is the observation that decides whether trimming is ever needed. Record the answer in the change before archiving.
+- [x] 7.4 Measured in DIAL Chat against a real report: the client does **not** shorten a long pill label, and the pills ran off. The app therefore shortens the pill's copy of the title to `max_pill_title_chars`, a channel property defaulting to 20, and appends the page afterwards; the citation card keeps the title whole.

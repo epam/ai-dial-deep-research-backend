@@ -221,6 +221,7 @@ class ResearchRunner:
             configured_tool_name=properties.file_sharing_tool,
             mcp_client=loaded.client,
             metadata_source=properties.document_metadata,
+            pill_title_max_chars=properties.max_pill_title_chars,
         )
         return self._messages
 
@@ -231,6 +232,7 @@ class ResearchRunner:
         configured_tool_name: str | None,
         mcp_client: MultiServerMCPClient,
         metadata_source: DocumentMetadataSource | None,
+        pill_title_max_chars: int | None,
     ) -> None:
         """Post-process the settled report, append it to the choice, and emit its annotations.
 
@@ -255,6 +257,7 @@ class ResearchRunner:
                 configured_tool_name=configured_tool_name,
                 mcp_client=mcp_client,
                 metadata_source=metadata_source,
+                pill_title_max_chars=pill_title_max_chars,
             )
         except BaseException:
             # The step catches its own failures, so only something outside them reaches here —
@@ -287,6 +290,7 @@ class ResearchRunner:
         configured_tool_name: str | None,
         mcp_client: MultiServerMCPClient,
         metadata_source: DocumentMetadataSource | None,
+        pill_title_max_chars: int | None,
     ) -> _ReportDelivery:
         """The two deterministic alterations of the settled draft, in their fixed order.
 
@@ -321,7 +325,10 @@ class ResearchRunner:
             )
             delivery.documents_titled = len(document_titles)
             converted = convert_citations(
-                removal.text, document_urls=document_urls, document_titles=document_titles
+                removal.text,
+                document_urls=document_urls,
+                document_titles=document_titles,
+                pill_title_max_chars=pill_title_max_chars,
             )
         except Exception as error:
             self._warn_citation_failure(kind=_KIND_CONVERSION_FAILED, error=error)

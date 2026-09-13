@@ -199,7 +199,10 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   One `custom_content.annotations` array follows the content, one entry per converted citation,
   each naming its tag's id and carrying the cited page in a zero-size `pdf_bbox` selector. A pill
   and its popup entry both read `<publication title>, page <ix>`, falling back to the marker's own
-  `doc <id>, page <ix>` for a document no title resolved for; neither label is shortened here. The
+  `doc <id>, page <ix>` for a document no title resolved for. The pill's copy of the title is
+  shortened to `max_pill_title_chars` (default 20, null to switch it off) because the client does not trim an
+  overflowing label, with the page appended afterwards so it is never lost; the card keeps the
+  title whole. The
   titles come from one MCP resource read per turn, at the URI named by
   `mcp_servers[].document_metadata_resource` with the cited ids substituted, taking the value under
   `mcp_servers[].document_title_key`. Both fields are optional, and the read asks only for the
