@@ -85,6 +85,25 @@ class _ConnectionBundle(BaseModel):
 # is a change to the citation format and its parser, not a configuration entry.
 MCPServerType = Literal["generic_rag", "statgpt"]
 
+# The one placeholder a document-metadata resource template carries. The app substitutes the cited
+# ids for it literally rather than through `str.format`, which would choke on any other brace a URI
+# may hold and would accept a template carrying placeholders the app does not fill.
+DOCUMENT_IDS_PLACEHOLDER = "{document_ids}"
+
+
+class DocumentMetadataSource(BaseModel):
+    """Where a report's document titles come from: which server, which resource, which key.
+
+    The three travel together because none of them is usable alone, and the citation step wants
+    one value rather than three that could disagree.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    server_name: str
+    resource_template: str
+    title_key: str
+
 
 class MCPClientSettings(BaseModel):
     """Connection config for one MCP server the research agent connects to.
@@ -146,6 +165,40 @@ class MCPClientSettings(BaseModel):
         " one configured server names one whenever any document is served at all.",
     )
 
+    document_metadata_resource: str | None = Field(
+        default=None,
+        description="Name of this server's MCP resource serving document metadata, written as a"
+        f" URI template with a {DOCUMENT_IDS_PLACEHOLDER} placeholder — for example"
+        f" documents://metadata/{DOCUMENT_IDS_PLACEHOLDER}. The application reads it when it"
+        " delivers a report, substituting the cited document ids joined with commas, and takes"
+        " each document's title from it so a citation pill names the publication instead of its"
+        " id. Set it together with document_title_key, which says where the title sits in the"
+        " answer. Only a generic_rag server may set it. Leaving both unset is valid and costs"
+        " only the labels: every citation still becomes a pill, reading doc <id>, page <ix>.",
+    )
+    document_title_key: str | None = Field(
+        default=None,
+        description="Key holding a document's human title in this channel's metadata, for example"
+        " publication_title. The metadata resource answers with each document's metadata under"
+        " the channel's own key names, so this says which of them to read. A document whose"
+        " metadata has no usable value under this key keeps the doc <id>, page <ix> label. Set"
+        " it together with document_metadata_resource; only a generic_rag server may set it.",
+    )
+
+    @property
+    def document_metadata(self) -> DocumentMetadataSource | None:
+        """Where this server serves document titles from, or `None` when it names none.
+
+        The two fields are validated as a pair, so either both are set or neither is.
+        """
+        if self.document_metadata_resource is None or self.document_title_key is None:
+            return None
+        return DocumentMetadataSource(
+            server_name=self.server_name,
+            resource_template=self.document_metadata_resource,
+            title_key=self.document_title_key,
+        )
+
     @property
     def direct_connection(self) -> _ConnectionBundle:
         """Parse the direct-mode `connection` JSON into its URL and api-key.
@@ -200,6 +253,52 @@ class MCPClientSettings(BaseModel):
                 f"only a generic_rag server may set file_sharing_tool, and this one is"
                 f" {self.server_type}: the tool exists to make a cited document readable, and"
                 " the documents a report cites come from the document server"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_document_metadata(self) -> MCPClientSettings:
+        """The title fields belong to the document server, and they go together.
+
+        Unlike `file_sharing_tool` both are optional, because they cost a label rather than a
+        link: a document server naming neither delivers every pill it would otherwise deliver,
+        just labelled from the marker. A channel whose metadata carries no title at all has
+        nothing to name and must stay configurable.
+
+        Set one without the other and neither works — a URI with no key names nothing to take,
+        a key with no URI has nothing to take it from — so a half-configured pair is refused
+        here rather than silently resolving no titles at delivery.
+        """
+        resource = self.document_metadata_resource
+        title_key = self.document_title_key
+        named = [
+            name
+            for name, value in (
+                ("document_metadata_resource", resource),
+                ("document_title_key", title_key),
+            )
+            if value
+        ]
+        if not named:
+            return self
+        if self.server_type != "generic_rag":
+            raise ValueError(
+                f"only a generic_rag server may set {' and '.join(named)}, and this one is"
+                f" {self.server_type}: the titles label document citations, and the documents a"
+                " report cites come from the document server"
+            )
+        if not resource or not title_key:
+            raise ValueError(
+                "document_metadata_resource and document_title_key are set together or not at"
+                f" all, and only {named[0]} was given: the resource says where to read the"
+                " metadata and the key says which value in it is the title, so one without the"
+                " other resolves no title"
+            )
+        if resource.count(DOCUMENT_IDS_PLACEHOLDER) != 1:
+            raise ValueError(
+                f"document_metadata_resource must carry the {DOCUMENT_IDS_PLACEHOLDER}"
+                f" placeholder exactly once, because the cited document ids are substituted for"
+                f" it; got: {resource}"
             )
         return self
 
@@ -439,6 +538,24 @@ class ApplicationProperties(BaseModel):
         """
         return next(
             (server.file_sharing_tool for server in self.mcp_servers if server.file_sharing_tool),
+            None,
+        )
+
+    @property
+    def document_metadata(self) -> DocumentMetadataSource | None:
+        """Where cited documents' titles come from, or `None` when no server names a source.
+
+        At most one server can name one, for the reason `file_sharing_tool` gives: only a
+        `generic_rag` server may, and at most one server of each type is configured. `None`
+        means every citation is labelled from its marker, which is a plainer pill rather than a
+        missing one.
+        """
+        return next(
+            (
+                source
+                for server in self.mcp_servers
+                if (source := server.document_metadata) is not None
+            ),
             None,
         )
 

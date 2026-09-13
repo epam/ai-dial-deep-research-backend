@@ -19,13 +19,15 @@ from dial_deep_research.app_properties import ReportSection, references_section
 from dial_deep_research.utils.content import count_words
 
 # The two inline citation forms the report prompt defines: `[doc 150, page 3]` and
-# `[dataset IMF:WEO]`. Case- and spacing-tolerant because a model's output is not byte-exact, and
+# `[dataset IMF:WEO]`, the document keyword written either way so this agrees with the citation
+# parser about what a citation is — otherwise `[document 150, page 3]` would become a pill and be
+# counted as three report words. Case- and spacing-tolerant because a model's output is not byte-exact, and
 # bounded to a single line carrying no nested bracket, so ordinary Markdown is left alone. The
 # spaces before a citation go with it, so `2.1% [doc 150, page 3].` leaves `2.1%.` — one word —
 # rather than a stray `.` token of its own. One collision is accepted: a Markdown link written
 # `[dataset overview](url)` has a matching label and loses its two words from the count. A
 # Markdown parser is not worth it for a budget this approximate.
-_CITATION_RE = re.compile(r"[ \t]*\[\s*(?:doc|dataset)\b[^\]\n]*\]", re.IGNORECASE)
+_CITATION_RE = re.compile(r"[ \t]*\[\s*(?:doc(?:ument)?|dataset)\b[^\]\n]*\]", re.IGNORECASE)
 
 # Any Markdown ATX heading, with its level in group 1 and its text in group 2. Sections are the
 # level-two ones; the rest are the sub-headings a section may carry.

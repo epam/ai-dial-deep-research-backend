@@ -47,6 +47,8 @@ _NO_REFERENCES = [
         "GDP rose [doc 150, page 1] [doc 150, page 3] [dataset IMF:WEO].",
         "GDP rose [DOC 150, PAGE 3].",
         "GDP rose [ doc 150, page 3 ].",
+        "GDP rose [document 150, page 3].",
+        "GDP rose [Document 150, Page 3].",
     ],
 )
 def test_every_citation_form_leaves_the_sentence_alone(text: str) -> None:

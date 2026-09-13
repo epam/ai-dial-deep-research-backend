@@ -67,6 +67,9 @@ class AnnotationsDemoCompletion(ChatCompletion):
             _log,
             documents_requested=len(document_ids),
             documents_resolved=len(document_urls),
+            # The demo resolves no titles, so its pills read the marker text — the fallback
+            # label, which is a real outcome of the mechanism rather than a case of its own.
+            documents_titled=0,
             annotations=len(converted.annotations),
             markers_left=converted.markers_left,
             hyperlinks_removed=without_links.removed,

@@ -294,7 +294,7 @@ Bring it up:
 ```sh
 # 1. Add the identity-provider values the next-generation chat needs to .env (see .env.example),
 #    then start infra with both chat generations and the demo registered in core.
-make annotations-up
+make chat-ng-up
 
 # 2. Run the app with the demo deployment enabled.
 ENABLE_ANNOTATIONS_DEMO=true make app

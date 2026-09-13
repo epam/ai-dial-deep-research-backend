@@ -59,6 +59,23 @@ def test_the_keyword_is_matched_without_regard_to_case() -> None:
 @pytest.mark.parametrize(
     "written",
     [
+        pytest.param("[document 101, page 3]", id="lower-case"),
+        pytest.param("[Document 101, Page 3]", id="as-a-server-writes-it"),
+    ],
+)
+def test_the_document_keyword_written_out_in_full_is_a_marker(written: str) -> None:
+    """A server's own attribution reads this way, and a writer may copy it instead of translating."""
+    markers = find_citation_markers(f"A sentence. {written}")
+    assert [(marker.document_id, marker.page) for marker in markers] == [(101, 3)]
+
+    converted = _convert(f"A sentence. {written}", urls={101: "files/a/outlook.pdf"})
+    assert converted.annotations != []
+    assert written not in converted.text
+
+
+@pytest.mark.parametrize(
+    "written",
+    [
         pytest.param("[doc 101, pages 3-4]", id="page-range"),
         pytest.param("[doc one hundred, page 3]", id="non-numeric-id"),
         pytest.param("[doc 101]", id="no-page"),
@@ -66,7 +83,6 @@ def test_the_keyword_is_matched_without_regard_to_case() -> None:
         pytest.param("[[doc 101, page 3]]", id="nested-bracket"),
         pytest.param("[doc 0, page 3]", id="zero-id"),
         pytest.param("[doc 101, page 0]", id="zero-page"),
-        pytest.param("[document 101, page 3]", id="other-keyword"),
     ],
 )
 def test_a_marker_the_grammar_rejects_is_not_a_citation(written: str) -> None:
@@ -438,3 +454,78 @@ def test_a_citation_beside_a_removed_bare_url_is_still_converted() -> None:
     assert converted.text == f"A claim. {_tag('tag-0')} Published at "
     assert len(converted.annotations) == 1
     assert without_links.removed == 1
+
+
+# --- labels -------------------------------------------------------------------------------------
+
+
+_TITLE = "Market Outlook 2025"
+
+
+def _convert_titled(text: str, titles: dict[int, str]):
+    return convert_citations(
+        text, document_urls=_URLS, document_titles=titles, make_tag_id=_tag_ids()
+    )
+
+
+def test_a_titled_document_labels_both_halves_with_its_publication_title() -> None:
+    """The client labels the pill from the attachment title and the popup entry from the body."""
+    converted = _convert_titled("A claim. [doc 101, page 13]", {101: _TITLE})
+    annotation = converted.annotations[0]
+    assert annotation.body.title == f"{_TITLE}, page 13"
+    assert annotation.body.source.attachment.title == f"{_TITLE}, page 13"
+
+
+def test_an_untitled_document_is_labelled_from_its_marker() -> None:
+    converted = _convert_titled("A claim. [doc 101, page 13]", {})
+    annotation = converted.annotations[0]
+    assert annotation.body.title == "doc 101, page 13"
+    assert annotation.body.source.attachment.title == "doc 101, page 13"
+    assert annotation.body.source.attachment.url == _PDF_URL
+
+
+def test_a_caller_passing_no_titles_at_all_labels_every_citation_from_its_marker() -> None:
+    converted = _convert("A claim. [doc 101, page 13]")
+    assert converted.annotations[0].body.title == "doc 101, page 13"
+
+
+def test_a_run_labels_each_source_by_its_own_document() -> None:
+    converted = _convert_titled(
+        "A claim. [doc 101, page 2] [doc 102, page 4]", {101: "Titled publication"}
+    )
+    assert [annotation.body.title for annotation in converted.annotations] == [
+        "Titled publication, page 2",
+        "doc 102, page 4",
+    ]
+
+
+def test_two_pages_of_one_titled_document_differ_only_in_the_page() -> None:
+    """A document server attributes at page level, so the popup must tell two pages apart."""
+    converted = _convert_titled(
+        "A claim. [doc 101, page 4] [doc 101, page 9]", {101: "Titled publication"}
+    )
+    assert [annotation.body.title for annotation in converted.annotations] == [
+        "Titled publication, page 4",
+        "Titled publication, page 9",
+    ]
+    assert {annotation.target.selector.id for annotation in converted.annotations} == {"tag-0"}
+
+
+def test_a_long_title_is_carried_whole() -> None:
+    """The app shortens neither label; what a client does with a long one is the client's business."""
+    long_title = "A publication title long enough not to fit on a narrow pill"
+    converted = _convert_titled("A claim. [doc 101, page 1]", {101: long_title})
+    assert converted.annotations[0].body.title == f"{long_title}, page 1"
+    assert "…" not in converted.annotations[0].body.source.attachment.title
+
+
+def test_a_title_for_a_document_that_resolved_no_url_changes_nothing() -> None:
+    """No URL means no pill, so the title has nothing to label."""
+    converted = convert_citations(
+        "A claim. [doc 999, page 1]",
+        document_urls={},
+        document_titles={999: "Never rendered"},
+        make_tag_id=_tag_ids(),
+    )
+    assert converted.annotations == []
+    assert converted.text == "A claim. [doc 999, page 1]"

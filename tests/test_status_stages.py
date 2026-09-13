@@ -245,7 +245,7 @@ class _FailingGraph:
 
 def _stub_graph(monkeypatch: MonkeyPatch, graph: Any) -> None:
     async def _no_tools(**_kwargs: Any) -> LoadedMcpTools:
-        return LoadedMcpTools(agent_tools=[], file_sharing_tool=None)
+        return LoadedMcpTools(agent_tools=[], file_sharing_tool=None, client=None)
 
     monkeypatch.setattr(runner_module, "load_mcp_tools", _no_tools)
     monkeypatch.setattr(runner_module, "build_research_graph", lambda **_kw: graph)

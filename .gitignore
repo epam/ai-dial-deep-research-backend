@@ -41,3 +41,4 @@ reports
 .opik-local
 tmp
 .coverage
+.worktrees/

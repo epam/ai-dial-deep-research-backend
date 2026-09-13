@@ -616,3 +616,90 @@ def test_schema_dial_root_keywords_absent_when_excluded() -> None:
     assert not any(key.startswith("dial:applicationType") for key in schema)
     # Per-property dial:meta blocks stay regardless of the root wrapper.
     assert schema["properties"]["prompts"]["dial:meta"]["dial:propertyKind"] == "server"
+
+
+_TITLE_SOURCE = {
+    "document_metadata_resource": "documents://metadata/{document_ids}",
+    "document_title_key": "publication_title",
+}
+
+
+def _document_server(**overrides: object) -> dict[str, object]:
+    return {
+        "server_name": "rag",
+        "server_type": "generic_rag",
+        "deployment_id": "a",
+        "file_sharing_tool": "get_citation_url",
+        **overrides,
+    }
+
+
+def test_a_document_server_may_name_where_its_titles_come_from() -> None:
+    server = MCPClientSettings.model_validate(_document_server(**_TITLE_SOURCE))
+    source = server.document_metadata
+    assert source is not None
+    assert source.server_name == "rag"
+    assert source.resource_template == "documents://metadata/{document_ids}"
+    assert source.title_key == "publication_title"
+
+
+def test_a_document_server_may_name_no_title_source() -> None:
+    """Optional where the file-sharing tool is required: a missing title costs a label, not a link."""
+    assert MCPClientSettings.model_validate(_document_server()).document_metadata is None
+
+
+@pytest.mark.parametrize("field", ["document_metadata_resource", "document_title_key"])
+def test_one_title_field_without_the_other_is_rejected(field: str) -> None:
+    """Neither works alone, so a half-configured pair fails validation rather than resolving nothing."""
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(_document_server(**{field: _TITLE_SOURCE[field]}))
+    assert "set together or not at all" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "template",
+    [
+        "documents://metadata/",
+        "documents://metadata/{ids}",
+        "documents://{document_ids}/{document_ids}",
+    ],
+)
+def test_a_template_without_exactly_one_placeholder_is_rejected(template: str) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(
+            _document_server(document_metadata_resource=template, document_title_key="t")
+        )
+    assert "{document_ids} placeholder exactly once" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("field", ["document_metadata_resource", "document_title_key"])
+def test_only_a_document_server_may_name_a_title_source(field: str) -> None:
+    """A dataset server has no documents to title, so a source named there would never be read."""
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(
+            {
+                "server_name": "datasets",
+                "server_type": "statgpt",
+                "deployment_id": "b",
+                field: _TITLE_SOURCE[field],
+            }
+        )
+    assert "only a generic_rag server may set" in str(excinfo.value)
+
+
+def test_properties_expose_the_one_configured_title_source() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "mcp_servers": [
+            _document_server(**_TITLE_SOURCE),
+            {"server_name": "datasets", "server_type": "statgpt", "deployment_id": "b"},
+        ],
+    }
+    source = ApplicationProperties.model_validate(data).document_metadata
+    assert source is not None
+    assert source.title_key == "publication_title"
+
+
+def test_properties_expose_no_title_source_when_none_is_configured() -> None:
+    data = {**VALID_PROPERTIES, "mcp_servers": [_document_server()]}
+    assert ApplicationProperties.model_validate(data).document_metadata is None

@@ -317,7 +317,7 @@ shared conversation, because the demo completion's reply is the same every time.
 
 The demo completion (see the **report-citations** capability) SHALL be reachable from the local stack
 without being present in a default one. Two switches, both off by default and both flipped by
-choosing the annotations workflow:
+bringing up the next-generation chat overlay:
 
 - **In the app**, its registration SHALL be gated by its own environment flag, as the playground
   channel's is.
@@ -336,8 +336,8 @@ is the unit tests' job, over the shared citation code, not a direct call's.
 
 #### Scenario: A default stack shows no demo application
 
-- **WHEN** a contributor generates the core config and runs `make infra-up` without the annotations
-  overlay
+- **WHEN** a contributor generates the core config and runs `make infra-up` without the
+  next-generation chat overlay
 - **THEN** core SHALL NOT load the demo's application entry, and the chat UI SHALL NOT list it
 
 #### Scenario: The overlay registers it and the app serves it
