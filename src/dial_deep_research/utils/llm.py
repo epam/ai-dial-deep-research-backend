@@ -87,6 +87,8 @@ class VerbosityEnum(StrEnum):
 
 
 class LLMModelsEnum(StrEnum):
+    GPT_5_6_TERRA = "gpt-5.6-terra-2026-07-09"
+    GPT_5_6_LUNA = "gpt-5.6-luna-2026-07-09"
     GPT_5_4_2026_03_05 = "gpt-5.4-2026-03-05"
     GPT_5_4_2026_03_05_REASONING = "gpt-5.4-2026-03-05-reasoning"
     GPT_5_2_2025_12_11 = "gpt-5.2-2025-12-11"
