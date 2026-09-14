@@ -115,15 +115,19 @@ hand-off is where its research counterpart (7a) is owned too; (8c) report citati
 the number of distinct document ids the step requested, which is the documents cited where a pill
 can be drawn rather than every document the report names, the number of those the file-sharing
 tool returned a URL for, the number of those a publication title resolved for through the
-document-metadata resource, the number of citations converted into annotations, the number of citation
+document-metadata resource, the number of distinct dataset ids the step requested and the number of
+those the dataset-metadata tool reported a usable page URL for, the number of citations converted
+into annotations, the number of citation
 markers left in the delivered text as written, the number of hyperlinks the step removed from the
 draft — links, images, autolinks and bare URLs counted together, since the same pass removes them
 all and a delivered report may reach a reader having had one taken out with no review record behind
 it — and the step's duration, owned by the citation step
 (see **report-citations**), and fired on every turn that delivers a report, including one that
 converted nothing. The titled count is bounded by the resolved count rather than by the requested
-one, because the step asks for titles only for the documents a URL resolved for; the two being equal
-is the ordinary case, and a gap between them is how a channel with incomplete metadata reads. The
+one. The step asks the metadata resource about every cited document, so that read need not wait on
+the file-sharing call, and then counts only the titles of documents that resolved a URL — so what
+this count reports is titles actually shown on pills, rather than every title the answer carried. The two being equal is the ordinary case, and a
+gap between them is how a channel with incomplete metadata reads. The
 step is shared with the annotations demo completion, so the event fires there
 too; its resolved-document count means documents a URL was obtained for, by whatever means that
 caller uses, and its titled count is zero there, that caller resolving no titles; (9) request completed — outcome
@@ -165,21 +169,32 @@ no file-sharing tool at all, which only a deployment with no document server can
 document citations to convert, so this is a routine expected outcome of every turn it serves and is
 recorded at DEBUG (see **report-citations**).
 
+A **dataset that could not be resolved** is recorded the way an unresolved document is, because it
+costs the same thing — a pill. The dataset-metadata call raising, an answer carrying no structured
+result, and an answer that cannot be read as a list of dataset records SHALL each be one WARNING
+naming the failure kind, beside the (8c) event. A channel that configures **no dataset server**, and so no
+dataset-metadata tool, SHALL be recorded at DEBUG, for the reason the absent file-sharing tool is:
+such a channel cites no dataset, so warning on every report it delivers would report its
+configuration as a fault. A
+**dataset the catalogue reports without a page URL** SHALL NOT warn at all — whether a dataset has a
+portal page is the channel's own data rather than a fault — and the gap between the requested and
+resolved dataset counts on the (8c) event is the whole record of it.
+
 A **title that could not be resolved** is graded one step lower throughout, because it costs a label
 and never a pill. The document-metadata read raising, and an answer that cannot be read as an
-id-to-metadata object, SHALL each be one WARNING naming the failure kind, beside the (8c) event. An
-instance naming no document-metadata resource SHALL be recorded at DEBUG, for the reason the absent
-file-sharing tool is: naming the resource is optional configuration, so an instance without one would
-otherwise warn on every report it delivers. A **document that simply carries no title** SHALL NOT
+id-to-metadata object, SHALL each be one WARNING naming the failure kind, beside the (8c) event. A
+channel that configures no document server, and so no document-metadata resource, SHALL be recorded
+at DEBUG, for the reason the absent file-sharing tool is: it has no document citations to label. A **document that simply carries no title** SHALL NOT
 warn at all — a channel's metadata schema is its own and a key missing there is data variance rather
 than a fault — and the gap between the resolved count and the titled count on the (8c) event is the
 whole record of it.
 
 Every record
-of this step describes documents by count alone: the service's own call sites SHALL NOT log a
-returned URL or any part of one, a file name taken from one, a document title, or a cited document's
-id, at any level. The mapping is a tool response body and the metadata object is a resource body,
-both of which the content allowlist keeps out of
+of this step describes what it cites by count alone: the service's own call sites SHALL NOT log a
+returned URL or any part of one, a file name taken from one, a document title, a cited document's
+id, a dataset's name, a dataset's page URL, or a cited dataset's id, at any level. Each of the three
+answers — the file-sharing mapping, the document-metadata object and the dataset catalogue — is a
+tool or resource response body, which the content allowlist keeps out of
 every record, and how many ids a response omitted says everything a reader of the logs can act on.
 
 #### Scenario: Successful research turn reads as a skeleton at INFO
@@ -274,15 +289,37 @@ every record, and how many ids a response omitted says everything a reader of th
 - **WHEN** three documents resolve URLs and the metadata answer carries a usable title for two of them
 - **THEN** the (8c) event SHALL state three resolved and two titled, and no WARNING SHALL be emitted for the third, whose citations keep their marker label
 
-#### Scenario: An instance naming no metadata resource does not warn on every turn
+#### Scenario: A channel serving no documents does not warn on every turn
 
-- **WHEN** an instance whose document server names a file-sharing tool but no document-metadata resource delivers a report citing two documents
-- **THEN** the (8c) event SHALL fire with two resolved documents and zero titled, the record naming the absent configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
+- **WHEN** an instance configured with no document server — and so with no document-metadata resource — delivers a report carrying dataset citations
+- **THEN** the (8c) event SHALL fire with zero documents requested and zero titled, the record naming the absent configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
 
 #### Scenario: A link removed from an unreviewed draft is still visible in the logs
 
 - **WHEN** an instance whose version budget is 1 delivers its first draft and the deterministic pass removes a bare URL from it
 - **THEN** the (8c) event SHALL report one hyperlink removed, so the removal is readable even though no report-reviewed event exists for that draft
+
+#### Scenario: A turn citing datasets reads the dataset counts in the skeleton
+
+- **WHEN** a turn delivers a report citing two documents and three datasets, the file-sharing tool
+  resolves both documents, and the dataset-metadata tool reports a page URL for two of the three
+  datasets
+- **THEN** the (8c) event SHALL state three dataset ids requested and two resolved, beside the
+  document counts, and SHALL carry no dataset name, no page URL and no dataset id
+
+#### Scenario: A channel serving no datasets does not warn on every turn
+
+- **WHEN** an instance configured with no dataset server — and so with no dataset-metadata tool —
+  delivers a report that carries a dataset citation marker all the same
+- **THEN** the (8c) event SHALL fire with zero datasets resolved, the record naming the absent
+  configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
+
+#### Scenario: A dataset with no portal page is not a warning
+
+- **WHEN** the dataset-metadata tool answers with a record for every cited dataset, one of which
+  carries no URL
+- **THEN** no WARNING SHALL be emitted for that dataset, and the gap between the requested and
+  resolved dataset counts on the (8c) event SHALL be the only record of it
 
 ### Requirement: Status-tool misuse is logged as a warning
 
