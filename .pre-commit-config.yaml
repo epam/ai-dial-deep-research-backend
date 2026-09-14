@@ -6,3 +6,13 @@ repos:
       - id: end-of-file-fixer
       - id: trailing-whitespace
       - id: mixed-line-ending
+  - repo: local
+    hooks:
+      # Runs on every commit regardless of which files changed, because it judges the whole staged
+      # diff rather than a file list. Needs the `claude` CLI and `jq` on PATH.
+      - id: sensitive-info
+        name: sensitive-info leak check
+        entry: scripts/check_sensitive_info.sh
+        language: system
+        pass_filenames: false
+        always_run: true

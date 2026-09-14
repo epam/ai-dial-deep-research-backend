@@ -42,6 +42,7 @@ pytest = ">=8.3.0"
 pytest-asyncio = ">=0.24.0"
 httpx = ">=0.28.0"
 types-pyyaml = ">=6.0.0"
+pre-commit = ">=4.0.0"
 
 # Why this block exists:
 #   We use a src/ layout (code at src/dial_deep_research/, not at the repo root).
@@ -56,6 +57,7 @@ types-pyyaml = ">=6.0.0"
 #
 #   CI installs with `poetry install --no-root` (the project itself is not installed),
 #   so tests also put `src` on sys.path via [tool.pytest.ini_options].pythonpath below.
+
 [tool.poetry]
 packages = [{ include = "dial_deep_research", from = "src" }]
 

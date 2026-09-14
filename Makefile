@@ -56,6 +56,9 @@ install: check_poetry ## Install runtime + dev dependencies (no optional extras)
 install-all: check_poetry ## Install everything incl. optional extras (opik/tracing)
 	$(POETRY) install --all-extras
 
+install-precommit-hooks: install ## Install the pre-commit git hook (sensitive-info leak check + formatters)
+	$(POETRY) run pre-commit install
+
 lint: install ## Run ruff, mypy, formatting checks (black, isort), then the schema drift check
 	$(POETRY) run ruff check $(SRC_DIRS)
 	$(POETRY) run mypy --show-error-codes $(MYPY_DIRS)
