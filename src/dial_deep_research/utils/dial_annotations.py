@@ -28,6 +28,11 @@ def send_annotations(*, choice: Choice, annotations: Sequence[Annotation]) -> No
     the message has finished streaming, hiding every marker tag until then. On the finished
     message a tag an annotation claims becomes a pill, and a tag no annotation claims is rendered
     as literal text.
+
+    The payload is dumped with `exclude_none=True`, so a field that does not apply to a citation
+    — a dataset's page selector, a document's quote — is absent from the wire rather than an
+    explicit null, which is the shape the client's own model describes. A later annotation field
+    that is meaningfully null would be dropped by this dump and has to revisit it.
     """
     choice.send_chunk(
         ArbitraryChunk(
@@ -39,7 +44,8 @@ def send_annotations(*, choice: Choice, annotations: Sequence[Annotation]) -> No
                         "delta": {
                             "custom_content": {
                                 "annotations": [
-                                    annotation.model_dump() for annotation in annotations
+                                    annotation.model_dump(exclude_none=True)
+                                    for annotation in annotations
                                 ]
                             }
                         },

@@ -3,6 +3,7 @@
 ## Purpose
 TBD - created by archiving change research-execution-loop. Update Purpose after archive.
 ## Requirements
+
 ### Requirement: Research runs as a deterministic graph launched after plan approval
 
 The app SHALL run research as a deterministic LangGraph graph with four nodes —
@@ -290,7 +291,25 @@ the first draft and each subsequent revision; on a revision it SHALL also receiv
 instructions and the draft they refer to.
 
 Citations SHALL use inline `[doc <id>, page <ix>]` for document-sourced facts and
-`[dataset <id>]` for dataset-sourced facts.
+`[dataset <urn>]` for dataset-sourced facts.
+
+**What identifies a source in each form is part of this contract**, not a detail left to the
+writer, because the app parses these markers and resolves what it finds back against the server
+that reported it. The instructions SHALL state both:
+
+- A **document** is referenced by its **document id and the index of the cited page** — two values,
+  both required. A document citation without a page is not a weaker citation but an unparseable
+  one, because a document server attributes at page level and the reader is scrolled to that page.
+- A **dataset** is referenced by its **URN**, the identifier the dataset server reports for that
+  dataset, written whole. A URN carries punctuation — typically a colon, and often a parenthesised
+  version — and every character of it is part of the identifier, so it SHALL NOT be abbreviated,
+  case-changed, percent-encoded, or stripped of its version. The **source-attribution** capability
+  owns why: the identifier is sent back to the server, and a transformed one resolves nothing.
+
+Naming these is what separates the two forms from a formatting convention. The writer cannot infer
+from the shape of a marker which values belong in it, and a writer that puts a dataset's display
+name where its URN belongs, or omits a page from a document citation, produces a citation that
+parses into nothing and silently loses its pill.
 
 **How the writer gets from a tool's attribution to those forms is owned by the
 **source-attribution** capability**, and its rule bears on this prompt directly: the instructions
@@ -374,6 +393,18 @@ stays fully readable in the text.
 - **WHEN** a turn's preparation stage streamed no assistant text before research started
 - **THEN** the assistant message content SHALL begin with the report's first character, with no leading blank line
 
+#### Scenario: The writer is told what identifies each kind of source
+
+- **WHEN** the report writer's citation instructions are read
+- **THEN** they SHALL state that a document is referenced by its document id and cited page index,
+  and that a dataset is referenced by its URN written whole, with its punctuation and version intact
+
+#### Scenario: A dataset's display name is not its reference
+
+- **WHEN** a dataset-query tool reports a dataset with both a human name and a URN
+- **THEN** the instructions SHALL direct the writer to cite the URN, and the report SHALL carry the
+  URN in the marker rather than the name
+
 ### Requirement: Research executes autonomously within a single turn
 
 The research graph SHALL run to completion autonomously within the single
@@ -386,6 +417,7 @@ research-review and the report nodes see all accumulated tool results).
 
 - **WHEN** research is launched
 - **THEN** the research-agent/research-review loop and the report loop SHALL all run within that one turn without pausing for user input, and the turn SHALL complete with the report as the assistant message
+
 ### Requirement: Every research LLM call's inputs and outputs are specified
 
 The research graph makes four kinds of LLM call, one per node. Each one's inputs SHALL be exactly

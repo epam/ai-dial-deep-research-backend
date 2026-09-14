@@ -173,8 +173,9 @@ class MCPClientSettings(BaseModel):
         " delivers a report, substituting the cited document ids joined with commas, and takes"
         " each document's title from it so a citation pill names the publication instead of its"
         " id. Set it together with document_title_key, which says where the title sits in the"
-        " answer. Only a generic_rag server may set it. Leaving both unset is valid and costs"
-        " only the labels: every citation still becomes a pill, reading doc <id>, page <ix>.",
+        " answer. Required on a generic_rag server, and only a generic_rag server may set it: a"
+        " document id means nothing outside the server that issued it, so a channel without this"
+        " resource labels every pill with a number the reader cannot place.",
     )
     document_title_key: str | None = Field(
         default=None,
@@ -182,7 +183,21 @@ class MCPClientSettings(BaseModel):
         " publication_title. The metadata resource answers with each document's metadata under"
         " the channel's own key names, so this says which of them to read. A document whose"
         " metadata has no usable value under this key keeps the doc <id>, page <ix> label. Set"
-        " it together with document_metadata_resource; only a generic_rag server may set it.",
+        " it together with document_metadata_resource, which is required on a generic_rag server;"
+        " only a generic_rag server may set either.",
+    )
+
+    dataset_metadata_tool: str | None = Field(
+        default=None,
+        description="Name of this server's tool listing the datasets this channel exposes. The"
+        " application calls it when it delivers a report, to learn a cited dataset's name and the"
+        " address of its page, so a dataset citation becomes a pill that opens that page. The tool"
+        " takes no arguments and answers with the whole catalogue; the application selects the"
+        " datasets the report cites. It stays available to the research agent, which uses the same"
+        " listing to discover which datasets exist, so naming it here only adds a caller."
+        " Required on a statgpt server, and only a statgpt server may set it: without it every"
+        " dataset citation is delivered as a bare URN in square brackets, which names nothing the"
+        " reader can open.",
     )
 
     @property
@@ -258,16 +273,17 @@ class MCPClientSettings(BaseModel):
 
     @model_validator(mode="after")
     def _validate_document_metadata(self) -> MCPClientSettings:
-        """The title fields belong to the document server, and they go together.
+        """The title fields belong to the document server, and it must name both of them.
 
-        Unlike `file_sharing_tool` both are optional, because they cost a label rather than a
-        link: a document server naming neither delivers every pill it would otherwise deliver,
-        just labelled from the marker. A channel whose metadata carries no title at all has
-        nothing to name and must stay configurable.
+        A document citation carries an id that means something only inside the server that
+        issued it, so the reader is shown the publication's name instead — which the app can
+        only learn by reading it back from that server. A document server that names no
+        metadata resource therefore labels every pill with an internal identifier, and it is
+        refused here rather than at every delivery.
 
         Set one without the other and neither works — a URI with no key names nothing to take,
         a key with no URI has nothing to take it from — so a half-configured pair is refused
-        here rather than silently resolving no titles at delivery.
+        with an error of its own.
         """
         resource = self.document_metadata_resource
         title_key = self.document_title_key
@@ -279,13 +295,20 @@ class MCPClientSettings(BaseModel):
             )
             if value
         ]
-        if not named:
-            return self
         if self.server_type != "generic_rag":
+            if named:
+                raise ValueError(
+                    f"only a generic_rag server may set {' and '.join(named)}, and this one is"
+                    f" {self.server_type}: the titles label document citations, and the documents"
+                    " a report cites come from the document server"
+                )
+            return self
+        if not named:
             raise ValueError(
-                f"only a generic_rag server may set {' and '.join(named)}, and this one is"
-                f" {self.server_type}: the titles label document citations, and the documents a"
-                " report cites come from the document server"
+                "a generic_rag server must name its document_metadata_resource and"
+                " document_title_key: its documents are cited by id and page, and the id is"
+                " internal to the server, so without them every citation pill labels the source"
+                " with a number the reader cannot place"
             )
         if not resource or not title_key:
             raise ValueError(
@@ -299,6 +322,35 @@ class MCPClientSettings(BaseModel):
                 f"document_metadata_resource must carry the {DOCUMENT_IDS_PLACEHOLDER}"
                 f" placeholder exactly once, because the cited document ids are substituted for"
                 f" it; got: {resource}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_dataset_metadata_tool(self) -> MCPClientSettings:
+        """The dataset-metadata tool belongs to the dataset server, and it must name one.
+
+        A `[dataset <urn>]` marker names no server, so the app matches every cited URN against
+        the one configured dataset server's catalogue. A second server answering about dataset
+        ids would make that match ambiguous, which is why only a `statgpt` server may name the
+        tool — the same split `file_sharing_tool` has, from the other side.
+
+        Required for the reason the file-sharing tool is: it is the only way a cited id becomes
+        something the reader can open. Without it every dataset citation is delivered as a URN in
+        square brackets, an identifier that means nothing outside the server that issued it, so a
+        dataset server configured without the tool is refused rather than costing every report
+        its dataset pills.
+        """
+        if self.server_type == "statgpt" and not self.dataset_metadata_tool:
+            raise ValueError(
+                "a statgpt server must name its dataset_metadata_tool: the datasets it serves are"
+                " cited by URN, and that tool is the only thing that turns a URN into a dataset"
+                " name and a page the reader can open"
+            )
+        if self.server_type != "statgpt" and self.dataset_metadata_tool:
+            raise ValueError(
+                f"only a statgpt server may set dataset_metadata_tool, and this one is"
+                f" {self.server_type}: the tool names the datasets a report cites and gives each"
+                " of them a page address, and those come from the dataset server"
             )
         return self
 
@@ -463,13 +515,15 @@ class ApplicationProperties(BaseModel):
     max_pill_title_chars: int | None = Field(
         default=20,
         ge=10,
-        description="How much of a cited document's title the inline citation pill shows, the"
-        " ellipsis counted within it. A pill is a narrow element in the middle of a sentence and"
-        " also carries the client's own count marker when it stands for several sources, so a long"
-        " publication title runs off it; the client does not shorten the label itself. The cited"
-        " page is appended after the shortening and is never lost to a long title, and the"
-        " citation card keeps the whole title regardless of this value. Raise it if the pills read"
-        " too short in your client, or set it to null to show every title whole.",
+        description="How much of a citation pill's leading part it shows — a cited document's"
+        " publication title, or a cited dataset's name, or that dataset's identifier where no name"
+        " resolved — the ellipsis counted within it. A pill is a narrow element in the middle of a"
+        " sentence and also carries the client's own count marker when it stands for several"
+        " sources, so a long name runs off it; the client does not shorten the label itself. What"
+        " follows the leading part — a document's cited page, the word dataset — is appended after"
+        " the shortening and is never lost to a long name, and the citation card keeps the leading"
+        " part whole regardless of this value. Raise it if the pills read too short in your"
+        " client, or set it to null to show every label whole.",
     )
     mcp_servers: list[MCPClientSettings] = Field(
         min_length=1,
@@ -497,6 +551,10 @@ class ApplicationProperties(BaseModel):
         tell the two apart. The configuration is refused rather than resolved by guessing, and
         supporting several servers of one type means qualifying a citation with its source
         first.
+
+        The ambiguity costs the reader rather than only the logs: a cited id is resolved back
+        against its server — a document id to the file-sharing tool, a dataset id to the
+        catalogue — so two servers shipping the same id would let a pill open the wrong source.
         """
         names_by_type: dict[str, list[str]] = {}
         for server in self.mcp_servers:
@@ -554,18 +612,38 @@ class ApplicationProperties(BaseModel):
 
     @property
     def document_metadata(self) -> DocumentMetadataSource | None:
-        """Where cited documents' titles come from, or `None` when no server names a source.
+        """Where cited documents' titles come from, or `None` when no document server is
+        configured.
 
         At most one server can name one, for the reason `file_sharing_tool` gives: only a
-        `generic_rag` server may, and at most one server of each type is configured. `None`
-        means every citation is labelled from its marker, which is a plainer pill rather than a
-        missing one.
+        `generic_rag` server may, and at most one server of each type is configured. A document
+        server must name one, so `None` means this channel serves no documents at all — the same
+        configuration that leaves `file_sharing_tool` unset.
         """
         return next(
             (
                 source
                 for server in self.mcp_servers
                 if (source := server.document_metadata) is not None
+            ),
+            None,
+        )
+
+    @property
+    def dataset_metadata_tool(self) -> str | None:
+        """The configured dataset-metadata tool's name, or `None` when no dataset server is
+        configured.
+
+        At most one server can name one, for the reason `file_sharing_tool` gives: only a
+        `statgpt` server may, and at most one server of each type is configured. A dataset server
+        must name one, so `None` means this channel serves no datasets at all, and its reports
+        cite none.
+        """
+        return next(
+            (
+                server.dataset_metadata_tool
+                for server in self.mcp_servers
+                if server.dataset_metadata_tool
             ),
             None,
         )

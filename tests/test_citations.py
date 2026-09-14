@@ -1,9 +1,10 @@
 """The shared citation code: what becomes a pill, what stays as text, and what the payload says.
 
 What is protected here: a citation is converted when the condition of the report-citations
-capability holds — the document it names has a PDF URL — and a citation that fails it keeps the
-exact text the report writer wrote. Everything else — the marker grammar, the run folding, the
-hyperlink removal and the payload's shape — exists to make that outcome predictable.
+capability holds for its kind of source — a document with a PDF URL, a dataset with a page a
+browser can open — and a citation that fails it keeps the exact text the report writer wrote.
+Everything else — the marker grammar, the run folding, the hyperlink removal and the payload's
+shape — exists to make that outcome predictable.
 """
 
 from __future__ import annotations
@@ -14,11 +15,15 @@ import pytest
 
 from dial_deep_research.app.research.citations import (
     CITATION_TAG_NAME,
+    DATASET_MIME_TYPE,
     PDF_MIME_TYPE,
+    DatasetSource,
+    cited_dataset_ids,
     cited_document_ids,
     convert_citations,
     find_citation_markers,
     find_hyperlinks,
+    is_web_url,
     remove_hyperlinks,
 )
 
@@ -147,11 +152,14 @@ def test_a_document_whose_url_is_not_a_pdf_keeps_its_text() -> None:
     assert converted.annotations == []
 
 
-def test_a_dataset_citation_is_never_converted() -> None:
-    draft = "…grew by 2.1% [dataset ABC:DEF] over the period."
+def test_a_dataset_no_record_resolved_for_keeps_its_text() -> None:
+    """The caller resolved no datasets at all, which is what the demo and a dataset-less
+    channel both do."""
+    draft = "…grew by 2.1% [dataset IMF:WEO(1.0.0)] over the period."
     converted = _convert(draft)
     assert converted.text == draft
     assert converted.annotations == []
+    assert converted.markers_left == 1
     assert cited_document_ids(draft) == []
 
 
@@ -167,9 +175,22 @@ def test_the_requested_ids_are_every_cited_document_in_report_order() -> None:
         "## in a heading [doc 104, page 1]\n\n"
         "A dataset [dataset ABC:DEF] and an unresolved document. [doc 999, page 1]"
     )
-    # A dataset is not a document and is never asked for. 999 is asked for like the rest:
-    # whether a URL comes back is the tool's answer.
+    # A dataset is not a document and is asked of the catalogue instead. 999 is asked for like
+    # the rest: whether a URL comes back is the tool's answer.
     assert cited_document_ids(draft) == [101, 102, 103, 104, 999]
+
+
+def test_the_requested_urns_are_every_cited_dataset_in_report_order() -> None:
+    draft = (
+        "First. [dataset IMF:WEO(1.0.0)]\n\n"
+        "The same dataset again. [dataset IMF:WEO(1.0.0)]\n\n"
+        "- a bullet [dataset IMF:PRIMARY_COMMODITY_PRICES(1.0.0)]\n\n"
+        "A document. [doc 101, page 1]"
+    )
+    assert cited_dataset_ids(draft) == [
+        "IMF:WEO(1.0.0)",
+        "IMF:PRIMARY_COMMODITY_PRICES(1.0.0)",
+    ]
 
 
 # --- runs ---------------------------------------------------------------------------------------
@@ -224,7 +245,7 @@ def test_a_run_converts_what_it_can_and_keeps_the_rest_as_text() -> None:
     assert converted.markers_left == 1
 
 
-def test_a_dataset_marker_beside_a_document_citation_follows_the_tag() -> None:
+def test_an_unresolved_dataset_marker_beside_a_document_citation_follows_the_tag() -> None:
     converted = _convert("A claim. [doc 101, page 2], [dataset ABC:DEF]")
     assert converted.text == f"A claim. {_tag('tag-0')} [dataset ABC:DEF]"
 
@@ -266,7 +287,9 @@ def test_indices_are_sequential_and_unique_across_the_array() -> None:
 def test_the_payload_of_one_converted_citation() -> None:
     converted = _convert("A cited sentence. [doc 101, page 13]")
 
-    assert converted.annotations[0].model_dump() == {
+    # Dumped the way `send_annotations` dumps it, so a field that does not apply to a document
+    # citation is absent from what this compares rather than present as a null.
+    assert converted.annotations[0].model_dump(exclude_none=True) == {
         "index": 0,
         "target": {"selector": {"type": "html_tag", "tag": "cit", "id": "tag-0"}},
         "body": {
@@ -293,9 +316,11 @@ def test_the_url_is_carried_verbatim_and_the_page_travels_in_the_selector() -> N
     assert (first.body.selector.page, second.body.selector.page) == (3, 9)
 
 
-def test_no_quote_is_sent() -> None:
+def test_a_document_citation_sends_no_quote() -> None:
+    """The app does not hold the cited passage's text, and an empty quote reserves blank space."""
     converted = _convert("A cited sentence. [doc 101, page 3]")
-    assert "quote" not in converted.annotations[0].body.model_dump()
+    assert converted.annotations[0].body.quote is None
+    assert "quote" not in converted.annotations[0].body.model_dump(exclude_none=True)
 
 
 def test_a_draft_citing_nothing_is_delivered_unchanged() -> None:
@@ -593,3 +618,220 @@ def test_a_title_for_a_document_that_resolved_no_url_changes_nothing() -> None:
     )
     assert converted.annotations == []
     assert converted.text == "A claim. [doc 999, page 1]"
+
+
+# --- dataset citations --------------------------------------------------------------------------
+
+
+_DATASET_ID = "IMF:WEO(1.0.0)"
+_DATASET_NAME = "World Economic Outlook"
+_DATASET_URL = "https://portal.example.org/datasets/imf-weo"
+_LAST_UPDATE = "2025-04-30"
+_DATASET = DatasetSource(url=_DATASET_URL, name=_DATASET_NAME, last_updated=_LAST_UPDATE)
+
+
+def _convert_datasets(
+    text: str,
+    sources: dict[str, DatasetSource] | None = None,
+    *,
+    budget: int | None = None,
+):
+    return convert_citations(
+        text,
+        document_urls=_URLS,
+        dataset_sources={_DATASET_ID: _DATASET} if sources is None else sources,
+        pill_title_max_chars=budget,
+        make_tag_id=_tag_ids(),
+    )
+
+
+def test_the_payload_of_one_converted_dataset_citation() -> None:
+    converted = _convert_datasets(f"…rose by 2.1% [dataset {_DATASET_ID}] over the period.")
+
+    # Dumped the way `send_annotations` dumps it: a dataset citation names no page, so the
+    # selector is absent from the payload rather than present as a null.
+    assert converted.annotations[0].model_dump(exclude_none=True) == {
+        "index": 0,
+        "target": {"selector": {"type": "html_tag", "tag": "cit", "id": "tag-0"}},
+        "body": {
+            "title": f"{_DATASET_NAME} dataset",
+            "source": {
+                "type": "attachment",
+                "attachment": {
+                    "type": DATASET_MIME_TYPE,
+                    "url": _DATASET_URL,
+                    "title": f"{_DATASET_NAME} dataset",
+                },
+            },
+            "quote": f"* URN: {_DATASET_ID}\n* Last update: {_LAST_UPDATE}",
+        },
+    }
+    assert converted.markers_left == 0
+
+
+def test_a_cited_dataset_with_a_portal_url_becomes_a_pill() -> None:
+    converted = _convert_datasets(f"…rose by 2.1% [dataset {_DATASET_ID}] over the period.")
+    assert converted.text == f"…rose by 2.1% {_tag('tag-0')} over the period."
+
+
+def test_a_dataset_the_catalogue_does_not_report_keeps_its_text() -> None:
+    draft = "…fell sharply [dataset IMF:UNKNOWN(1.0.0)] last year."
+    converted = _convert_datasets(draft)
+    assert converted.text == draft
+    assert converted.annotations == []
+    assert converted.markers_left == 1
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param("files/bucket/catalogue.pdf", id="storage-relative"),
+        pytest.param("/datasets/imf-weo", id="site-relative"),
+        pytest.param("ftp://portal.example.org/datasets", id="another-scheme"),
+        pytest.param("portal.example.org/datasets/imf-weo", id="no-scheme"),
+        pytest.param("https://", id="no-host"),
+        pytest.param("not a url at all", id="not-a-url"),
+    ],
+)
+def test_a_url_a_browser_cannot_open_keeps_the_marker_text(url: str) -> None:
+    """A pill that opens nothing is worse than a marker that at least names its source."""
+    draft = f"A claim. [dataset {_DATASET_ID}]"
+    converted = _convert_datasets(draft, {_DATASET_ID: DatasetSource(url=url)})
+    assert converted.text == draft
+    assert converted.annotations == []
+    assert is_web_url(url) is False
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        pytest.param(_DATASET_URL, id="https"),
+        pytest.param("http://portal.example.org/datasets/imf-weo", id="http"),
+    ],
+)
+def test_an_absolute_web_url_is_openable(url: str) -> None:
+    assert is_web_url(url) is True
+
+
+def test_a_versioned_urn_is_matched_exactly() -> None:
+    """Two versions of one dataset are two datasets, and the marker names one of them."""
+    other = DatasetSource(url="https://portal.example.org/datasets/imf-weo-2", name="Newer")
+    converted = _convert_datasets(
+        f"A claim. [dataset {_DATASET_ID}]",
+        {_DATASET_ID: _DATASET, "IMF:WEO(2.0.0)": other},
+    )
+    assert converted.annotations[0].body.source.attachment.url == _DATASET_URL
+
+
+def test_a_urn_differing_only_in_case_is_not_a_match() -> None:
+    """The comparison is character for character, as the identifier rule requires."""
+    draft = f"A claim. [dataset {_DATASET_ID}]"
+    converted = _convert_datasets(draft, {_DATASET_ID.lower(): _DATASET})
+    assert converted.text == draft
+    assert converted.annotations == []
+
+
+def test_an_unnamed_dataset_falls_back_to_the_urn_the_marker_carried() -> None:
+    converted = _convert_datasets(
+        f"A claim. [dataset {_DATASET_ID}]", {_DATASET_ID: DatasetSource(url=_DATASET_URL)}
+    )
+    annotation = converted.annotations[0]
+    assert annotation.body.title == f"{_DATASET_ID} dataset"
+    assert annotation.body.source.attachment.title == f"{_DATASET_ID} dataset"
+
+
+def test_a_named_and_an_unnamed_dataset_produce_the_same_label_shape() -> None:
+    """Nothing in a label tells the reader which of the two citations fell back."""
+    unnamed_id = "IMF:PRIMARY_COMMODITY_PRICES(1.0.0)"
+    converted = _convert_datasets(
+        f"One [dataset {_DATASET_ID}]. Two [dataset {unnamed_id}].",
+        {
+            _DATASET_ID: _DATASET,
+            unnamed_id: DatasetSource(url="https://portal.example.org/datasets/pcp"),
+        },
+    )
+    named, unnamed = converted.annotations
+    assert named.body.title == f"{_DATASET_NAME} dataset"
+    assert unnamed.body.title == f"{unnamed_id} dataset"
+    for annotation in converted.annotations:
+        assert annotation.body.title.endswith(" dataset")
+        assert annotation.body.source.attachment.title.endswith(" dataset")
+
+
+def test_the_pill_shortens_the_name_and_the_card_keeps_it_whole() -> None:
+    converted = _convert_datasets(f"A claim. [dataset {_DATASET_ID}]", budget=20)
+    annotation = converted.annotations[0]
+    assert annotation.body.source.attachment.title == "World Economic Outl… dataset"
+    assert annotation.body.title == f"{_DATASET_NAME} dataset"
+
+
+def test_the_budget_applies_to_a_urn_too_and_the_word_survives_it() -> None:
+    """A URN has no bounded length, so a fallback label is shortened like a name."""
+    long_id = "IMF:DIRECTION_OF_TRADE_STATISTICS(1.0.0)"
+    converted = _convert_datasets(
+        f"A claim. [dataset {long_id}]",
+        {long_id: DatasetSource(url=_DATASET_URL)},
+        budget=20,
+    )
+    annotation = converted.annotations[0]
+    assert annotation.body.source.attachment.title == "IMF:DIRECTION_OF_TR… dataset"
+    assert annotation.body.title == f"{long_id} dataset"
+
+
+def test_no_budget_shows_the_whole_name_on_both() -> None:
+    converted = _convert_datasets(f"A claim. [dataset {_DATASET_ID}]", budget=None)
+    annotation = converted.annotations[0]
+    assert annotation.body.source.attachment.title == f"{_DATASET_NAME} dataset"
+    assert annotation.body.title == f"{_DATASET_NAME} dataset"
+
+
+def test_no_dataset_label_carries_the_url() -> None:
+    converted = _convert_datasets(f"A claim. [dataset {_DATASET_ID}]", budget=20)
+    annotation = converted.annotations[0]
+    assert _DATASET_URL not in annotation.body.title
+    assert _DATASET_URL not in annotation.body.source.attachment.title
+    assert "portal.example.org" not in annotation.body.source.attachment.title
+
+
+def test_a_dataset_with_no_last_update_date_carries_one_quote_item() -> None:
+    converted = _convert_datasets(
+        f"A claim. [dataset {_DATASET_ID}]",
+        {_DATASET_ID: DatasetSource(url=_DATASET_URL, name=_DATASET_NAME)},
+    )
+    assert converted.annotations[0].body.quote == f"* URN: {_DATASET_ID}"
+
+
+def test_the_last_update_date_is_carried_as_the_tool_reported_it() -> None:
+    converted = _convert_datasets(
+        f"A claim. [dataset {_DATASET_ID}]",
+        {_DATASET_ID: DatasetSource(url=_DATASET_URL, last_updated="30 April 2025")},
+    )
+    assert converted.annotations[0].body.quote.endswith("* Last update: 30 April 2025")
+
+
+def test_a_dataset_citation_carries_no_page_selector() -> None:
+    converted = _convert_datasets(f"A claim. [dataset {_DATASET_ID}]")
+    assert converted.annotations[0].body.selector is None
+
+
+def test_a_document_and_a_dataset_in_one_run_share_a_pill() -> None:
+    converted = _convert_datasets(f"A claim. [doc 101, page 2], [dataset {_DATASET_ID}]")
+    assert converted.text == f"A claim. {_tag('tag-0')}"
+    assert [
+        (annotation.index, annotation.target.selector.id, annotation.body.title)
+        for annotation in converted.annotations
+    ] == [(0, "tag-0", "doc 101, page 2"), (1, "tag-0", f"{_DATASET_NAME} dataset")]
+    assert converted.markers_left == 0
+
+
+def test_one_dataset_cited_twice_in_a_run_is_one_annotation() -> None:
+    """A dataset server attributes to the dataset, so there is no finer level to differ at."""
+    converted = _convert_datasets(f"A claim. [dataset {_DATASET_ID}], [dataset {_DATASET_ID}]")
+    assert converted.text == f"A claim. {_tag('tag-0')}"
+    assert len(converted.annotations) == 1
+
+
+def test_a_dataset_is_converted_wherever_it_stands() -> None:
+    converted = _convert_datasets(f"| 2.4% | [dataset {_DATASET_ID}] |")
+    assert converted.text == f"| 2.4% | {_tag('tag-0')} |"
+    assert len(converted.annotations) == 1

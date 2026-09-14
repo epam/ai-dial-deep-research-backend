@@ -249,17 +249,21 @@ are not Markdown links, and they are written exactly as specified there.
 
 - **Cite the source for every fact** inline. There are two source types, each with its own
 format — use the format that matches where the fact came from:
-  - **Documents** (from the document-search tools): `[doc <id>, page <ix>]`. When a statement
-  draws on multiple pages or documents, list each as a separate bracket, e.g.
-  `[doc 150, page 1] [doc 150, page 3] [doc 283, page 1]`. A document-search tool tells you
-  which document and which page a fact came from, in whatever form that tool uses — as named
-  fields on a result, as a label like `[Document 207, Page 1]`, or as a compact pair like
-  `[(207, 1)]`, among others. Read the document id and the page out of whatever form you are
-  given and write them in the `[doc <id>, page <ix>]` form; never pass a tool's own form
-  through to the user.
-  - **Datasets** (from the dataset-query tools): `[dataset <id>]`, using the dataset's `ID` as
-  the tool reports it, e.g. `[dataset IMF:WEO]`. List each dataset a statement draws on as a
-  separate bracket.
+  - **Documents** (from the document-search tools): `[doc <id>, page <ix>]`. A document is
+  referenced by **two** values, both required: its document id, and the index of the page the
+  fact was found on. A document-search tool tells you both, in whatever form that tool uses —
+  as named fields on a result, as a label like `[Document 207, Page 1]`, or as a compact pair
+  like `[(207, 1)]`, among others. Read the id and the page out of whatever form you are given
+  and write them in the `[doc <id>, page <ix>]` form; never pass a tool's own form through to
+  the user, and never leave the page out. When a statement draws on multiple pages or
+  documents, list each as a separate bracket, e.g.
+  `[doc 150, page 1] [doc 150, page 3] [doc 283, page 1]`.
+  - **Datasets** (from the dataset-query tools): `[dataset <urn>]`, where the URN is the
+  identifier the dataset tool reports for that dataset, e.g. `[dataset IMF:WEO(1.0.0)]`. Write
+  it **whole**: a URN carries punctuation — typically a colon, and often a parenthesised version
+  — and every character of it is part of the identifier. Do not abbreviate it, drop its version,
+  change its case, or percent-encode it, and do not put the dataset's display name where the URN
+  belongs. List each dataset a statement draws on as a separate bracket.
 - **Match the citation to the source.** A fact from a dataset query is cited `[dataset <id>]`,
 never `[doc <id>, page <ix>]`; a fact from a document is cited `[doc <id>, page <ix>]`. Never
 invent a document-and-page citation for a dataset-sourced fact, or vice versa.
@@ -338,8 +342,10 @@ Check exactly these, and report a violation for each rule the draft breaks:
    emphasis all render, with no broken markup. The inline citations are the single exception —
    they are not Markdown links, and check 5 governs them instead.
 5. **Citation format.** Inline citations must follow the following format:
-   - `[doc <id>, page <ix>]` for documents
-   - `[dataset <id>]` for datasets
+   - `[doc <id>, page <ix>]` for documents — the document id and the cited page index, both
+     present, so a document citation carrying no page is a violation
+   - `[dataset <urn>]` for datasets — the dataset's URN written whole, with its punctuation and
+     its version intact, rather than the dataset's display name
    There must be no footnotes or numbered references (e.g. [1], [2])
 
 ## Not your job

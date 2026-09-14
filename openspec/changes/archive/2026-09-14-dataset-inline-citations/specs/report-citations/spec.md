@@ -1,70 +1,205 @@
-# report-citations Specification
+## ADDED Requirements
 
-## Purpose
+### Requirement: A dataset citation is converted when its dataset resolves a web URL
 
-Turns the document citations of the delivered report into DIAL inline citation annotations, so a
-reader can open the cited page of a cited document from the report itself. Owns which citations may
-be converted and which stay as text, how citations supporting one statement share a pill, the
-hyperlinks it removes on the way, the
-contract the file-sharing tool must satisfy, the annotation payload, and what happens when any part
-of it fails.
+A `[dataset <id>]` marker SHALL be converted — its marker replaced by a marker tag, one annotation
+emitted for it — on one condition: **the cited dataset resolved a URL that a browser can open.**
 
-## Requirements
+**A dataset's identifier is called its URN throughout this capability**, and the marker's `<id>`
+slot carries it: the report's citation form is `[dataset <id>]`, owned by **research-execution**, but
+what fills it for every supported dataset server is a URN such as `IMF:WEO(1.0.0)`. The wire
+field the dataset-metadata tool reports it under is `id`, which is the server's key and is not
+renamed here; every user-visible mention of it — the card's body row, the fallback labels — reads
+`URN`, because that is what the value is and what the dataset server's own documentation calls it.
 
-### Requirement: A citation step runs after the report loop settles and before delivery
+The dataset-metadata tool must have reported a record for that URN carrying a URL, and that
+URL must be **absolute and `http` or `https`**. The app SHALL decide this from the URL itself,
+treating any other form — a storage-relative `files/…` path, a scheme it does not recognise, a value
+that is not a URL at all — as not convertible. The direction is conservative for the same reason the
+PDF check on a document is: a dataset pill exists to take the reader to a page, and a pill that
+opens nothing is worse than a marker that at least names its source. A storage-relative URL in
+particular would make the client offer a file download rather than a page.
 
-The app SHALL run one citation step per turn, after the report review loop has settled on the draft
-to deliver (see **report-composition**) and before that draft's text is appended to the assistant
-message content. The step SHALL NOT run at all on a turn that delivers no report.
+The URN is matched **verbatim**, as **source-attribution** requires: the string the marker carries is
+compared to the `id` of each record the tool reported, with no case change, no trimming, no
+re-encoding and no version-stripping. A URN carries punctuation — a colon, and often a parenthesised
+version — and every character of it is part of the URN.
 
-The step SHALL be the only thing that alters the settled draft, and it SHALL make exactly two kinds
-of alteration, in this order:
+A dataset citation whose URN the tool did not report, or reported without a usable URL, SHALL keep
+its marker text exactly as the report writer wrote it and SHALL produce no annotation. Conversion
+SHALL NOT be partial: a converted dataset citation has both its tag and its annotation, or neither.
+The failure mode is a missing pill, never a lost citation.
 
-1. **Remove everything that points the reader outward** — every hyperlink form the
-   **report-composition** capability enumerates, each repaired the way that capability states: the
-   label kept where the form has one, the construct deleted whole where it has none. That capability
-   owns which forms count and how each is repaired; this step owns only that they go first.
-2. **Replace each convertible citation marker** with that citation's marker tag.
+**Neither a dataset's name nor its last-update date is part of the condition.** A dataset that
+resolved a URL but no usable name is still converted, its labels reading `<urn> dataset` in place of
+`<name> dataset`, the same shape with a different leading string; a dataset that resolved no date is still converted, its quote simply carrying one item
+instead of two. This is the same shape of fallback an untitled document gets, for the same reason: a
+plainer pill costs the reader less than a missing one.
 
-The order is fixed so the outcome is deterministic, not because either pass repairs the other's
-input: link removal runs first, and citation conversion then reads the text it produced, making no
-distinction about where a marker came from. Nothing else about the draft SHALL be rewritten,
-reordered, shortened or reformatted, and the step SHALL NOT call a model. What the link pass
-deliberately leaves alone is stated by the **report-composition** capability.
+**Where the marker stands is not a condition**, exactly as for a document citation: the step SHALL
+convert a dataset citation in a paragraph, a list item, a table cell, a heading, a blockquote and an
+emphasis span alike, and SHALL classify no Markdown block.
 
-The text the step produces SHALL be the text appended to the assistant content **and** the text
-persisted as the turn's report message, so what a later turn reads back is what the user saw. That
-text carries the marker tags, which are markup only this feature's reader understands: a renderer
-that knows them replaces each tag with a pill, and one that does not either drops the tag or shows
-it. This is a property of the delivered report, not an accident, and the failure modes it creates
-are covered by the delivery-failure requirement below and by the **research-execution** capability.
+#### Scenario: A cited dataset with a portal URL becomes a pill
 
-#### Scenario: The step runs once on the settled draft
+- **WHEN** a paragraph reads `…rose by 2.1% [dataset IMF:WEO(1.0.0)] over the period.` and the
+  dataset-metadata tool reported that id with the URL `https://portal.example.org/datasets/imf-weo`
+- **THEN** the marker SHALL be replaced by a marker tag, and one annotation SHALL be emitted naming
+  that tag and carrying the portal URL
 
-- **WHEN** the report review loop settles on a draft and the turn is about to deliver it
-- **THEN** the citation step SHALL run once on that draft, before any of its text reaches the
-  assistant message content, and the loop SHALL NOT be re-entered
+#### Scenario: A reader reaches the dataset's page from the card
 
-#### Scenario: An unreviewed draft still gets the deterministic edits
+- **WHEN** a reader clicks a converted dataset citation's pill and then its open-in-browser action
+- **THEN** the page at `body.source.attachment.url` SHALL open in a new browser tab, and that URL
+  SHALL be the string the dataset-metadata tool reported, unchanged
 
-- **WHEN** an instance configures `max_report_versions` as 1, so the first draft is delivered with
-  no review call at all, and that draft carries a bare URL beside a convertible citation
-- **THEN** the step SHALL still run on it: the URL SHALL be gone from the delivered text and the
-  citation SHALL be converted, because the step is gated on a report being delivered and never on a
-  review having judged it
+#### Scenario: A dataset the catalogue does not report keeps its text
 
-#### Scenario: A turn with no report runs no citation step
+- **WHEN** the report cites `[dataset IMF:UNKNOWN(1.0.0)]` and the tool's answer carries no record
+  with that id
+- **THEN** the marker SHALL remain in the delivered text, and no annotation SHALL be emitted for it
 
-- **WHEN** a turn ends without a delivered report — the preparation agent asked a clarifying
-  question, or the turn failed
-- **THEN** no citation step SHALL run and no annotations SHALL be emitted
+#### Scenario: A dataset reported without a URL keeps its text
 
-#### Scenario: The delivered text is what gets persisted
+- **WHEN** the tool reports the cited dataset's record with a name but no URL
+- **THEN** the marker SHALL remain in the delivered text, and no annotation SHALL be emitted for it
 
-- **WHEN** the citation step converts citations in the settled draft
-- **THEN** the text appended to the assistant content and the text persisted as the report message
-  SHALL be identical to each other, SHALL carry the marker tags of the converted citations, and
-  SHALL be the post-processed text rather than the draft the review judged
+#### Scenario: A storage-relative URL is not convertible
+
+- **WHEN** the tool reports the cited dataset with the URL `files/bucket/catalogue.pdf`
+- **THEN** the citation SHALL NOT be converted, because the URL is not an absolute web URL and the
+  client would offer a download rather than open a page
+
+#### Scenario: A versioned identifier is matched exactly
+
+- **WHEN** the report cites `[dataset IMF:WEO(1.0.0)]` and the tool reports both
+  `IMF:WEO(1.0.0)` and `IMF:WEO(2.0.0)`
+- **THEN** the citation SHALL resolve against `IMF:WEO(1.0.0)` alone, the identifier being
+  matched character for character
+
+### Requirement: Cited datasets are named and linked through a contracted dataset-metadata tool
+
+A dataset citation needs three things the app does not hold: the dataset's human name, which labels
+the pill and the card; the address of its page, which no label shows and which the reader reaches
+through the card's open-in-browser action; and
+its last-update date, which the card's body carries when the server knows one. Both come from **one MCP tool**, the
+**dataset-metadata tool**, and the app SHALL depend on nothing about it beyond the contract stated
+here. Which server provides it, what that server names it, and where it keeps the catalogue are all
+outside the contract, and the app SHALL behave identically for any server that satisfies it.
+
+**The name comes from configuration.** Each MCP server entry in the application properties SHALL be
+able to name that server's dataset-metadata tool, and the app SHALL call exactly the tool that entry
+names (**application-config-schema** owns the field). There SHALL be no default name and no
+discovery by convention: the app SHALL NOT infer the tool from a server's advertised tool list, from
+a tool's description, or from any naming pattern. Only a **dataset** server may name one, and at
+most one dataset server may be configured, so at most one configured server names a dataset-metadata
+tool — which is what makes asking that server about an id correct, since a `[dataset <id>]` marker
+names no server.
+
+A dataset server **must** name one, exactly as a document server must name its file-sharing
+tool, and for the same reason: the tool is the only thing that turns a cited URN into a name and a
+page the reader can open, so a dataset server without it serves datasets that cannot be cited. The
+rule lives in **application-config-schema**, which also records what it costs — a channel whose
+dataset server advertises no catalogue tool cannot be configured.
+
+A channel that configures **no dataset server at all** remains ordinary: nothing names a
+dataset-metadata tool, no call is made, and a dataset marker in a delivered report keeps its text.
+That is the case recorded at DEBUG rather than warned about on every turn (see **logging-policy**).
+
+**The contract.** A tool named as a server's dataset-metadata tool SHALL satisfy all of the
+following. These are requirements on the server, not observations of any one implementation: a named
+tool that breaks any of them is a misconfiguration, and it SHALL fail the way the delivery-failure
+requirement below prescribes rather than degrade the report.
+
+- **Input**: none. The app SHALL call it with no arguments and SHALL pass no cited ids to it. The
+  tool answers with the channel's catalogue, and the app selects from that answer.
+- **Output**: one JSON object at the top level carrying a **`datasets`** array. Each element SHALL
+  carry a string **`id`**, the URN the report's `[dataset <id>]` markers carry and the
+  dataset-query tools accept; a string **`name`**, the dataset's human name; and MAY carry two
+  further strings — **`url`**, the address of that dataset's own page, and **`lastUpdated`**, the
+  date the dataset was last updated. Any other field an element carries SHALL be ignored rather than
+  refused, so a server may report a description, a provider or an indicator count without breaking
+  the contract.
+
+  The two optional fields are optional in different senses, and the difference is what each absence
+  costs. An element whose **`url`** is absent is a dataset that cannot be cited as a pill at all,
+  because the pill would open nothing. An element whose **`lastUpdated`** is absent is cited
+  normally and simply carries one fewer fact on its card. Neither absence is a malformed answer.
+
+  `lastUpdated` SHALL be a date the reader can act on, written as an **ISO 8601 date** such as
+  `2025-04-30`. A server that cannot produce one SHALL omit the field rather than send free text it
+  failed to parse, because the app displays this value verbatim and cannot tell a date it does not
+  understand from one it does. A value that reaches the app as anything but a non-empty string SHALL
+  be read as absent.
+- **Structured result**: the tool SHALL return that object as its MCP **structured result**, which
+  means declaring the output schema MCP requires for one. The app reads the structured result and
+  nothing else — a tool that answers with text content alone SHALL be treated as a failed call. MCP
+  carries the same object a second time as serialized text, which the app ignores.
+- **Complete for the channel**: the answer SHALL carry every dataset the channel exposes, because
+  the app cannot ask about a subset. A dataset absent from the answer is uncitable.
+- **Idempotent and read-only**: the app calls the tool once per turn, and repeated calls across
+  turns SHALL be safe and SHALL change nothing on the server.
+
+The app SHALL call the tool **once per turn**, and only on a turn whose delivered report cites at
+least one dataset. It SHALL NOT call the tool once per cited dataset, and SHALL NOT call it for a
+dataset that research touched but the delivered report does not cite.
+
+The app SHALL select from the answer the records whose `id` equals a cited id, and SHALL ignore
+every other record. That the answer is the whole catalogue is a property of the contract rather than
+a cost the report pays per citation: one call carries however many datasets the report cites.
+
+#### Scenario: One call serves every cited dataset
+
+- **WHEN** the delivered report cites four datasets and research queried three more it did not cite
+- **THEN** the app SHALL call the dataset-metadata tool exactly once, with no arguments, and SHALL
+  read the four cited ids out of its answer
+
+#### Scenario: A report citing no dataset makes no call
+
+- **WHEN** the delivered report cites documents only
+- **THEN** the app SHALL NOT call the dataset-metadata tool
+
+#### Scenario: Extra fields in a record are ignored
+
+- **WHEN** a reported record carries a description, a provider and a last-update date beside its
+  `id`, `name` and `url`
+- **THEN** the record SHALL be accepted and only the `id`, the `name` and the `url` SHALL be read
+  from it
+
+#### Scenario: A text-only answer is a failed call
+
+- **WHEN** the named tool returns its catalogue as text content with no structured result
+- **THEN** the call SHALL be treated as failed, every dataset citation SHALL keep its marker text,
+  and the report SHALL be delivered
+
+### Requirement: The dataset-metadata tool is called by the app and stays available to the agent
+
+The app SHALL find the dataset-metadata tool in its server's **full advertised tool list**,
+independently of that server's `tools_to_include` filter, because that filter states what the
+research agent may call rather than what the app may call. A configuration whose filter omits the
+tool SHALL still leave the app able to call it at the citation step.
+
+The dataset-metadata tool SHALL, however, **remain available to the research agent** whenever that
+server's filter would otherwise offer it. This is the one point on which it differs from the
+file-sharing tool, which the app removes from every tool list bound to a model, and the difference
+is deliberate: a catalogue listing is how a research agent discovers which datasets exist before it
+queries one, so removing it would spend the research to buy the citation. Naming a tool here SHALL
+change only who else calls it, never whether the agent still can.
+
+#### Scenario: Naming the tool does not hide it from the agent
+
+- **WHEN** a server names its dataset-metadata tool and that tool passes the server's
+  `tools_to_include` filter
+- **THEN** the tools bound to the research agent SHALL still include it
+
+#### Scenario: A filter that omits it does not hide it from the app
+
+- **WHEN** a server's `tools_to_include` names only its data-query tool, and its dataset-metadata
+  tool is configured
+- **THEN** the app SHALL still be able to call the dataset-metadata tool at the citation step, and
+  the agent SHALL NOT be offered it
+
+## MODIFIED Requirements
 
 ### Requirement: A citation is converted when the document it names has a PDF URL
 
@@ -261,457 +396,6 @@ treated as one **run** and converted together:
   1, and the catalogue reported no URL for that dataset
 - **THEN** one tag SHALL be emitted for the document's citation, and the dataset marker SHALL remain
   as text immediately after that tag
-
-### Requirement: A dataset citation is converted when its dataset resolves a web URL
-
-A `[dataset <id>]` marker SHALL be converted — its marker replaced by a marker tag, one annotation
-emitted for it — on one condition: **the cited dataset resolved a URL that a browser can open.**
-
-**A dataset's identifier is called its URN throughout this capability**, and the marker's `<id>`
-slot carries it: the report's citation form is `[dataset <id>]`, owned by **research-execution**, but
-what fills it for every supported dataset server is a URN such as `IMF:WEO(1.0.0)`. The wire
-field the dataset-metadata tool reports it under is `id`, which is the server's key and is not
-renamed here; every user-visible mention of it — the card's body row, the fallback labels — reads
-`URN`, because that is what the value is and what the dataset server's own documentation calls it.
-
-The dataset-metadata tool must have reported a record for that URN carrying a URL, and that
-URL must be **absolute and `http` or `https`**. The app SHALL decide this from the URL itself,
-treating any other form — a storage-relative `files/…` path, a scheme it does not recognise, a value
-that is not a URL at all — as not convertible. The direction is conservative for the same reason the
-PDF check on a document is: a dataset pill exists to take the reader to a page, and a pill that
-opens nothing is worse than a marker that at least names its source. A storage-relative URL in
-particular would make the client offer a file download rather than a page.
-
-The URN is matched **verbatim**, as **source-attribution** requires: the string the marker carries is
-compared to the `id` of each record the tool reported, with no case change, no trimming, no
-re-encoding and no version-stripping. A URN carries punctuation — a colon, and often a parenthesised
-version — and every character of it is part of the URN.
-
-A dataset citation whose URN the tool did not report, or reported without a usable URL, SHALL keep
-its marker text exactly as the report writer wrote it and SHALL produce no annotation. Conversion
-SHALL NOT be partial: a converted dataset citation has both its tag and its annotation, or neither.
-The failure mode is a missing pill, never a lost citation.
-
-**Neither a dataset's name nor its last-update date is part of the condition.** A dataset that
-resolved a URL but no usable name is still converted, its labels reading `<urn> dataset` in place of
-`<name> dataset`, the same shape with a different leading string; a dataset that resolved no date is still converted, its quote simply carrying one item
-instead of two. This is the same shape of fallback an untitled document gets, for the same reason: a
-plainer pill costs the reader less than a missing one.
-
-**Where the marker stands is not a condition**, exactly as for a document citation: the step SHALL
-convert a dataset citation in a paragraph, a list item, a table cell, a heading, a blockquote and an
-emphasis span alike, and SHALL classify no Markdown block.
-
-#### Scenario: A cited dataset with a portal URL becomes a pill
-
-- **WHEN** a paragraph reads `…rose by 2.1% [dataset IMF:WEO(1.0.0)] over the period.` and the
-  dataset-metadata tool reported that id with the URL `https://portal.example.org/datasets/imf-weo`
-- **THEN** the marker SHALL be replaced by a marker tag, and one annotation SHALL be emitted naming
-  that tag and carrying the portal URL
-
-#### Scenario: A reader reaches the dataset's page from the card
-
-- **WHEN** a reader clicks a converted dataset citation's pill and then its open-in-browser action
-- **THEN** the page at `body.source.attachment.url` SHALL open in a new browser tab, and that URL
-  SHALL be the string the dataset-metadata tool reported, unchanged
-
-#### Scenario: A dataset the catalogue does not report keeps its text
-
-- **WHEN** the report cites `[dataset IMF:UNKNOWN(1.0.0)]` and the tool's answer carries no record
-  with that id
-- **THEN** the marker SHALL remain in the delivered text, and no annotation SHALL be emitted for it
-
-#### Scenario: A dataset reported without a URL keeps its text
-
-- **WHEN** the tool reports the cited dataset's record with a name but no URL
-- **THEN** the marker SHALL remain in the delivered text, and no annotation SHALL be emitted for it
-
-#### Scenario: A storage-relative URL is not convertible
-
-- **WHEN** the tool reports the cited dataset with the URL `files/bucket/catalogue.pdf`
-- **THEN** the citation SHALL NOT be converted, because the URL is not an absolute web URL and the
-  client would offer a download rather than open a page
-
-#### Scenario: A versioned identifier is matched exactly
-
-- **WHEN** the report cites `[dataset IMF:WEO(1.0.0)]` and the tool reports both
-  `IMF:WEO(1.0.0)` and `IMF:WEO(2.0.0)`
-- **THEN** the citation SHALL resolve against `IMF:WEO(1.0.0)` alone, the identifier being
-  matched character for character
-
-### Requirement: Cited documents are made readable through a contracted file-sharing tool
-
-A cited document lives in the retrieval server's own DIAL storage, which the person reading the
-report cannot read: DIAL Core grants an ordinary user session access only to resources under that
-user's own bucket. A citation SHALL therefore point at a copy of the document inside the **caller's
-own** bucket, under the `appdata` folder DIAL Core reports for a per-request key — the one location
-an application may write into another identity's bucket.
-
-The app SHALL obtain those copies by calling one MCP tool, the **file-sharing tool**, and SHALL
-depend on nothing about it beyond the contract stated here. What this capability owns is that
-contract. Which server provides the tool, what that server names it, how it decides which file
-answers a document id, and how it performs the copy are all outside the contract, and the app SHALL
-behave identically for any server that satisfies it.
-
-**The name comes from configuration.** Each MCP server entry in the application properties SHALL
-be able to name that server's file-sharing tool, and the app SHALL call exactly the tool that
-entry names (**application-config-schema** owns the field). There SHALL be no default name and no
-discovery by convention: the app SHALL NOT infer the tool from a server's advertised tool list,
-from a tool's description, or from any naming pattern. A server whose tool is named differently
-is a configuration entry away from working rather than a code change away. A **document** server
-SHALL name one — **application-config-schema** rejects a configuration where it does not — so
-inline citations are on for every deployment that serves documents, and no configuration edit
-turns them off. Exactly one configured server names a
-file-sharing tool whenever documents are served at all — only a document server may name one, and
-at most one document server may be configured — because a `[doc <id>]` marker names no server and
-ids coming from two servers could not be told apart.
-
-The same reason bounds the configuration more broadly, and the **application-config-schema**
-capability owns that rule: every MCP server declares which supported retrieval server it is, and at
-most one server of each type may be configured. The document ids a report cites therefore come from
-exactly one server, which is what makes asking that server for a URL correct. Without the rule, a
-citation of a second document server's id would be resolved against the first, which may well hold
-a different document under the same integer — a pill that opens the wrong document rather than a
-citation that keeps its text.
-
-**The contract.** A tool named as a server's file-sharing tool SHALL satisfy all of the following.
-These are requirements on the server, not observations of any one implementation: a named tool that
-breaks any of them is a misconfiguration, and it SHALL fail the way the delivery-failure requirement
-below prescribes rather than degrade the report.
-
-- **Input**: exactly one argument, named `document_ids`, holding the ids of the documents to share.
-  These are the ids the report's `[doc <id>, page <ix>]` markers carry, as the
-  **research-execution** capability defines them. The app SHALL pass the ids and nothing else; the
-  argument name is fixed by this contract so that the app needs no per-server mapping.
-- **Effect**: by the time the tool returns, each document it reports SHALL already have a copy in
-  the caller's `appdata` folder that the caller can read. The app SHALL NOT perform, complete or
-  verify any copy of its own, and SHALL treat a reported URL as readable.
-- **Output**: one JSON object at the top level, with no wrapper key, mapping each shared document id
-  to the DIAL file URL of its copy. Keys MAY arrive as JSON strings rather than numbers, since JSON
-  has no integer keys, and the app SHALL accept either. Each URL SHALL be in DIAL's storage form:
-  relative to the storage root, beginning `files/`, carrying no scheme and no host, with
-  percent-encoded segments — the form DIAL's own attachment `url` field takes. The app SHALL carry
-  that URL into the annotation exactly as returned, decoding nothing and re-encoding nothing, since
-  the client resolves it against the storage root and any rewriting risks a URL that no longer names
-  the file.
-- **Structured result**: the tool SHALL return that object as its MCP **structured result**, which
-  means declaring the output schema MCP requires for one. The app reads the structured result and
-  nothing else — a tool that answers with text content alone SHALL be treated as a failed call (see
-  the delivery-failure requirement below). MCP carries the same object a second time as serialized
-  text, which the app ignores; that copy exists for clients that predate structured results.
-- **Partial answers**: an id the tool cannot resolve MAY be absent from the object, and its absence
-  SHALL neither make the call fail nor invalidate the ids that are present.
-- **Idempotent**: the app calls the tool once per turn with every cited id, and repeated calls for
-  the same document across turns SHALL be safe and SHALL NOT require the document to be transferred
-  again.
-
-The app SHALL call the tool **once per turn**, with the distinct document ids the delivered report
-cites. So: not once per citation, and not for a document retrieved during research but never cited
-in the delivered report.
-
-A server with no file-sharing tool configured SHALL contribute no annotations, and its documents'
-citations SHALL keep their marker text. Only a dataset server may be configured that way, so in
-practice this is the shape of a deployment that serves no documents at all: it makes no
-file-sharing call, and its `[dataset <id>]` markers were never convertible anyway.
-
-Resolving the caller's `appdata` folder requires the per-request key, which reaches the MCP server
-only when it is called through DIAL Core in deployment mode. DIAL Core reports an `appdata` path
-only for such a key: asked with an ordinary api-key, `GET /v1/bucket` answers with the bucket alone
-and no `appdata` field, so there is no destination to copy into. A file-sharing tool on a
-directly-connected server authenticated with a static api-key SHALL therefore NOT be expected to
-resolve the reader's bucket, and a deployment that wants inline citations SHALL reach its retrieval
-server in deployment mode.
-
-#### Scenario: One call carries every cited document id
-
-- **WHEN** the settled draft cites nine passages drawn from three documents, and research read
-  twenty more documents it did not cite
-- **THEN** the app SHALL make exactly one file-sharing tool call, passing the three cited document
-  ids and no others
-
-#### Scenario: A partially resolved response converts what it can
-
-- **WHEN** the response carries URLs for two of the three requested ids
-- **THEN** the citations of those two documents SHALL be converted, and the third document's
-  citations SHALL keep their marker text
-
-#### Scenario: No configured tool leaves the report as written
-
-- **WHEN** no configured MCP server declares a file-sharing tool
-- **THEN** no file-sharing call SHALL be made, no annotations SHALL be emitted, and the delivered
-  report SHALL carry every marker exactly as the writer wrote it
-
-#### Scenario: The app calls the tool the configuration names and no other
-
-- **WHEN** a server advertises several tools, one of which its configuration names as the
-  file-sharing tool
-- **THEN** the citation step SHALL call exactly the named tool, and SHALL call no other tool of that
-  server — including one whose name or description suggests it shares files
-
-#### Scenario: A server satisfying the contract under a different tool name works unchanged
-
-- **WHEN** a retrieval server whose file-sharing tool has a different name from the previous
-  deployment's is configured, and it satisfies the contract
-- **THEN** the citation step SHALL work with no code change, the only difference being the name in
-  that server's configuration entry
-
-### Requirement: The file-sharing tool is called by the app and never offered to the agent
-
-The file-sharing tool SHALL NOT be part of the tool list bound to any LLM: not the research agent's,
-not the report writer's, not the playground's. It is invoked by application code at the citation
-step and at no other point in the turn.
-
-The app SHALL find it in the server's full advertised tool list, independently of that server's
-`tools_to_include` filter, because that filter states what the research agent may call rather than
-what the app may call. A configuration that lists the file-sharing tool in `tools_to_include` SHALL
-still not result in the agent being offered it.
-
-#### Scenario: The agent's tool list excludes it
-
-- **WHEN** a server declares a file-sharing tool and the research graph starts
-- **THEN** the tools bound to the research agent SHALL NOT include it, and the agent SHALL have no
-  way to call it
-
-#### Scenario: A filter that omits it does not hide it from the app
-
-- **WHEN** a server's `tools_to_include` names only its search tools, and its file-sharing tool is
-  configured
-- **THEN** the app SHALL still be able to call the file-sharing tool at the citation step
-
-#### Scenario: A filter that names it does not expose it to the agent
-
-- **WHEN** a server's `tools_to_include` names the file-sharing tool alongside its search tools
-- **THEN** the agent's bound tools SHALL still exclude it
-
-### Requirement: A cited document's title comes from a contracted metadata resource
-
-A citation's labels name the publication the reader is about to open. The app holds no such name of
-its own: the only human-readable string it has per cited document is the file name inside the shared
-URL, which is a storage path segment. It SHALL obtain the name by reading one **MCP resource**, the
-document-metadata resource, and SHALL depend on nothing about that resource beyond the contract
-stated here.
-
-**Both the resource and the key come from configuration.** An MCP server entry SHALL be able to name
-the resource's URI template and the metadata key holding the human title, and the app SHALL read
-exactly what that entry names (**application-config-schema** owns the two fields). There SHALL be no
-default URI, no default key, and no discovery by convention: the app SHALL NOT infer either from what
-a server advertises, from a key's name, or from any naming pattern. A channel's metadata schema is
-its own, so which key carries the title is configuration rather than a constant.
-
-**A document server must name both**, as it must name its file-sharing tool
-(**application-config-schema** owns that rule and what it costs): a document id is internal to the
-server that issued it, so a channel with no metadata resource labels every pill with a number the
-reader cannot place. What stays optional is the **answer** — an id the resource does not know, or a
-document carrying nothing usable under the configured key, costs that citation its title and
-nothing else.
-
-**The contract.** A resource named as a server's document-metadata resource SHALL satisfy all of the
-following. These are requirements on the server, not observations of any one implementation: a named
-resource that breaks any of them SHALL fail the way the delivery-failure requirement below
-prescribes rather than degrade the report.
-
-- **Address**: a resource URI template carrying exactly one placeholder, `{document_ids}`. The app
-  SHALL build the concrete URI by substituting the cited ids joined with commas and nothing else,
-  and SHALL send the identifiers verbatim as the **source-attribution** capability requires.
-- **Output**: one JSON object at the top level, with no wrapper key, mapping each known document id
-  to that document's metadata object. Keys MAY arrive as JSON strings rather than numbers, and the
-  app SHALL accept either.
-- **The title**: the configured key's value within a document's metadata object, when present and a
-  non-empty string. Every other key SHALL be ignored. The app SHALL NOT fall back to another key, and
-  SHALL NOT derive a title from the shared URL or from any part of it.
-- **Partial answers**: an id the resource does not know MAY be absent from the object, and a document
-  present but carrying no usable value under the configured key is equally permitted. Neither SHALL
-  make the read fail, and neither SHALL invalidate the titles that did resolve.
-- **No side effect**: the read SHALL change nothing on the server. This is why it is a resource
-  rather than a tool, and why the app may read it for every turn that delivers a cited report.
-
-The app SHALL read it **once per turn**, asking for **every document id the delivered report
-cites**. A title SHALL NOT label a citation that was not converted, and SHALL NOT be counted among
-the titles resolved (see **logging-policy**).
-
-Asking for every cited id rather than only the resolved ones is what frees this read from the
-file-sharing call's answer, so the two run **together** rather than one after the other and the step
-costs one round trip instead of two.
-
-The constraint on the surplus is deliberately about **use** rather than about disposal. What must be
-observably true is that no title reaches a label or a count it has not earned — not that the app
-forgets the value. The distinction is not pedantry: a title read for a document that resolved no URL
-is still a fact the server reported about a source the report genuinely cites, and the report's
-References section, which this capability does not yet own, must list every source the report cites
-whether or not its metadata resolved. A rule phrased as "discard it" would have to be unwritten to
-build that. The surplus itself is cheap — a few more ids in one URI, a few more entries in one answer
-— and it is paid only on turns where the file-sharing call did not resolve everything.
-
-The resource SHALL NOT be offered to any LLM. It is read by application code at the citation step,
-and an MCP resource does not appear in a tool listing, so nothing has to be filtered out of the
-agent's tools for this to hold.
-
-#### Scenario: One read covers every cited document and its surplus is discarded
-
-- **WHEN** the settled draft cites five documents and the file-sharing tool returned URLs for three
-  of them
-- **THEN** the app SHALL make exactly one document-metadata read, asking for all five ids, and SHALL
-  label citations from the titles of the three that resolved a URL and from no others
-
-#### Scenario: The metadata read does not wait for the file-sharing call
-
-- **WHEN** a turn's citation step resolves documents and datasets
-- **THEN** the document-metadata read SHALL be issued without waiting for the file-sharing call's
-  answer, the ids it asks for being known from the report text alone
-
-#### Scenario: A title for a document that resolved no URL is not shown
-
-- **WHEN** the answer carries a usable title for a document the file-sharing tool returned no URL for
-- **THEN** that document's citations SHALL keep their marker text, no annotation SHALL be emitted for
-  them, and that title SHALL NOT be counted among the titles resolved
-
-#### Scenario: The configured key decides which value is the title
-
-- **WHEN** a document's metadata object carries several string values and the configuration names one
-  key
-- **THEN** the label SHALL be built from that key's value, and no other key SHALL be read as a title
-
-#### Scenario: A document with no usable title keeps the marker label
-
-- **WHEN** the answer omits one requested id, or carries it with the configured key absent, empty, or
-  holding something that is not a string
-- **THEN** that document's citations SHALL still become pills, labelled from the marker, and the other
-  documents' titles SHALL be unaffected
-
-#### Scenario: A channel serving no documents makes no metadata read
-
-- **WHEN** a configuration carries no document server, so nothing names a file-sharing tool or a
-  document-metadata resource
-- **THEN** no metadata read SHALL be made, and the absence SHALL be recorded at DEBUG rather than
-  warned about
-
-#### Scenario: A document server naming no resource is not a configuration at all
-
-- **WHEN** a `generic_rag` server names a file-sharing tool and no document-metadata resource
-- **THEN** the configuration SHALL be rejected (see **application-config-schema**), so no turn is
-  ever served with document citations labelled from their markers by configuration
-
-### Requirement: Cited datasets are named and linked through a contracted dataset-metadata tool
-
-A dataset citation needs three things the app does not hold: the dataset's human name, which labels
-the pill and the card; the address of its page, which no label shows and which the reader reaches
-through the card's open-in-browser action; and
-its last-update date, which the card's body carries when the server knows one. Both come from **one MCP tool**, the
-**dataset-metadata tool**, and the app SHALL depend on nothing about it beyond the contract stated
-here. Which server provides it, what that server names it, and where it keeps the catalogue are all
-outside the contract, and the app SHALL behave identically for any server that satisfies it.
-
-**The name comes from configuration.** Each MCP server entry in the application properties SHALL be
-able to name that server's dataset-metadata tool, and the app SHALL call exactly the tool that entry
-names (**application-config-schema** owns the field). There SHALL be no default name and no
-discovery by convention: the app SHALL NOT infer the tool from a server's advertised tool list, from
-a tool's description, or from any naming pattern. Only a **dataset** server may name one, and at
-most one dataset server may be configured, so at most one configured server names a dataset-metadata
-tool — which is what makes asking that server about an id correct, since a `[dataset <id>]` marker
-names no server.
-
-A dataset server **must** name one, exactly as a document server must name its file-sharing
-tool, and for the same reason: the tool is the only thing that turns a cited URN into a name and a
-page the reader can open, so a dataset server without it serves datasets that cannot be cited. The
-rule lives in **application-config-schema**, which also records what it costs — a channel whose
-dataset server advertises no catalogue tool cannot be configured.
-
-A channel that configures **no dataset server at all** remains ordinary: nothing names a
-dataset-metadata tool, no call is made, and a dataset marker in a delivered report keeps its text.
-That is the case recorded at DEBUG rather than warned about on every turn (see **logging-policy**).
-
-**The contract.** A tool named as a server's dataset-metadata tool SHALL satisfy all of the
-following. These are requirements on the server, not observations of any one implementation: a named
-tool that breaks any of them is a misconfiguration, and it SHALL fail the way the delivery-failure
-requirement below prescribes rather than degrade the report.
-
-- **Input**: none. The app SHALL call it with no arguments and SHALL pass no cited ids to it. The
-  tool answers with the channel's catalogue, and the app selects from that answer.
-- **Output**: one JSON object at the top level carrying a **`datasets`** array. Each element SHALL
-  carry a string **`id`**, the URN the report's `[dataset <id>]` markers carry and the
-  dataset-query tools accept; a string **`name`**, the dataset's human name; and MAY carry two
-  further strings — **`url`**, the address of that dataset's own page, and **`lastUpdated`**, the
-  date the dataset was last updated. Any other field an element carries SHALL be ignored rather than
-  refused, so a server may report a description, a provider or an indicator count without breaking
-  the contract.
-
-  The two optional fields are optional in different senses, and the difference is what each absence
-  costs. An element whose **`url`** is absent is a dataset that cannot be cited as a pill at all,
-  because the pill would open nothing. An element whose **`lastUpdated`** is absent is cited
-  normally and simply carries one fewer fact on its card. Neither absence is a malformed answer.
-
-  `lastUpdated` SHALL be a date the reader can act on, written as an **ISO 8601 date** such as
-  `2025-04-30`. A server that cannot produce one SHALL omit the field rather than send free text it
-  failed to parse, because the app displays this value verbatim and cannot tell a date it does not
-  understand from one it does. A value that reaches the app as anything but a non-empty string SHALL
-  be read as absent.
-- **Structured result**: the tool SHALL return that object as its MCP **structured result**, which
-  means declaring the output schema MCP requires for one. The app reads the structured result and
-  nothing else — a tool that answers with text content alone SHALL be treated as a failed call. MCP
-  carries the same object a second time as serialized text, which the app ignores.
-- **Complete for the channel**: the answer SHALL carry every dataset the channel exposes, because
-  the app cannot ask about a subset. A dataset absent from the answer is uncitable.
-- **Idempotent and read-only**: the app calls the tool once per turn, and repeated calls across
-  turns SHALL be safe and SHALL change nothing on the server.
-
-The app SHALL call the tool **once per turn**, and only on a turn whose delivered report cites at
-least one dataset. It SHALL NOT call the tool once per cited dataset, and SHALL NOT call it for a
-dataset that research touched but the delivered report does not cite.
-
-The app SHALL select from the answer the records whose `id` equals a cited id, and SHALL ignore
-every other record. That the answer is the whole catalogue is a property of the contract rather than
-a cost the report pays per citation: one call carries however many datasets the report cites.
-
-#### Scenario: One call serves every cited dataset
-
-- **WHEN** the delivered report cites four datasets and research queried three more it did not cite
-- **THEN** the app SHALL call the dataset-metadata tool exactly once, with no arguments, and SHALL
-  read the four cited ids out of its answer
-
-#### Scenario: A report citing no dataset makes no call
-
-- **WHEN** the delivered report cites documents only
-- **THEN** the app SHALL NOT call the dataset-metadata tool
-
-#### Scenario: Extra fields in a record are ignored
-
-- **WHEN** a reported record carries a description, a provider and a last-update date beside its
-  `id`, `name` and `url`
-- **THEN** the record SHALL be accepted and only the `id`, the `name` and the `url` SHALL be read
-  from it
-
-#### Scenario: A text-only answer is a failed call
-
-- **WHEN** the named tool returns its catalogue as text content with no structured result
-- **THEN** the call SHALL be treated as failed, every dataset citation SHALL keep its marker text,
-  and the report SHALL be delivered
-
-### Requirement: The dataset-metadata tool is called by the app and stays available to the agent
-
-The app SHALL find the dataset-metadata tool in its server's **full advertised tool list**,
-independently of that server's `tools_to_include` filter, because that filter states what the
-research agent may call rather than what the app may call. A configuration whose filter omits the
-tool SHALL still leave the app able to call it at the citation step.
-
-The dataset-metadata tool SHALL, however, **remain available to the research agent** whenever that
-server's filter would otherwise offer it. This is the one point on which it differs from the
-file-sharing tool, which the app removes from every tool list bound to a model, and the difference
-is deliberate: a catalogue listing is how a research agent discovers which datasets exist before it
-queries one, so removing it would spend the research to buy the citation. Naming a tool here SHALL
-change only who else calls it, never whether the agent still can.
-
-#### Scenario: Naming the tool does not hide it from the agent
-
-- **WHEN** a server names its dataset-metadata tool and that tool passes the server's
-  `tools_to_include` filter
-- **THEN** the tools bound to the research agent SHALL still include it
-
-#### Scenario: A filter that omits it does not hide it from the app
-
-- **WHEN** a server's `tools_to_include` names only its data-query tool, and its dataset-metadata
-  tool is configured
-- **THEN** the app SHALL still be able to call the dataset-metadata tool at the citation step, and
-  the agent SHALL NOT be offered it
 
 ### Requirement: A converted citation is a marker tag in the text and an annotation that names it
 
@@ -1263,3 +947,133 @@ turn.
 - **THEN** no file-sharing call SHALL be made, no metadata read SHALL be made, no annotations SHALL
   be emitted, and the delivered text SHALL carry no marker tag — differing from the settled draft
   only where the link pass removed something
+
+### Requirement: A cited document's title comes from a contracted metadata resource
+
+A citation's labels name the publication the reader is about to open. The app holds no such name of
+its own: the only human-readable string it has per cited document is the file name inside the shared
+URL, which is a storage path segment. It SHALL obtain the name by reading one **MCP resource**, the
+document-metadata resource, and SHALL depend on nothing about that resource beyond the contract
+stated here.
+
+**Both the resource and the key come from configuration.** An MCP server entry SHALL be able to name
+the resource's URI template and the metadata key holding the human title, and the app SHALL read
+exactly what that entry names (**application-config-schema** owns the two fields). There SHALL be no
+default URI, no default key, and no discovery by convention: the app SHALL NOT infer either from what
+a server advertises, from a key's name, or from any naming pattern. A channel's metadata schema is
+its own, so which key carries the title is configuration rather than a constant.
+
+**A document server must name both**, as it must name its file-sharing tool
+(**application-config-schema** owns that rule and what it costs): a document id is internal to the
+server that issued it, so a channel with no metadata resource labels every pill with a number the
+reader cannot place. What stays optional is the **answer** — an id the resource does not know, or a
+document carrying nothing usable under the configured key, costs that citation its title and
+nothing else.
+
+**The contract.** A resource named as a server's document-metadata resource SHALL satisfy all of the
+following. These are requirements on the server, not observations of any one implementation: a named
+resource that breaks any of them SHALL fail the way the delivery-failure requirement below
+prescribes rather than degrade the report.
+
+- **Address**: a resource URI template carrying exactly one placeholder, `{document_ids}`. The app
+  SHALL build the concrete URI by substituting the cited ids joined with commas and nothing else,
+  and SHALL send the identifiers verbatim as the **source-attribution** capability requires.
+- **Output**: one JSON object at the top level, with no wrapper key, mapping each known document id
+  to that document's metadata object. Keys MAY arrive as JSON strings rather than numbers, and the
+  app SHALL accept either.
+- **The title**: the configured key's value within a document's metadata object, when present and a
+  non-empty string. Every other key SHALL be ignored. The app SHALL NOT fall back to another key, and
+  SHALL NOT derive a title from the shared URL or from any part of it.
+- **Partial answers**: an id the resource does not know MAY be absent from the object, and a document
+  present but carrying no usable value under the configured key is equally permitted. Neither SHALL
+  make the read fail, and neither SHALL invalidate the titles that did resolve.
+- **No side effect**: the read SHALL change nothing on the server. This is why it is a resource
+  rather than a tool, and why the app may read it for every turn that delivers a cited report.
+
+The app SHALL read it **once per turn**, asking for **every document id the delivered report
+cites**. A title SHALL NOT label a citation that was not converted, and SHALL NOT be counted among
+the titles resolved (see **logging-policy**).
+
+Asking for every cited id rather than only the resolved ones is what frees this read from the
+file-sharing call's answer, so the two run **together** rather than one after the other and the step
+costs one round trip instead of two.
+
+The constraint on the surplus is deliberately about **use** rather than about disposal. What must be
+observably true is that no title reaches a label or a count it has not earned — not that the app
+forgets the value. The distinction is not pedantry: a title read for a document that resolved no URL
+is still a fact the server reported about a source the report genuinely cites, and the report's
+References section, which this capability does not yet own, must list every source the report cites
+whether or not its metadata resolved. A rule phrased as "discard it" would have to be unwritten to
+build that. The surplus itself is cheap — a few more ids in one URI, a few more entries in one answer
+— and it is paid only on turns where the file-sharing call did not resolve everything.
+
+The resource SHALL NOT be offered to any LLM. It is read by application code at the citation step,
+and an MCP resource does not appear in a tool listing, so nothing has to be filtered out of the
+agent's tools for this to hold.
+
+#### Scenario: One read covers every cited document and its surplus is discarded
+
+- **WHEN** the settled draft cites five documents and the file-sharing tool returned URLs for three
+  of them
+- **THEN** the app SHALL make exactly one document-metadata read, asking for all five ids, and SHALL
+  label citations from the titles of the three that resolved a URL and from no others
+
+#### Scenario: The metadata read does not wait for the file-sharing call
+
+- **WHEN** a turn's citation step resolves documents and datasets
+- **THEN** the document-metadata read SHALL be issued without waiting for the file-sharing call's
+  answer, the ids it asks for being known from the report text alone
+
+#### Scenario: A title for a document that resolved no URL is not shown
+
+- **WHEN** the answer carries a usable title for a document the file-sharing tool returned no URL for
+- **THEN** that document's citations SHALL keep their marker text, no annotation SHALL be emitted for
+  them, and that title SHALL NOT be counted among the titles resolved
+
+#### Scenario: The configured key decides which value is the title
+
+- **WHEN** a document's metadata object carries several string values and the configuration names one
+  key
+- **THEN** the label SHALL be built from that key's value, and no other key SHALL be read as a title
+
+#### Scenario: A document with no usable title keeps the marker label
+
+- **WHEN** the answer omits one requested id, or carries it with the configured key absent, empty, or
+  holding something that is not a string
+- **THEN** that document's citations SHALL still become pills, labelled from the marker, and the other
+  documents' titles SHALL be unaffected
+
+#### Scenario: A channel serving no documents makes no metadata read
+
+- **WHEN** a configuration carries no document server, so nothing names a file-sharing tool or a
+  document-metadata resource
+- **THEN** no metadata read SHALL be made, and the absence SHALL be recorded at DEBUG rather than
+  warned about
+
+#### Scenario: A document server naming no resource is not a configuration at all
+
+- **WHEN** a `generic_rag` server names a file-sharing tool and no document-metadata resource
+- **THEN** the configuration SHALL be rejected (see **application-config-schema**), so no turn is
+  ever served with document citations labelled from their markers by configuration
+
+## REMOVED Requirements
+
+### Requirement: Dataset citations are never converted
+
+**Reason**: The requirement rested on a premise that no longer holds. It stated that a dataset is
+not a file, so there is nothing for the reader's viewer to open and nothing to copy into their
+bucket — which is still true — and concluded that a dataset citation therefore cannot become a pill.
+The conclusion does not follow, because a citation does not have to open a file: an annotation's
+attachment URL may be an absolute web URL, and the client opens such a URL in a new browser tab.
+The dataset server reports a page per dataset, so the address exists, and nothing has to be copied
+anywhere for the reader to reach it. The requirement's own closing sentence named what was missing —
+"what a dataset pill should link to, and where such a link should open, is undecided" — and both are
+now decided.
+
+**Migration**: Replaced by three requirements above: *A dataset citation is converted when its
+dataset resolves a web URL* states the condition and the failure modes, *Cited datasets are named
+and linked through a contracted dataset-metadata tool* states where the name and the URL come from,
+and *The dataset-metadata tool is called by the app and stays available to the agent* states how
+that tool is resolved. A deployment that has not configured a dataset-metadata tool keeps exactly
+the old behaviour — every dataset marker delivered as text — so no configuration change is required
+of anyone who does not want dataset pills.

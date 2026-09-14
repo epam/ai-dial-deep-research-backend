@@ -51,6 +51,8 @@ def _properties() -> ApplicationProperties:
                     "server_type": "generic_rag",
                     "deployment_id": "generic-rag-mcp",
                     "file_sharing_tool": "get_citation_url",
+                    "document_metadata_resource": "documents://metadata/{document_ids}",
+                    "document_title_key": "publication_title",
                 }
             ],
         }
@@ -245,7 +247,9 @@ class _FailingGraph:
 
 def _stub_graph(monkeypatch: MonkeyPatch, graph: Any) -> None:
     async def _no_tools(**_kwargs: Any) -> LoadedMcpTools:
-        return LoadedMcpTools(agent_tools=[], file_sharing_tool=None, client=None)
+        return LoadedMcpTools(
+            agent_tools=[], file_sharing_tool=None, dataset_metadata_tool=None, client=None
+        )
 
     monkeypatch.setattr(runner_module, "load_mcp_tools", _no_tools)
     monkeypatch.setattr(runner_module, "build_research_graph", lambda **_kw: graph)

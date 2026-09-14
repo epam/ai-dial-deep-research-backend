@@ -21,6 +21,7 @@ the delivered report as an `AIMessage`) for the coordinator to persist with the 
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -55,11 +56,18 @@ from dial_deep_research.utils.dial_stages import (
 
 from .citations import (
     Annotation,
+    DatasetSource,
+    cited_dataset_ids,
     cited_document_ids,
     convert_citations,
     find_citation_markers,
     log_citations_resolved,
     remove_hyperlinks,
+)
+from .dataset_metadata import (
+    KIND_DATASET_CALL_FAILED,
+    DatasetMetadataError,
+    read_dataset_sources,
 )
 from .document_metadata import (
     KIND_METADATA_READ_FAILED,
@@ -96,8 +104,9 @@ _FINISH_TOOL = FINISH_TOOL_NAME
 _INITIAL_ACTIVITY = "Starting research"
 
 # The activity stage of the citation step, opened only once that step has work: the file-sharing
-# call copies a document per cited id, which takes long enough that the turn would otherwise
-# look finished while it runs.
+# call copies a document per cited id, and the catalogue read carries a channel's whole dataset
+# list, which together take long enough that the turn would otherwise look finished while they
+# run.
 CITATIONS_ACTIVITY = "Preparing the report's citations"
 
 # The citation step's failure kinds, as its warnings report them. Two more are decided by the
@@ -108,6 +117,9 @@ _KIND_IDS_UNRESOLVED = "ids_unresolved"
 _KIND_LINK_PASS_FAILED = "link_pass_failed"
 _KIND_CONVERSION_FAILED = "conversion_failed"
 _KIND_EMISSION_FAILED = "emission_failed"
+# The dataset tool gets a kind of its own rather than sharing the one above, so a warning says
+# which resolution was misconfigured; the rest of its kinds are named in `dataset_metadata.py`.
+_KIND_DATASET_TOOL_NOT_ADVERTISED = "dataset_tool_not_advertised"
 # Kinds the title read decides are named in `document_metadata.py`, beside the read itself.
 
 # Joins the statuses of one assistant message into a single title. The model is told to send
@@ -128,6 +140,8 @@ class _ReportDelivery(BaseModel):
     documents_requested: int = 0
     documents_resolved: int = 0
     documents_titled: int = 0
+    datasets_requested: int = 0
+    datasets_resolved: int = 0
     markers_left: int = 0
     hyperlinks_removed: int = 0
 
@@ -221,6 +235,8 @@ class ResearchRunner:
             configured_tool_name=properties.file_sharing_tool,
             mcp_client=loaded.client,
             metadata_source=properties.document_metadata,
+            dataset_metadata_tool=loaded.dataset_metadata_tool,
+            configured_dataset_tool_name=properties.dataset_metadata_tool,
             pill_title_max_chars=properties.max_pill_title_chars,
         )
         return self._messages
@@ -232,6 +248,8 @@ class ResearchRunner:
         configured_tool_name: str | None,
         mcp_client: MultiServerMCPClient,
         metadata_source: DocumentMetadataSource | None,
+        dataset_metadata_tool: BaseTool | None,
+        configured_dataset_tool_name: str | None,
         pill_title_max_chars: int | None,
     ) -> None:
         """Post-process the settled report, append it to the choice, and emit its annotations.
@@ -257,6 +275,8 @@ class ResearchRunner:
                 configured_tool_name=configured_tool_name,
                 mcp_client=mcp_client,
                 metadata_source=metadata_source,
+                dataset_metadata_tool=dataset_metadata_tool,
+                configured_dataset_tool_name=configured_dataset_tool_name,
                 pill_title_max_chars=pill_title_max_chars,
             )
         except BaseException:
@@ -276,6 +296,8 @@ class ResearchRunner:
             documents_requested=delivery.documents_requested,
             documents_resolved=delivery.documents_resolved,
             documents_titled=delivery.documents_titled,
+            datasets_requested=delivery.datasets_requested,
+            datasets_resolved=delivery.datasets_resolved,
             annotations=len(delivery.annotations),
             markers_left=delivery.markers_left,
             hyperlinks_removed=delivery.hyperlinks_removed,
@@ -290,6 +312,8 @@ class ResearchRunner:
         configured_tool_name: str | None,
         mcp_client: MultiServerMCPClient,
         metadata_source: DocumentMetadataSource | None,
+        dataset_metadata_tool: BaseTool | None,
+        configured_dataset_tool_name: str | None,
         pill_title_max_chars: int | None,
     ) -> _ReportDelivery:
         """The two deterministic alterations of the settled draft, in their fixed order.
@@ -308,26 +332,52 @@ class ResearchRunner:
         delivery = _ReportDelivery(text=removal.text, hyperlinks_removed=removal.removed)
         try:
             document_ids = cited_document_ids(removal.text)
+            dataset_ids = cited_dataset_ids(removal.text)
             delivery.documents_requested = len(document_ids)
-            # A file-sharing call to make, or edits already applied: either is work worth
-            # announcing. A draft that cites nothing and carried no link leaves the step with
-            # nothing to say, and a stage there would open and close in the same instant.
-            if removal.removed or (file_sharing_tool is not None and document_ids):
+            delivery.datasets_requested = len(dataset_ids)
+            # A resolution to make, or edits already applied: either is work worth announcing. A
+            # draft that cites nothing and carried no link leaves the step with nothing to say,
+            # and a stage there would open and close in the same instant.
+            has_resolution = (file_sharing_tool is not None and document_ids) or (
+                dataset_metadata_tool is not None and dataset_ids
+            )
+            if removal.removed or has_resolution:
                 self._set_activity(CITATIONS_ACTIVITY)
-            document_urls = await self._share_cited_documents(
-                tool=file_sharing_tool,
-                configured_tool_name=configured_tool_name,
-                document_ids=document_ids,
+            # The three resolutions are independent, so the step costs one round trip rather
+            # than three. Each swallows its own failure into an empty mapping, which is why
+            # `gather` needs no `return_exceptions`. The title read asks about every cited
+            # document, which is what frees it from the file-sharing call's answer.
+            document_urls, document_titles, dataset_sources = await asyncio.gather(
+                self._share_cited_documents(
+                    tool=file_sharing_tool,
+                    configured_tool_name=configured_tool_name,
+                    document_ids=document_ids,
+                ),
+                self._read_document_titles(
+                    client=mcp_client, source=metadata_source, document_ids=document_ids
+                ),
+                self._read_dataset_sources(
+                    tool=dataset_metadata_tool,
+                    configured_tool_name=configured_dataset_tool_name,
+                    dataset_ids=dataset_ids,
+                ),
             )
             delivery.documents_resolved = len(document_urls)
-            document_titles = await self._read_document_titles(
-                client=mcp_client, source=metadata_source, document_ids=list(document_urls)
-            )
-            delivery.documents_titled = len(document_titles)
+            delivery.datasets_resolved = len(dataset_sources)
+            # A title for a document that resolved no URL labels nothing: that document's
+            # citations keep their marker text, so there is no pill for the title to reach.
+            # Filtering here is what keeps the titled count bounded by the resolved one.
+            titles_of_resolved = {
+                document_id: title
+                for document_id, title in document_titles.items()
+                if document_id in document_urls
+            }
+            delivery.documents_titled = len(titles_of_resolved)
             converted = convert_citations(
                 removal.text,
                 document_urls=document_urls,
-                document_titles=document_titles,
+                document_titles=titles_of_resolved,
+                dataset_sources=dataset_sources,
                 pill_title_max_chars=pill_title_max_chars,
             )
         except Exception as error:
@@ -398,19 +448,26 @@ class ResearchRunner:
     ) -> dict[int, str]:
         """The publication title of every cited document one could be obtained for.
 
-        Asked only for the documents a URL resolved for, because only those become pills. Empty
-        whenever no title can be obtained — no server names a metadata resource, the read failed,
-        the answer could not be read — and every citation is then labelled from its marker.
+        Asked about **every** cited document rather than only the resolved ones, which is what
+        lets this read run beside the file-sharing call instead of after it: the cited ids are
+        known from the report text alone. The caller then labels from the titles of documents
+        that resolved a URL and from no others, since only those citations become pills.
+
+        Empty whenever no title can be obtained — no server names a metadata resource, the read
+        failed, the answer could not be read — and every citation is then labelled from its
+        marker.
 
         Graded one step below the file-sharing failures throughout, because a title costs a label
-        rather than a link: naming no resource is routine and recorded at DEBUG, and a document
-        the answer simply carries no title for is not a failure at all — the gap between the
-        resolved and titled counts on the step's own event is the record of it.
+        rather than a link: a channel with no document server at all is routine and recorded at
+        DEBUG, and a document the answer simply carries no title for is not a failure either —
+        the gap between the resolved and titled counts on the step's own event is the record of
+        it. A document server must name a metadata resource, so the DEBUG case is a channel that
+        serves no documents rather than one that declined to configure them.
         """
         if source is None:
             logger.debug(
-                "Report citations: no MCP server names a document-metadata resource, so every"
-                " citation is labelled from the marker the report writer wrote"
+                "Report citations: no MCP server serves documents, so every citation is labelled"
+                " from the marker the report writer wrote"
             )
             return {}
         if not document_ids:
@@ -424,6 +481,50 @@ class ResearchRunner:
             return {}
         except Exception as error:
             self._warn_citation_failure(kind=KIND_METADATA_READ_FAILED, error=error)
+            return {}
+
+    async def _read_dataset_sources(
+        self,
+        *,
+        tool: BaseTool | None,
+        configured_tool_name: str | None,
+        dataset_ids: Sequence[str],
+    ) -> dict[str, DatasetSource]:
+        """What the catalogue reports about every cited dataset a pill can be drawn for.
+
+        Empty whenever nothing can be resolved — no dataset server is configured, the named tool
+        is not advertised, the call failed, the answer could not be read — and every dataset
+        citation then keeps its marker text. Only the first of those is routine rather than a
+        fault: a dataset server must name the tool, so an unnamed one means a channel that serves
+        no datasets, and warning on every report it delivers would report its configuration as a
+        failure.
+
+        A dataset the catalogue reports without a page URL is no failure at all — whether a
+        dataset has a portal page is the channel's own data — and the gap between the requested
+        and resolved counts on the step's own event is the whole record of it.
+        """
+        if configured_tool_name is None:
+            logger.debug(
+                "Report citations: no MCP server serves datasets, so every dataset citation is"
+                " delivered as the marker text the report writer wrote"
+            )
+            return {}
+        if tool is None:
+            self._warn_citation_failure(
+                kind=_KIND_DATASET_TOOL_NOT_ADVERTISED, tool_name=configured_tool_name
+            )
+            return {}
+        if not dataset_ids:
+            return {}
+        try:
+            return await read_dataset_sources(tool=tool, dataset_ids=dataset_ids)
+        except DatasetMetadataError as failure:
+            self._warn_citation_failure(kind=failure.kind, tool_name=configured_tool_name)
+            return {}
+        except Exception as error:
+            self._warn_citation_failure(
+                kind=KIND_DATASET_CALL_FAILED, tool_name=configured_tool_name, error=error
+            )
             return {}
 
     def _send_annotations(self, annotations: Sequence[Annotation]) -> None:
@@ -448,12 +549,13 @@ class ResearchRunner:
         unresolved: int | None = None,
         error: BaseException | None = None,
     ) -> None:
-        """One WARNING per citation failure, naming the kind and nothing about a document.
+        """One WARNING per citation failure, naming the kind and nothing about what was cited.
 
         What a record of this step may carry is the failure kind, counts, the configured tool's
         name and the exception's class. A returned URL, any part of one, a file name taken from
-        one and a cited document's id never appear at any level: the mapping is a tool response
-        body, which the content allowlist keeps out of every record.
+        one, a document title, a dataset's name and a cited document's or dataset's id never
+        appear at any level: each answer is a tool or resource response body, which the content
+        allowlist keeps out of every record.
         """
         fields = [f"kind={kind}"]
         if tool_name is not None:

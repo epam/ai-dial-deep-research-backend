@@ -22,26 +22,27 @@ def _connection(client: MultiServerMCPClient, server_name: str) -> Any:
 def _deployment_server(
     server_name: str = "rag",
     deployment_id: str = "generic-rag",
-    server_type: MCPServerType = "generic_rag",
     file_sharing_tool: str | None = "get_citation_url",
 ) -> MCPClientSettings:
-    # A document server must name its file-sharing tool, so the default names a valid one. A
-    # server naming none is a dataset server, which has no files to share.
+    # A document server must name its file-sharing tool and where its titles come from, so the
+    # defaults name valid ones.
     return MCPClientSettings(
         server_name=server_name,
-        server_type=server_type,
+        server_type="generic_rag",
         deployment_id=deployment_id,
         file_sharing_tool=file_sharing_tool,
+        document_metadata_resource="documents://metadata/{document_ids}",
+        document_title_key="publication_title",
     )
 
 
 def _dataset_server(server_name: str = "datasets") -> MCPClientSettings:
-    """A server naming no file-sharing tool, which only a dataset server may do."""
-    return _deployment_server(
+    """A dataset server, which names its dataset-metadata tool and no file-sharing tool."""
+    return MCPClientSettings(
         server_name=server_name,
-        deployment_id="statgpt-mcp",
         server_type="statgpt",
-        file_sharing_tool=None,
+        deployment_id="statgpt-mcp",
+        dataset_metadata_tool="list_datasets",
     )
 
 
@@ -175,6 +176,8 @@ def _file_sharing_server(
         deployment_id="generic-rag",
         tools_to_include=tools_to_include or [],
         file_sharing_tool=tool_name,
+        document_metadata_resource="documents://metadata/{document_ids}",
+        document_title_key="publication_title",
     )
 
 
@@ -252,3 +255,81 @@ async def test_no_configured_tool_leaves_every_tool_with_the_agent(
 
     assert [t.name for t in loaded.agent_tools] == ["search", "share_documents"]
     assert loaded.file_sharing_tool is None
+
+
+def _dataset_metadata_server(
+    tool_name: str = "list_datasets", tools_to_include: list[str] | None = None
+) -> MCPClientSettings:
+    """A dataset server naming the tool the app calls at the citation step."""
+    return MCPClientSettings(
+        server_name="datasets",
+        server_type="statgpt",
+        deployment_id="statgpt-mcp",
+        tools_to_include=tools_to_include or [],
+        dataset_metadata_tool=tool_name,
+    )
+
+
+async def test_naming_the_dataset_metadata_tool_does_not_hide_it_from_the_agent(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A catalogue listing is how the agent discovers which datasets exist."""
+    _patch_get_tools(
+        monkeypatch, {"datasets": [_fake_tool("query_datasets"), _fake_tool("list_datasets")]}
+    )
+
+    loaded = await load_mcp_tools([_dataset_metadata_server()])
+
+    assert [t.name for t in loaded.agent_tools] == ["list_datasets", "query_datasets"]
+    assert loaded.dataset_metadata_tool is not None
+    assert loaded.dataset_metadata_tool.name == "list_datasets"
+
+
+async def test_a_filter_omitting_the_dataset_metadata_tool_still_finds_it_for_the_app(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """`tools_to_include` says what the agent may call, not what the app may call."""
+    _patch_get_tools(
+        monkeypatch, {"datasets": [_fake_tool("query_datasets"), _fake_tool("list_datasets")]}
+    )
+
+    loaded = await load_mcp_tools([_dataset_metadata_server(tools_to_include=["query_datasets"])])
+
+    assert [t.name for t in loaded.agent_tools] == ["query_datasets"]
+    assert loaded.dataset_metadata_tool is not None
+    assert loaded.dataset_metadata_tool.name == "list_datasets"
+
+
+async def test_the_dataset_metadata_tool_keeps_the_agents_error_handling(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """It is the object the agent is offered, so its reader takes failures off the message."""
+    _patch_get_tools(monkeypatch, {"datasets": [_fake_tool("list_datasets")]})
+
+    loaded = await load_mcp_tools([_dataset_metadata_server()])
+
+    assert loaded.dataset_metadata_tool is not None
+    assert loaded.dataset_metadata_tool.handle_tool_error is True
+
+
+async def test_a_configured_dataset_tool_the_server_does_not_advertise_is_reported_as_absent(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    _patch_get_tools(monkeypatch, {"datasets": [_fake_tool("query_datasets")]})
+
+    loaded = await load_mcp_tools([_dataset_metadata_server(tool_name="catalogue")])
+
+    assert loaded.dataset_metadata_tool is None
+    assert [t.name for t in loaded.agent_tools] == ["query_datasets"]
+
+
+async def test_a_channel_serving_no_datasets_has_no_dataset_metadata_tool(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """A dataset server must name the tool, so the app sees none only where none is configured."""
+    _patch_get_tools(monkeypatch, {"rag": [_fake_tool("search"), _fake_tool("share_documents")]})
+
+    loaded = await load_mcp_tools([_file_sharing_server()])
+
+    assert loaded.dataset_metadata_tool is None
+    assert [t.name for t in loaded.agent_tools] == ["search"]

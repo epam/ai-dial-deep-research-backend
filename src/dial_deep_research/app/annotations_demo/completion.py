@@ -70,6 +70,11 @@ class AnnotationsDemoCompletion(ChatCompletion):
             # The demo resolves no titles, so its pills read the marker text — the fallback
             # label, which is a real outcome of the mechanism rather than a case of its own.
             documents_titled=0,
+            # It cites no dataset either: it cites the caller's own attachments and holds no
+            # portal URL, so the only dataset citation it could show is one that fails to
+            # convert, which the unresolved-document case already demonstrates.
+            datasets_requested=0,
+            datasets_resolved=0,
             annotations=len(converted.annotations),
             markers_left=converted.markers_left,
             hyperlinks_removed=without_links.removed,

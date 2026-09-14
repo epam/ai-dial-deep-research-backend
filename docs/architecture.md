@@ -186,38 +186,65 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   research-agent tool calls surface as timed DIAL stages. What reaches the user is that draft after
   the delivery step below, the one permitted transformation between the two.
 - **Report delivery** (`ResearchRunner._deliver_report`, `app/research/citations.py`,
-  `app/research/file_sharing.py`, `app/research/document_metadata.py`): the citation step, run once
+  `app/research/file_sharing.py`, `app/research/document_metadata.py`,
+  `app/research/dataset_metadata.py`): the citation step, run once
   per turn between the graph finishing
   and the report being appended. It makes two alterations to the settled draft, in this order:
   every hyperlink form goes (a link keeps its label, an image is dropped whole, an autolink or bare
   URL is deleted), then each convertible citation marker is replaced by an empty marker tag,
-  `<cit data-id="…"></cit>`. A citation is convertible when the file-sharing tool returned a PDF URL
-  for the document it names, so an unresolved or non-PDF document keeps its `[doc <id>, page <ix>]`
-  text and a `[dataset <id>]` marker always does. Markers standing next to each other, separated
-  only by spaces, commas or semicolons, share one tag and render as one pill. The post-processed
+  `<cit data-id="…"></cit>`. Each kind of citation has its own condition, and both are about
+  whether the reader can open what the pill points at: a `[doc <id>, page <ix>]` marker converts
+  when the file-sharing tool returned a PDF URL for that document, and a `[dataset <urn>]` marker
+  converts when the dataset-metadata tool reported that URN with an absolute `http` or `https`
+  URL. A marker whose condition fails keeps its text exactly as the writer wrote it. Markers
+  standing next to each other, separated
+  only by spaces, commas or semicolons, share one tag and render as one pill, a document and a
+  dataset among them. The post-processed
   text is what is appended **and** what is persisted, so a later turn reads back what the user saw.
   One `custom_content.annotations` array follows the content, one entry per converted citation,
-  each naming its tag's id and carrying the cited page in a zero-size `pdf_bbox` selector. A pill
-  and its popup entry both read `<publication title>, page <ix>`, falling back to the marker's own
-  `doc <id>, page <ix>` for a document no title resolved for. The pill's copy of the title is
+  each naming its tag's id. Every label is a leading part naming the source plus a fixed trailing
+  part, the trailing part appended after any shortening: a document reads
+  `<publication title>, page <ix>`, a dataset reads `<dataset name> dataset`, and a lookup that
+  resolved nothing changes only the leading part — `doc <id>` for a document, the URN for a
+  dataset — so no label says which citations fell back. The pill's copy of the leading part is
   shortened to `max_pill_title_chars` (default 20, null to switch it off) because the client does not trim an
-  overflowing label, with the page appended afterwards so it is never lost; the card keeps the
-  title whole. The
+  overflowing label; the card keeps it whole. One label that is never
+  shortened is an unresolved document's, `doc <id>, page <ix>` being short by construction. A
+  document annotation carries the cited page in a zero-size `pdf_bbox` selector, an
+  `application/pdf` attachment type and no `body.quote`; a dataset annotation carries no selector,
+  a `text/html` type — which is what makes the client's card offer "open in browser" rather than a
+  download — and a `body.quote` listing `* URN: <urn>` and, when the catalogue reported one,
+  `* Last update: <date>`. The payload is dumped with `exclude_none=True`, so a field that does not
+  apply is absent rather than null. No label carries a URL: a dataset's page is reached by
+  clicking the pill and then the card's open-in-browser action, both of which belong to the client.
+  The step's three resolutions are issued together in one `asyncio.gather`, each failing
+  independently into an empty mapping, so the step costs one round trip. The
   titles come from one MCP resource read per turn, at the URI named by
   `mcp_servers[].document_metadata_resource` with the cited ids substituted, taking the value under
-  `mcp_servers[].document_title_key`. Both fields are optional, and the read asks only for the
-  documents a URL came back for, since only those become pills. Its failures are graded one step
+  `mcp_servers[].document_title_key`. A `generic_rag` server must name both, and the read asks about
+  every cited document — which is what frees it from the file-sharing answer — while only the titles
+  of documents that resolved a URL reach a label or the titled count. Its failures are graded one step
   below the file-sharing ones because a title costs a label rather than a link: naming no resource
   is DEBUG, a failed or unreadable read is one WARNING, and a document whose metadata simply
   carries no title is recorded only as the gap between the resolved and titled counts. The
   document URLs come from one call per turn to the tool named by `mcp_servers[].file_sharing_tool`,
   invoked tool-call-shaped so its structured result is reachable, and with the agent tools' error
-  handling cleared so a failure reaches the app instead of arriving as result text. An instance
-  naming no tool converts nothing and records that at DEBUG; every other failure — a tool the
+  handling cleared so a failure reaches the app instead of arriving as result text. The dataset
+  names, page addresses and last-update dates come from one call per turn to the tool named by
+  `mcp_servers[].dataset_metadata_tool`, made with no arguments and answered with the channel's
+  whole catalogue, from which the app selects the cited URNs by exact string match. A `statgpt`
+  server must name that tool and only a `statgpt` server may, and it **stays in the research
+  agent's tool list**, because a catalogue listing is how the agent discovers which datasets exist;
+  its error handling therefore stays the agent's, and the reader takes a server error off the
+  returned message's `status`. Each metadata surface is required of the server type whose citation
+  ids it resolves, so a channel that resolves none of a kind is one that configures no server of
+  that kind: it converts nothing of that kind and records the absence at DEBUG. Every other failure — a tool the
   server does not advertise, a failed call, an unreadable answer, an id the answer omitted, and a
   failure of the step's own passes — is one WARNING naming the kind, and none of them can fail the
-  turn or withhold the report. Every record of the step carries counts and never a URL, a file name
-  or a document id.
+  turn or withhold the report. A cited dataset the catalogue reports without a page URL is no
+  failure at all, and reads only as the gap between the requested and resolved dataset counts.
+  Every record of the step carries counts and never a URL, a file name,
+  a document title, a dataset name, or a cited document's or dataset's id.
 - **Report structure**: `default_report_structure` (an application property) — an ordered list of
   `{name, description, protected, references_section}` sections, Overview → Key Findings →
   Detailed Analysis → Conclusion → References by default. Every section is rendered as a `##`
