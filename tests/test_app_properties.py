@@ -33,6 +33,8 @@ VALID_PROPERTIES: dict = {
             "server_type": "generic_rag",
             "deployment_id": "generic-rag-mcp",
             "file_sharing_tool": "get_citation_url",
+            "document_metadata_resource": "documents://metadata/{document_ids}",
+            "document_title_key": "publication_title",
         }
     ],
 }
@@ -281,8 +283,15 @@ def test_one_server_of_each_type_is_accepted() -> None:
                 "server_type": "generic_rag",
                 "deployment_id": "a",
                 "file_sharing_tool": "get_citation_url",
+                "document_metadata_resource": "documents://metadata/{document_ids}",
+                "document_title_key": "publication_title",
             },
-            {"server_name": "datasets", "server_type": "statgpt", "deployment_id": "b"},
+            {
+                "server_name": "datasets",
+                "server_type": "statgpt",
+                "deployment_id": "b",
+                "dataset_metadata_tool": "list_datasets",
+            },
         ],
     }
     properties = ApplicationProperties.model_validate(data)
@@ -302,12 +311,16 @@ def test_two_servers_of_one_type_are_rejected() -> None:
                 "server_type": "generic_rag",
                 "deployment_id": "a",
                 "file_sharing_tool": "get_citation_url",
+                "document_metadata_resource": "documents://metadata/{document_ids}",
+                "document_title_key": "publication_title",
             },
             {
                 "server_name": "rag-b",
                 "server_type": "generic_rag",
                 "deployment_id": "b",
                 "file_sharing_tool": "get_citation_url",
+                "document_metadata_resource": "documents://metadata/{document_ids}",
+                "document_title_key": "publication_title",
             },
         ],
     }
@@ -320,13 +333,23 @@ def test_two_servers_of_one_type_are_rejected() -> None:
 
 
 def test_two_dataset_servers_are_rejected_too() -> None:
-    """Dataset ids are not converted into pills today, but nothing keeps two servers from
-    shipping the same one, so the same rule holds for them."""
+    """A dataset id is resolved back against the configured dataset server, so two of them
+    shipping the same id would let a pill open the wrong dataset's page."""
     data = {
         **VALID_PROPERTIES,
         "mcp_servers": [
-            {"server_name": "stat-a", "server_type": "statgpt", "deployment_id": "a"},
-            {"server_name": "stat-b", "server_type": "statgpt", "deployment_id": "b"},
+            {
+                "server_name": "stat-a",
+                "server_type": "statgpt",
+                "deployment_id": "a",
+                "dataset_metadata_tool": "list_datasets",
+            },
+            {
+                "server_name": "stat-b",
+                "server_type": "statgpt",
+                "deployment_id": "b",
+                "dataset_metadata_tool": "list_datasets",
+            },
         ],
     }
     with pytest.raises(ValidationError) as excinfo:
@@ -346,7 +369,12 @@ def test_a_document_server_must_name_its_file_sharing_tool() -> None:
 def test_a_dataset_server_may_leave_the_file_sharing_tool_unset() -> None:
     """A dataset is not a file, so there is nothing for it to share."""
     server = MCPClientSettings.model_validate(
-        {"server_name": "datasets", "server_type": "statgpt", "deployment_id": "x"}
+        {
+            "server_name": "datasets",
+            "server_type": "statgpt",
+            "deployment_id": "x",
+            "dataset_metadata_tool": "list_datasets",
+        }
     )
     assert server.file_sharing_tool is None
 
@@ -367,8 +395,15 @@ def test_one_server_may_name_a_file_sharing_tool() -> None:
                 "server_type": "generic_rag",
                 "deployment_id": "a",
                 "file_sharing_tool": "share_documents",
+                "document_metadata_resource": "documents://metadata/{document_ids}",
+                "document_title_key": "publication_title",
             },
-            {"server_name": "datasets", "server_type": "statgpt", "deployment_id": "b"},
+            {
+                "server_name": "datasets",
+                "server_type": "statgpt",
+                "deployment_id": "b",
+                "dataset_metadata_tool": "list_datasets",
+            },
         ],
     }
     properties = ApplicationProperties.model_validate(data)
@@ -380,7 +415,12 @@ def test_no_server_naming_one_switches_inline_citations_off() -> None:
     data = {
         **VALID_PROPERTIES,
         "mcp_servers": [
-            {"server_name": "datasets", "server_type": "statgpt", "deployment_id": "a"}
+            {
+                "server_name": "datasets",
+                "server_type": "statgpt",
+                "deployment_id": "a",
+                "dataset_metadata_tool": "list_datasets",
+            }
         ],
     }
     assert ApplicationProperties.model_validate(data).file_sharing_tool is None
@@ -417,6 +457,8 @@ def test_no_configuration_can_name_two_file_sharing_tools() -> None:
                 "server_type": "generic_rag",
                 "deployment_id": "a",
                 "file_sharing_tool": "get_citation_url",
+                "document_metadata_resource": "documents://metadata/{document_ids}",
+                "document_title_key": "publication_title",
             },
             {
                 "server_name": "datasets",
@@ -439,8 +481,15 @@ def test_duplicate_server_names_are_rejected() -> None:
                 "server_type": "generic_rag",
                 "deployment_id": "a",
                 "file_sharing_tool": "get_citation_url",
+                "document_metadata_resource": "documents://metadata/{document_ids}",
+                "document_title_key": "publication_title",
             },
-            {"server_name": "rag", "server_type": "statgpt", "deployment_id": "b"},
+            {
+                "server_name": "rag",
+                "server_type": "statgpt",
+                "deployment_id": "b",
+                "dataset_metadata_tool": "list_datasets",
+            },
         ],
     }
     with pytest.raises(ValidationError) as excinfo:
@@ -455,6 +504,8 @@ def test_deployment_mode_server_loads() -> None:
             "server_type": "generic_rag",
             "deployment_id": "generic-rag-mcp",
             "file_sharing_tool": "get_citation_url",
+            "document_metadata_resource": "documents://metadata/{document_ids}",
+            "document_title_key": "publication_title",
         }
     )
     assert server.connection is None
@@ -470,6 +521,8 @@ def test_direct_mode_server_loads(direct_mode: None) -> None:
             "connection": "$env:{MY_MCP_CONN}",
             "tools_to_include": ["search_docs"],
             "file_sharing_tool": "get_citation_url",
+            "document_metadata_resource": "documents://metadata/{document_ids}",
+            "document_title_key": "publication_title",
         }
     )
     bundle = server.direct_connection
@@ -630,6 +683,7 @@ def _document_server(**overrides: object) -> dict[str, object]:
         "server_type": "generic_rag",
         "deployment_id": "a",
         "file_sharing_tool": "get_citation_url",
+        **_TITLE_SOURCE,
         **overrides,
     }
 
@@ -643,16 +697,34 @@ def test_a_document_server_may_name_where_its_titles_come_from() -> None:
     assert source.title_key == "publication_title"
 
 
-def test_a_document_server_may_name_no_title_source() -> None:
-    """Optional where the file-sharing tool is required: a missing title costs a label, not a link."""
-    assert MCPClientSettings.model_validate(_document_server()).document_metadata is None
+def test_a_document_server_naming_no_title_source_is_rejected() -> None:
+    """A document id means nothing outside its server, so a pill labelled from one names
+    nothing the reader can place."""
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "deployment_id": "a",
+                "file_sharing_tool": "get_citation_url",
+            }
+        )
+    assert "must name its document_metadata_resource and document_title_key" in str(excinfo.value)
 
 
 @pytest.mark.parametrize("field", ["document_metadata_resource", "document_title_key"])
 def test_one_title_field_without_the_other_is_rejected(field: str) -> None:
-    """Neither works alone, so a half-configured pair fails validation rather than resolving nothing."""
+    """A half-configured pair gets an error of its own: a URI with no key names nothing to take."""
     with pytest.raises(ValidationError) as excinfo:
-        MCPClientSettings.model_validate(_document_server(**{field: _TITLE_SOURCE[field]}))
+        MCPClientSettings.model_validate(
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "deployment_id": "a",
+                "file_sharing_tool": "get_citation_url",
+                field: _TITLE_SOURCE[field],
+            }
+        )
     assert "set together or not at all" in str(excinfo.value)
 
 
@@ -692,7 +764,12 @@ def test_properties_expose_the_one_configured_title_source() -> None:
         **VALID_PROPERTIES,
         "mcp_servers": [
             _document_server(**_TITLE_SOURCE),
-            {"server_name": "datasets", "server_type": "statgpt", "deployment_id": "b"},
+            {
+                "server_name": "datasets",
+                "server_type": "statgpt",
+                "deployment_id": "b",
+                "dataset_metadata_tool": "list_datasets",
+            },
         ],
     }
     source = ApplicationProperties.model_validate(data).document_metadata
@@ -700,8 +777,9 @@ def test_properties_expose_the_one_configured_title_source() -> None:
     assert source.title_key == "publication_title"
 
 
-def test_properties_expose_no_title_source_when_none_is_configured() -> None:
-    data = {**VALID_PROPERTIES, "mcp_servers": [_document_server()]}
+def test_properties_expose_no_title_source_when_no_document_server_is_configured() -> None:
+    """A document server must name one, so `None` means this channel serves no documents."""
+    data = {**VALID_PROPERTIES, "mcp_servers": [_dataset_server()]}
     assert ApplicationProperties.model_validate(data).document_metadata is None
 
 
@@ -725,3 +803,56 @@ def test_a_pill_title_budget_too_small_to_be_useful_is_rejected() -> None:
     """Below the floor a shortened title is an ellipsis and a letter or two."""
     with pytest.raises(ValidationError):
         ApplicationProperties.model_validate({**VALID_PROPERTIES, "max_pill_title_chars": 3})
+
+
+# --- the dataset-metadata tool ------------------------------------------------------------------
+
+
+def _dataset_server(**overrides: object) -> dict[str, object]:
+    return {
+        "server_name": "datasets",
+        "server_type": "statgpt",
+        "deployment_id": "b",
+        "dataset_metadata_tool": "list_datasets",
+        **overrides,
+    }
+
+
+def test_a_dataset_server_may_name_its_dataset_metadata_tool() -> None:
+    server = MCPClientSettings.model_validate(
+        _dataset_server(dataset_metadata_tool="list_datasets")
+    )
+    assert server.dataset_metadata_tool == "list_datasets"
+
+
+def test_a_dataset_server_naming_no_dataset_metadata_tool_is_rejected() -> None:
+    """Without the tool every dataset citation ships as a bare URN, which opens nothing."""
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(
+            {"server_name": "datasets", "server_type": "statgpt", "deployment_id": "b"}
+        )
+    assert "must name its dataset_metadata_tool" in str(excinfo.value)
+
+
+def test_only_a_dataset_server_may_name_a_dataset_metadata_tool() -> None:
+    """A document server serves no datasets, so a tool named there would never be called."""
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(_document_server(dataset_metadata_tool="list_datasets"))
+    assert "only a statgpt server may set dataset_metadata_tool" in str(excinfo.value)
+
+
+def test_properties_expose_the_one_configured_dataset_metadata_tool() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "mcp_servers": [
+            _document_server(),
+            _dataset_server(dataset_metadata_tool="list_datasets"),
+        ],
+    }
+    assert ApplicationProperties.model_validate(data).dataset_metadata_tool == "list_datasets"
+
+
+def test_properties_expose_no_dataset_metadata_tool_when_no_dataset_server_is_configured() -> None:
+    """A dataset server must name one, so `None` means this channel serves no datasets."""
+    data = {**VALID_PROPERTIES, "mcp_servers": [_document_server()]}
+    assert ApplicationProperties.model_validate(data).dataset_metadata_tool is None

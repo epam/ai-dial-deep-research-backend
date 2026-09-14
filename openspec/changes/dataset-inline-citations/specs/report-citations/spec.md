@@ -96,11 +96,15 @@ most one dataset server may be configured, so at most one configured server name
 tool — which is what makes asking that server about an id correct, since a `[dataset <id>]` marker
 names no server.
 
-Unlike the file-sharing tool, which a document server **must** name, naming this one is
-**optional**. A dataset server earns its place in a deployment through the data it answers questions
-with, and a channel may expose no catalogue tool at all; refusing that configuration would reject a
-working research deployment in order to protect a label. An instance that names none converts no
-dataset citation and delivers every dataset marker as text.
+A dataset server **must** name one, exactly as a document server must name its file-sharing
+tool, and for the same reason: the tool is the only thing that turns a cited URN into a name and a
+page the reader can open, so a dataset server without it serves datasets that cannot be cited. The
+rule lives in **application-config-schema**, which also records what it costs — a channel whose
+dataset server advertises no catalogue tool cannot be configured.
+
+A channel that configures **no dataset server at all** remains ordinary: nothing names a
+dataset-metadata tool, no call is made, and a dataset marker in a delivered report keeps its text.
+That is the case recorded at DEBUG rather than warned about on every turn (see **logging-policy**).
 
 **The contract.** A tool named as a server's dataset-metadata tool SHALL satisfy all of the
 following. These are requirements on the server, not observations of any one implementation: a named
@@ -813,7 +817,7 @@ exactly as the file-sharing failures are, for the same reason: it is the one res
 dataset citation convertible. On any of the following the app SHALL deliver the report with every
 dataset marker left as text, and SHALL convert whatever document citations it otherwise would:
 
-- no configured dataset-metadata tool;
+- no dataset server configured, and so no dataset-metadata tool;
 - the configured tool is absent from the server's advertised tools;
 - the tool call raises, times out, or reports an error;
 - the tool returns no structured result;
@@ -821,25 +825,26 @@ dataset marker left as text, and SHALL convert whatever document citations it ot
 - a cited dataset id is missing from an otherwise valid answer, or its record carries no usable URL.
 
 **No configured dataset-metadata tool is not a failure** and SHALL be recorded at DEBUG, for the
-reason the absent file-sharing tool is: naming the tool is optional, so an instance that names none
-would otherwise warn on every report it delivers. The other five SHALL each be a WARNING. A dataset
-whose record carries **no URL** is the one member of that list which is **not** a fault of the
-server: whether a dataset has a portal page is the channel's own data, so it SHALL be recorded at
-DEBUG and read from the gap between the requested and resolved dataset counts on the step's own
-event (see **logging-policy**).
+reason the absent file-sharing tool is: a dataset server must name the tool, so only a deployment
+with no dataset server can be configured that way, and such a channel cites no dataset — warning on
+every report it delivers would report its configuration as a fault. The other five SHALL each be a
+WARNING. A dataset whose record carries **no URL** is the one member of that list which is **not** a
+fault of the server: whether a dataset has a portal page is the channel's own data, so it SHALL be
+recorded at DEBUG and read from the gap between the requested and resolved dataset counts on the
+step's own event (see **logging-policy**).
 
 **A failure of the document-metadata read costs a label and never a pill**, so it is graded one step
 lower throughout. On any of the following the app SHALL convert every citation it otherwise would,
 labelling from the marker whatever it could not label from a title:
 
-- no configured document-metadata resource, or no configured title key;
+- no document server configured, and so no document-metadata resource;
 - the read raises, times out, or reports an error;
 - the answer cannot be read as an id-to-metadata object;
 - a requested id is absent from the answer, or carries no usable value under the configured key.
 
 **No configured resource is not a failure** and SHALL be recorded at DEBUG, for the same reason the
-absent file-sharing tool is: naming the resource is optional, so an instance that names none would
-otherwise warn on every report it delivers. The read raising and an unreadable answer SHALL each be a
+absent file-sharing tool is: a document server must name the resource, so only a deployment with no
+document server can be configured that way, and it has no document citations to label. The read raising and an unreadable answer SHALL each be a
 WARNING, both being misconfiguration or a server in breach of its contract. **A document that simply
 has no title SHALL NOT warn**: a channel's metadata is its own, a missing key there is data variance
 rather than a fault, and it costs a plainer label rather than anything the reader loses. How many
@@ -958,10 +963,12 @@ default URI, no default key, and no discovery by convention: the app SHALL NOT i
 a server advertises, from a key's name, or from any naming pattern. A channel's metadata schema is
 its own, so which key carries the title is configuration rather than a constant.
 
-**Naming them is optional**, which is what separates this contract from the file-sharing one. A
-document server that names no resource delivers pills labelled from the marker, which is a plainer
-label rather than a broken link, and a channel whose metadata genuinely carries no title has nothing
-to name.
+**A document server must name both**, as it must name its file-sharing tool
+(**application-config-schema** owns that rule and what it costs): a document id is internal to the
+server that issued it, so a channel with no metadata resource labels every pill with a number the
+reader cannot place. What stays optional is the **answer** — an id the resource does not know, or a
+document carrying nothing usable under the configured key, costs that citation its title and
+nothing else.
 
 **The contract.** A resource named as a server's document-metadata resource SHALL satisfy all of the
 following. These are requirements on the server, not observations of any one implementation: a named
@@ -1036,11 +1043,18 @@ agent's tools for this to hold.
 - **THEN** that document's citations SHALL still become pills, labelled from the marker, and the other
   documents' titles SHALL be unaffected
 
-#### Scenario: An instance naming no resource still converts its citations
+#### Scenario: A channel serving no documents makes no metadata read
 
-- **WHEN** a configured document server names a file-sharing tool but no document-metadata resource
-- **THEN** no metadata read SHALL be made, every convertible citation SHALL still become a pill, and
-  every label SHALL read as the marker did
+- **WHEN** a configuration carries no document server, so nothing names a file-sharing tool or a
+  document-metadata resource
+- **THEN** no metadata read SHALL be made, and the absence SHALL be recorded at DEBUG rather than
+  warned about
+
+#### Scenario: A document server naming no resource is not a configuration at all
+
+- **WHEN** a `generic_rag` server names a file-sharing tool and no document-metadata resource
+- **THEN** the configuration SHALL be rejected (see **application-config-schema**), so no turn is
+  ever served with document citations labelled from their markers by configuration
 
 ## REMOVED Requirements
 

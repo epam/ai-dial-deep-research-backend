@@ -137,7 +137,7 @@
         }
       ],
       "default": 20,
-      "description": "How much of a cited document's title the inline citation pill shows, the ellipsis counted within it. A pill is a narrow element in the middle of a sentence and also carries the client's own count marker when it stands for several sources, so a long publication title runs off it; the client does not shorten the label itself. The cited page is appended after the shortening and is never lost to a long title, and the citation card keeps the whole title regardless of this value. Raise it if the pills read too short in your client, or set it to null to show every title whole.",
+      "description": "How much of a citation pill's leading part it shows — a cited document's publication title, or a cited dataset's name, or that dataset's identifier where no name resolved — the ellipsis counted within it. A pill is a narrow element in the middle of a sentence and also carries the client's own count marker when it stands for several sources, so a long name runs off it; the client does not shorten the label itself. What follows the leading part — a document's cited page, the word dataset — is appended after the shortening and is never lost to a long name, and the citation card keeps the leading part whole regardless of this value. Raise it if the pills read too short in your client, or set it to null to show every label whole.",
       "title": "Max Pill Title Chars",
       "dial:meta": {
         "dial:propertyKind": "server",
@@ -223,7 +223,7 @@
               }
             ],
             "default": null,
-            "description": "Name of this server's MCP resource serving document metadata, written as a URI template with a {document_ids} placeholder — for example documents://metadata/{document_ids}. The application reads it when it delivers a report, substituting the cited document ids joined with commas, and takes each document's title from it so a citation pill names the publication instead of its id. Set it together with document_title_key, which says where the title sits in the answer. Only a generic_rag server may set it. Leaving both unset is valid and costs only the labels: every citation still becomes a pill, reading doc <id>, page <ix>.",
+            "description": "Name of this server's MCP resource serving document metadata, written as a URI template with a {document_ids} placeholder — for example documents://metadata/{document_ids}. The application reads it when it delivers a report, substituting the cited document ids joined with commas, and takes each document's title from it so a citation pill names the publication instead of its id. Set it together with document_title_key, which says where the title sits in the answer. Required on a generic_rag server, and only a generic_rag server may set it: a document id means nothing outside the server that issued it, so a channel without this resource labels every pill with a number the reader cannot place.",
             "title": "Document Metadata Resource"
           },
           "document_title_key": {
@@ -236,8 +236,21 @@
               }
             ],
             "default": null,
-            "description": "Key holding a document's human title in this channel's metadata, for example publication_title. The metadata resource answers with each document's metadata under the channel's own key names, so this says which of them to read. A document whose metadata has no usable value under this key keeps the doc <id>, page <ix> label. Set it together with document_metadata_resource; only a generic_rag server may set it.",
+            "description": "Key holding a document's human title in this channel's metadata, for example publication_title. The metadata resource answers with each document's metadata under the channel's own key names, so this says which of them to read. A document whose metadata has no usable value under this key keeps the doc <id>, page <ix> label. Set it together with document_metadata_resource, which is required on a generic_rag server; only a generic_rag server may set either.",
             "title": "Document Title Key"
+          },
+          "dataset_metadata_tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Name of this server's tool listing the datasets this channel exposes. The application calls it when it delivers a report, to learn a cited dataset's name and the address of its page, so a dataset citation becomes a pill that opens that page. The tool takes no arguments and answers with the whole catalogue; the application selects the datasets the report cites. It stays available to the research agent, which uses the same listing to discover which datasets exist, so naming it here only adds a caller. Required on a statgpt server, and only a statgpt server may set it: without it every dataset citation is delivered as a bare URN in square brackets, which names nothing the reader can open.",
+            "title": "Dataset Metadata Tool"
           }
         },
         "required": [

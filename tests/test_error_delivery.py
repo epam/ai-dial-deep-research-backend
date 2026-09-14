@@ -29,6 +29,8 @@ VALID_PROPERTIES: dict = {
             "server_type": "generic_rag",
             "deployment_id": "generic-rag-mcp",
             "file_sharing_tool": "get_citation_url",
+            "document_metadata_resource": "documents://metadata/{document_ids}",
+            "document_title_key": "publication_title",
         }
     ],
 }

@@ -95,19 +95,19 @@ recorded at DEBUG (see **report-citations**).
 A **dataset that could not be resolved** is recorded the way an unresolved document is, because it
 costs the same thing — a pill. The dataset-metadata call raising, an answer carrying no structured
 result, and an answer that cannot be read as a list of dataset records SHALL each be one WARNING
-naming the failure kind, beside the (8c) event. An instance naming **no** dataset-metadata tool SHALL
-be recorded at DEBUG, for the reason the absent file-sharing tool is: naming it is optional
-configuration, so an instance without one would otherwise warn on every report it delivers. A
+naming the failure kind, beside the (8c) event. A channel that configures **no dataset server**, and so no
+dataset-metadata tool, SHALL be recorded at DEBUG, for the reason the absent file-sharing tool is:
+such a channel cites no dataset, so warning on every report it delivers would report its
+configuration as a fault. A
 **dataset the catalogue reports without a page URL** SHALL NOT warn at all — whether a dataset has a
 portal page is the channel's own data rather than a fault — and the gap between the requested and
 resolved dataset counts on the (8c) event is the whole record of it.
 
 A **title that could not be resolved** is graded one step lower throughout, because it costs a label
 and never a pill. The document-metadata read raising, and an answer that cannot be read as an
-id-to-metadata object, SHALL each be one WARNING naming the failure kind, beside the (8c) event. An
-instance naming no document-metadata resource SHALL be recorded at DEBUG, for the reason the absent
-file-sharing tool is: naming the resource is optional configuration, so an instance without one would
-otherwise warn on every report it delivers. A **document that simply carries no title** SHALL NOT
+id-to-metadata object, SHALL each be one WARNING naming the failure kind, beside the (8c) event. A
+channel that configures no document server, and so no document-metadata resource, SHALL be recorded
+at DEBUG, for the reason the absent file-sharing tool is: it has no document citations to label. A **document that simply carries no title** SHALL NOT
 warn at all — a channel's metadata schema is its own and a key missing there is data variance rather
 than a fault — and the gap between the resolved count and the titled count on the (8c) event is the
 whole record of it.
@@ -212,10 +212,10 @@ every record, and how many ids a response omitted says everything a reader of th
 - **WHEN** three documents resolve URLs and the metadata answer carries a usable title for two of them
 - **THEN** the (8c) event SHALL state three resolved and two titled, and no WARNING SHALL be emitted for the third, whose citations keep their marker label
 
-#### Scenario: An instance naming no metadata resource does not warn on every turn
+#### Scenario: A channel serving no documents does not warn on every turn
 
-- **WHEN** an instance whose document server names a file-sharing tool but no document-metadata resource delivers a report citing two documents
-- **THEN** the (8c) event SHALL fire with two resolved documents and zero titled, the record naming the absent configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
+- **WHEN** an instance configured with no document server — and so with no document-metadata resource — delivers a report carrying dataset citations
+- **THEN** the (8c) event SHALL fire with zero documents requested and zero titled, the record naming the absent configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
 
 #### Scenario: A link removed from an unreviewed draft is still visible in the logs
 
@@ -230,10 +230,10 @@ every record, and how many ids a response omitted says everything a reader of th
 - **THEN** the (8c) event SHALL state three dataset ids requested and two resolved, beside the
   document counts, and SHALL carry no dataset name, no page URL and no dataset id
 
-#### Scenario: An instance with no dataset-metadata tool does not warn on every turn
+#### Scenario: A channel serving no datasets does not warn on every turn
 
-- **WHEN** an instance whose dataset server names no dataset-metadata tool delivers a report
-  carrying dataset citation markers
+- **WHEN** an instance configured with no dataset server — and so with no dataset-metadata tool —
+  delivers a report that carries a dataset citation marker all the same
 - **THEN** the (8c) event SHALL fire with zero datasets resolved, the record naming the absent
   configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
 

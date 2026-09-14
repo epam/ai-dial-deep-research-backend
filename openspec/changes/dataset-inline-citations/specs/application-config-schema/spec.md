@@ -14,16 +14,19 @@ ids would make a citation ambiguous — the same reason `file_sharing_tool` belo
 server alone. Since at most one server of each type may be configured, at most one configured server
 names a dataset-metadata tool, and that is a consequence of the two rules rather than a third check.
 
-**The field is optional**, and this is where it departs from `file_sharing_tool`, which a
-`generic_rag` server must name. The two are asymmetric because what they are worth to a deployment
-is asymmetric. A document server exists in this application to serve documents that get cited by id
-and page, and without file sharing every one of those citations is delivered as text, which is a
-broken server rather than a choice. A dataset server earns its place by answering research questions
-through its data-query tool, and a channel may expose no catalogue tool at all; rejecting such a
-configuration would refuse a working research deployment in order to protect a label. An instance
-that names no dataset-metadata tool delivers every dataset marker as text and is a supported,
-ordinary deployment — which is why that case is recorded at DEBUG rather than warned about on every
-turn (see **logging-policy**).
+**A `statgpt` server SHALL name it**, and a configuration where one does not SHALL be rejected
+with a validation error naming that server. The rule is the `file_sharing_tool` rule, for the same
+reason: a citation carries an identifier that means something only inside the server that issued
+it, and the tool is the only thing that turns that identifier into a name and a page the reader can
+open. Without it every dataset citation reaches the reader as a bare URN in square brackets, which
+is a server that cannot be cited rather than a deployment choice.
+
+The cost of this rule is paid at configuration rather than at delivery, and it is real: a channel
+whose dataset server advertises no catalogue tool cannot be configured at all, and an existing
+channel that has not set the field fails validation until it does — which the **application-config-schema**
+rule on invalid properties delivers to the user as "application not configured". That is the
+intended trade: a dataset server is in a deployment to have its data cited, and a citation the
+reader cannot follow is not worth serving silently.
 
 Configuration is the only way the app learns the name: there SHALL be no default value and no
 fallback that guesses a tool from what the server advertises, so a server whose tool is called
@@ -34,9 +37,9 @@ a validation error, for the reason the file-sharing tool's does: the advertised 
 per turn, and the **report-citations** rule that no citation failure costs the report continues to
 govern it.
 
-Because the field is optional, `dial_conf/core/applications-template.json` SHALL NOT carry it: that
-template sets exactly the properties a channel is required to set, and a value copied into it would
-pin every seeded channel to whatever tool name was current when it was seeded.
+`dial_conf/core/applications-template.json` SHALL set, on every server entry it carries, exactly
+what that entry's `server_type` is required to set — so a dataset server entry there names a
+dataset-metadata tool, and a contributor's seeded channel validates as it stands.
 
 #### Scenario: A statgpt server names the tool
 
@@ -49,17 +52,24 @@ pin every seeded channel to whatever tool name was current when it was seeded.
 - **THEN** validation SHALL fail with an error naming that server and stating that only a `statgpt`
   server may name a dataset-metadata tool
 
-#### Scenario: A statgpt server without the field is valid
+#### Scenario: A statgpt server without the field is rejected
 
 - **WHEN** a `statgpt` server entry sets no `dataset_metadata_tool`
-- **THEN** validation SHALL pass, and every dataset citation in every report SHALL be delivered as
-  the marker text the report writer wrote
+- **THEN** validation SHALL fail with an error naming that server and saying that a dataset server
+  must name the tool, because its datasets are cited by URN and nothing else turns a URN into a
+  page the reader can open
 
-#### Scenario: The committed template stays free of the field
+#### Scenario: A channel serving no datasets needs no such tool
 
-- **WHEN** the application-properties model gains this field
-- **THEN** `dial_conf/core/applications-template.json` SHALL remain unchanged, the field being
-  optional
+- **WHEN** a configuration carries a `generic_rag` server and no `statgpt` server
+- **THEN** validation SHALL pass, no dataset-metadata tool SHALL be configured, and a dataset
+  marker in a delivered report SHALL keep its text
+
+#### Scenario: The committed template names what each server type requires
+
+- **WHEN** `dial_conf/core/applications-template.json` carries a server entry
+- **THEN** that entry SHALL set every field its `server_type` is required to set, so a channel
+  seeded from the template validates without further editing
 
 ## MODIFIED Requirements
 
@@ -121,7 +131,8 @@ the server is. Neither reaches a model or appears in a citation.
 #### Scenario: Two dataset servers are rejected by the same rule
 
 - **WHEN** `ApplicationProperties.model_validate` receives two `statgpt` servers
-- **THEN** validation SHALL raise, even though no dataset citation is converted today
+- **THEN** validation SHALL raise, a dataset id being resolved back against the configured
+  dataset server, so two of them would let a pill open the wrong dataset's page
 
 #### Scenario: The generated schema carries the type as an enumeration
 
@@ -129,6 +140,94 @@ the server is. Neither reaches a model or appears in a citation.
 - **THEN** the MCP server entry SHALL carry `server_type` as a required string enumeration of the
   supported values, inlined rather than referenced through `$defs`, and the committed schema
   artifact SHALL be regenerated to match
+
+### Requirement: MCP server declares its document-metadata resource and title key
+
+`MCPClientSettings` SHALL expose two string fields, `document_metadata_resource` and
+`document_title_key`, naming the MCP resource this server serves document metadata from and the
+metadata key that holds a document's human title in this channel's schema. The **report-citations**
+capability owns what that resource must answer with; these fields carry only where to read it and
+which key to take, and they are the only things the app knows about either before reading.
+
+`document_metadata_resource` SHALL be a resource URI template carrying exactly one placeholder,
+`{document_ids}`. A value with no placeholder, or with more than one, SHALL be rejected: the app
+substitutes the cited ids into it, so a template it cannot substitute into names no readable
+resource.
+
+**A `generic_rag` server SHALL name both**, and a configuration where one names neither SHALL be
+rejected with a validation error naming that server. The rule is the `file_sharing_tool` rule, for
+the same reason it is the `dataset_metadata_tool` rule: a document citation carries an integer id
+that means something only inside the server that issued it, so a channel with no metadata resource
+labels every pill `doc <id>, page <ix>` — a number the reader cannot place against any publication
+they know. A document server is in a deployment to have its publications cited, and a citation
+naming an internal number is not worth serving silently.
+
+**They SHALL be set together or not at all.** A configuration setting one without the other SHALL be
+rejected with an error of its own — a URI with no key names nothing to take, and a key with no URI
+has nothing to take it from — so a half-configured pair reads as the mistake it is rather than as a
+server that named neither.
+
+The cost of requiring them is paid at configuration rather than at delivery: a channel whose
+document metadata genuinely carries no title cannot be configured, and an existing channel that has
+not set the fields fails validation until it does, which reaches the user as "application not
+configured". A **runtime** absence is unchanged and still costs only a label: an id the resource
+does not know, or a document carrying nothing usable under the configured key, keeps the marker
+label and converts as before (see **report-citations**).
+
+**Only a `generic_rag` server may set them.** A `statgpt` server SHALL be rejected for setting
+either: it serves datasets rather than documents, and a document-metadata resource named there would
+never be read. Together with the rule that at most one server of each type may be configured, this
+makes "at most one configured server names a document-metadata resource" a consequence rather than a
+rule of its own, for the same reason it is one for the file-sharing tool.
+
+Both SHALL be plain string fields on `MCPClientSettings` rather than a nested model, for the reason
+the file-sharing field states: the DIAL application-type schema inlines each root property's model
+and rejects a model nested below that, and `mcp_servers` is already such a root property.
+
+Configuration is the only way the app learns either value: there SHALL be no default URI, no default
+key, and no fallback that guesses a key from a metadata object's contents. Naming a resource a server
+does not serve, or a key its metadata does not carry, SHALL remain a delivery-time outcome rather
+than a validation error — what a server serves is known only when it is read, and the
+**report-citations** rule that a metadata failure costs a label continues to govern it.
+
+#### Scenario: A document server configures both fields
+
+- **WHEN** `ApplicationProperties.model_validate` receives a `generic_rag` server naming both a
+  resource template and a title key
+- **THEN** validation SHALL succeed, and both values SHALL be available to the app at the citation
+  step
+
+#### Scenario: A document server configuring neither is rejected
+
+- **WHEN** `ApplicationProperties.model_validate` receives a `generic_rag` server that names a
+  file-sharing tool and neither metadata field
+- **THEN** validation SHALL fail with an error naming that server and saying that a document server
+  must name both, because a document id is internal to the server and labels no source the reader
+  can place
+
+#### Scenario: One field without the other is rejected
+
+- **WHEN** a server entry names a resource template but no title key, or a title key but no resource
+  template
+- **THEN** validation SHALL raise a pydantic `ValidationError` saying the two are set together or not
+  at all
+
+#### Scenario: A template with no placeholder is rejected
+
+- **WHEN** a server entry's `document_metadata_resource` carries no `{document_ids}` placeholder
+- **THEN** validation SHALL raise a pydantic `ValidationError` naming the missing placeholder
+
+#### Scenario: A dataset server setting either is rejected
+
+- **WHEN** an MCP server entry of type `statgpt` sets `document_metadata_resource` or
+  `document_title_key`
+- **THEN** validation SHALL raise a pydantic `ValidationError` stating that only a document server
+  may set them
+
+#### Scenario: A channel serving no documents needs neither field
+
+- **WHEN** a configuration carries a `statgpt` server and no `generic_rag` server
+- **THEN** validation SHALL pass, and no document-metadata resource SHALL be configured
 
 ### Requirement: The citation pill's title budget is per channel
 

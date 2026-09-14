@@ -236,17 +236,36 @@ existing trick applies.* Rejected on its cost to the research rather than on its
 catalogue listing is how the agent discovers which datasets exist before querying one, and this is
 the same tool. Taking it away would spend the research to buy the citation.
 
-### 7. The configuration field is optional on a `statgpt` server
+### 7. Every configured server must name the surface that resolves its citation ids
 
-Recorded in full in the `application-config-schema` delta, including why it is asymmetric with the
-required `file_sharing_tool`. The consequence for this design is that the absent-tool path is
-routine rather than a fault, so it is DEBUG rather than a warning, and
-`dial_conf/core/applications-template.json` is not touched.
+A `statgpt` server must name its `dataset_metadata_tool`, and a `generic_rag` server must name its
+`document_metadata_resource` and `document_title_key`. Both rules are recorded in full in the
+`application-config-schema` delta, which also states what they cost.
 
-*Alternative — required, mirroring `file_sharing_tool`.* Rejected because a validation failure fails
-the turn, so requiring the field would take an existing StatGPT-backed deployment offline until its
-configuration was edited, in exchange for a label. It would also refuse a channel that genuinely
-advertises no catalogue tool.
+The reason is one rule applied twice: a citation carries an identifier that means something only
+inside the server that issued it — an integer document id, a dataset URN — and the metadata surface
+is the only thing that turns that identifier into something the reader can read or open. A server
+configured without it serves sources that cannot be cited: a dataset marker stays as text, and a
+document pill reads `doc 442, page 3`. A server is in a deployment to have its content cited, so
+that is a misconfiguration rather than a deployment choice, and it is refused where every
+misconfiguration is refused.
+
+Two consequences for the rest of this design. The absent-surface paths in the code do not go away,
+but they now mean **no server of that type is configured** rather than a server that declined to
+name one; they stay DEBUG, because such a channel has nothing of that kind to cite.
+`dial_conf/core/applications-template.json` is no longer untouched: its `generic_rag` entry names a
+document-metadata resource and title key, since the template's entries set exactly what their
+`server_type` requires.
+
+*Alternative — optional, which this design carried in an earlier revision.* Rejected on the ask of
+the change's owner, and the trade is real in both directions: optionality keeps a working research
+deployment servable while its citations degrade silently, and requiring the fields takes such a
+channel offline with a configuration error until they are set. The second failure is the one an
+operator can see and fix; the first is one a reader absorbs.
+
+**This is a breaking configuration change.** Every existing channel must add the fields its servers'
+types require before it serves another request — a `generic_rag` server two, a `statgpt` server one
+— and until then its turns fail validation and are delivered as "application not configured".
 
 ### 8. Convertible citations become a discriminated pair rather than one widened model
 
@@ -328,28 +347,35 @@ away.
 
 Files that look like they need touching and do not:
 
-- **`src/dial_deep_research/app/annotations_demo/completion.py`** — the new dataset parameter of
-  `convert_citations` defaults to empty, so the demo keeps calling the same function unchanged. The
-  `report-citations` delta keeps the rule that the demo shows no dataset citation, and restates its
-  reason.
-- **`dial_conf/core/applications-template.json`** — the new field is optional, and the template sets
-  exactly the required properties.
-- **`README.md`** — no environment variable is added or removed.
+- **`src/dial_deep_research/app/annotations_demo/completion.py`**, apart from its log call — the
+  new dataset parameter of `convert_citations` defaults to empty, so the demo keeps converting
+  exactly what it converts today, and it passes the two dataset counts as zero the way it already
+  passes `documents_titled=0`. The `report-citations` delta keeps the rule that the demo shows no
+  dataset citation, and restates its reason.
+- **`README.md`'s environment-variable table** — these are application properties, not environment
+  variables.
 - **`src/dial_deep_research/app/research/report_length.py`** — its own, looser `_CITATION_RE`
   already excludes dataset markers from the word count, and a marker that becomes a tag is excluded
   by the same rule the document tags are.
 
 ## Risks / Trade-offs
 
-- **The citation card will show a "Preview" button that does nothing useful.** For inline `<cit>`
-  citations the chat always supplies its `onPreview` callback, so the button is always drawn.
-  Routing was read from the chat's canvas specification: HTML is matched by `html`/`htm` *file
-  extension*, never by the `text/html` MIME type, so an extensionless portal URL falls to
-  "Everything else" and opens the side canvas showing "Preview is not supported for this file".
+- **The citation card shows a "Preview" button that does nothing useful**, confirmed in a real
+  reply: it opens the side canvas on "Preview is not supported for this file". The card itself
+  supports hiding it — `CitationCard` (`libs/quotations/src/components/CitationCard/CitationCard.tsx`
+  in `epam/ai-dial-chat`) draws the button only when it is given an `onPreview` callback, and
+  documents omitting it for a group with nothing previewable — and the chat already does exactly
+  that for *reference* pills, where `ConversationMessageItem.tsx` passes
+  `isPdfPagePreviewable ? onPreviewReference : undefined`. Inline `<cit>` citations take the other
+  path, whose `citationCallbacks` memo passes `onPreview: handleCitationPreview` unconditionally,
+  and `useCitationMarkdownComponents` declares that prop as required.
   → **Mitigation**: nothing in the annotation payload can influence it, so this is an ask on the
-  DIAL Chat team — for a web-link citation source, either hide Preview or point it at the URL. The
-  card's other button is the working one and is correctly labelled, so the feature is usable while
-  the ask is open. Record the ask in the cross-repository document that tracks this chain.
+  DIAL Chat team, and a narrow one: make the inline path's `onPreview` optional and gate it the way
+  the reference path is already gated. Omitting it costs nothing else — the card's remaining button
+  keeps the "Open in browser" label, because its `isWebLink` test passes when `onPreview` is absent
+  as well as when the source type is HTML. The working button is the one the reader needs, so the
+  feature is usable while the ask is open. Record the ask in the cross-repository document that
+  tracks this chain.
 
 - **The cost of the catalogue read scales with the channel's catalogue, not with the report.** A
   channel with hundreds of datasets sends all of them to resolve one citation.
@@ -409,14 +435,26 @@ Files that look like they need touching and do not:
 
 ## Migration Plan
 
-No migration. The change is additive and gated on configuration that does not exist yet: until a
-deployment adds `dataset_metadata_tool` to its `statgpt` server entry, every dataset marker is
-delivered exactly as it is today. Rolling back is removing that one field from the channel's
-application properties, which needs no redeployment of the application.
+**Every channel's application properties must be edited before it serves another request.** The
+configuration rules of decision 7 make three fields required by server type, so a channel that does
+not set them fails validation and its turns are delivered as "application not configured":
 
-The one ordering constraint is on the *reader* rather than on the deployment: a dataset pill needs
-the same DIAL Chat generation the document pills already need, so no channel gains a dataset pill
-that does not already show document pills.
+| Server entry | What it must now name |
+|---|---|
+| a `generic_rag` server | `document_metadata_resource` and `document_title_key` |
+| a `statgpt` server | `dataset_metadata_tool` |
+
+The order is therefore configuration first, deployment second: edit each channel's properties in
+DIAL Core, then roll out the application. A channel already setting the document pair — every
+channel that took the document-titles change — adds only the dataset tool, and only if it serves a
+dataset server.
+
+Rolling back the application is safe in either direction: the extra properties are ignored by the
+previous version, which read the document pair as optional and knew nothing of the dataset tool.
+
+The one ordering constraint on the *reader* rather than the deployment: a dataset pill needs the
+same DIAL Chat generation the document pills already need, so no channel gains a dataset pill that
+does not already show document pills.
 
 ## Open Questions
 

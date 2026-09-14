@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dial_deep_research.app.research.citations import convert_citations
+from dial_deep_research.app.research.citations import DatasetSource, convert_citations
 from dial_deep_research.utils.dial_annotations import send_annotations
 
 from .dial_spies import ChoiceSpy
@@ -78,6 +78,30 @@ def test_the_array_goes_out_as_one_delta_on_the_open_choice() -> None:
         ],
         "usage": None,
     }
+
+
+def test_a_field_that_does_not_apply_is_absent_from_the_wire() -> None:
+    """A document citation sends no quote and a dataset citation no selector, and neither
+    travels as an explicit null — the shape the client's own model describes."""
+    choice = ChoiceSpy()
+    converted = convert_citations(
+        "A claim. [doc 101, page 3] and a dataset. [dataset IMF:WEO(1.0.0)]",
+        document_urls={101: "files/bucket/appdata/deep-research/doc-101.pdf"},
+        dataset_sources={
+            "IMF:WEO(1.0.0)": DatasetSource(
+                url="https://portal.example.org/datasets/imf-weo",
+                name="World Economic Outlook",
+            )
+        },
+        make_tag_id=lambda: "tag-0",
+    )
+
+    send_annotations(choice=choice, annotations=converted.annotations)
+
+    document, dataset = choice.chunks[0]["choices"][0]["delta"]["custom_content"]["annotations"]
+    assert "quote" not in document["body"]
+    assert "selector" not in dataset["body"]
+    assert dataset["body"]["quote"] == "* URN: IMF:WEO(1.0.0)"
 
 
 def test_an_empty_array_is_still_a_well_formed_chunk() -> None:

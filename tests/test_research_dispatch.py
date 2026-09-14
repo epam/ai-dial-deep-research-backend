@@ -42,6 +42,8 @@ async def _deliver(runner: ResearchRunner) -> None:
         configured_tool_name=None,
         mcp_client=None,
         metadata_source=None,
+        dataset_metadata_tool=None,
+        configured_dataset_tool_name=None,
         pill_title_max_chars=20,
     )
 
@@ -180,6 +182,8 @@ def _properties(**overrides: Any) -> ApplicationProperties:
                     "server_type": "generic_rag",
                     "deployment_id": "generic-rag-mcp",
                     "file_sharing_tool": "get_citation_url",
+                    "document_metadata_resource": "documents://metadata/{document_ids}",
+                    "document_title_key": "publication_title",
                 }
             ],
             **overrides,
@@ -207,7 +211,9 @@ class _GraphStub:
 
 def _stub_graph_build(monkeypatch: MonkeyPatch, captured: dict[str, Any]) -> None:
     async def _no_tools(**_kwargs: Any) -> LoadedMcpTools:
-        return LoadedMcpTools(agent_tools=[], file_sharing_tool=None, client=None)
+        return LoadedMcpTools(
+            agent_tools=[], file_sharing_tool=None, dataset_metadata_tool=None, client=None
+        )
 
     monkeypatch.setattr(runner_module, "load_mcp_tools", _no_tools)
     monkeypatch.setattr(runner_module, "build_research_graph", lambda **_kw: _GraphStub(captured))
