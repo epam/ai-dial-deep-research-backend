@@ -1,7 +1,9 @@
 # Never put sensitive info in this repo
 
 This repository is public. Everything in it is world-readable, including files that are only in a
-local working tree today — an untracked file is one `git add -A` away from being committed.
+local working tree today — an untracked file is one `git add -A` away from being committed. Never
+let a secret, an endpoint, a client-identifying string, a real application property or a
+deployment fact reach any file in it.
 
 **Live probe output is client data by default — verify with it, then write the generic equivalent.**
 That one rule prevents most of what follows.
