@@ -7,17 +7,14 @@ See `pyproject.toml` for `make`-equivalent targets
 
 ## Never commit sensitive info
 
-This repo is public.
-Never commit secrets, real application properties, or anything else sensitive:
-API keys, endpoints, client names, production details.
-Never reference non-public resources in committed content
-(code, comments, docs, tests, specs and planning artifacts, commit messages).
+This repo is public. Never let secrets, endpoints, client-identifying strings, real application
+properties or deployment facts reach any file in it — code, comments, docs, tests, specs and
+planning artifacts, and commit messages alike.
 
-Real per-channel application properties live in DIAL Core,
-and the DIAL core `config.json` stays untracked.
-Only generic values are allowed, for example `ACME` as a client
-or `Market Outlook 2025` as a document title.
-`IMF:WEO` is the id of a public dataset and is also allowed.
+**Live probe output is client data by default — verify with it, then write the generic equivalent.**
+
+@no_sensitive_info.md carries the full rules: what must never appear, which generic placeholders are
+allowed, and what to check before handing work over.
 
 ## Rules for coding agents (Claude Code, etc)
 
