@@ -40,6 +40,12 @@ allowed, and what to check before handing work over.
   or write a ~10-line probe that measures the behavior directly. Two real examples: a
   framework limit assumed to span a whole run while it is in fact applied to each nested call
   separately; a batch of N parallel operations assumed to cost N units while it costs one.
+- **Work on OpenSpec changes only through the OpenSpec skills** (`.claude/skills/openspec-*`):
+  creating, updating, applying, verifying, syncing and archiving a change each have one, and a
+  skill that tells you to run another skill means invoking it, not reimplementing what it does.
+  Hand-rolling a step skips rules that live only in the skill — the merge semantics in
+  `openspec-sync-specs` are the easiest to miss, since `openspec archive` also updates the main
+  specs and the two describe a partial `## MODIFIED` block differently.
 - Reread your draft and ask which sentences you verified and which you inferred. Check the
   inferences, or say plainly that they are unverified — do not state them flatly. A claim about
   to be copied into several places (a spec, a field description, a README) is worth the check
