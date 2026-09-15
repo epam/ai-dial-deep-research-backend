@@ -10,7 +10,7 @@ from collections.abc import Sequence
 
 from pydantic import BaseModel, Field
 
-from dial_deep_research.app_properties import ReportSection, references_section
+from dial_deep_research.app_properties import ReportSection, writer_sections
 
 from .report_length import SECTION_HEADING_PREFIX
 
@@ -192,7 +192,7 @@ Plans pursued so far:
 
 
 def render_report_structure(sections: Sequence[ReportSection]) -> str:
-    """Render the configured sections for a prompt: heading name, then its own rules.
+    """Render the sections the writer writes for a prompt: heading name, then its own rules.
 
     A section's `description` is passed verbatim — it is the single home for that section's
     rules, so nothing here rewrites or summarizes it. The name is rendered alone, with no marker
@@ -202,29 +202,24 @@ def render_report_structure(sections: Sequence[ReportSection]) -> str:
 
     Each entry is rendered as the exact heading the report must carry — `## Name`, then the rules
     beneath it — so the listing is a template to copy rather than a description to translate.
+
+    The references section is not among them: the app builds it after the loop settles, so naming
+    it here would ask the writer for a section its draft is then judged for carrying.
     """
     return "\n\n".join(
-        f"{SECTION_HEADING_PREFIX} {section.name}\n\n{section.description}" for section in sections
+        f"{SECTION_HEADING_PREFIX} {section.name}\n\n{section.description}"
+        for section in writer_sections(sections)
     )
 
 
 def render_protected_section_names(sections: Sequence[ReportSection]) -> str:
-    """Comma-separated names of the protected sections, for the precedence rule."""
-    names = [section.name for section in sections if section.protected]
-    return ", ".join(names)
+    """Comma-separated names of the protected sections the writer writes, for the precedence rule.
 
-
-def render_length_exemptions(sections: Sequence[ReportSection]) -> str:
-    """What the word count leaves out, as a noun phrase for the prompts and the review stage.
-
-    Rendered from the configured structure rather than fixed, because a structure that declares no
-    references section has nothing exempt but the citations — telling its writer otherwise would
-    promise room the count does not give.
+    A references section is left out whether or not it is protected: the precedence rule tells the
+    writer which of its own sections a user instruction may not touch, and this is not one of them.
     """
-    section = references_section(sections)
-    if section is None:
-        return "the inline citations"
-    return f"the inline citations and the {section.name} section"
+    names = [section.name for section in writer_sections(sections) if section.protected]
+    return ", ".join(names)
 
 
 REPORT_SYSTEM_PROMPT = """\

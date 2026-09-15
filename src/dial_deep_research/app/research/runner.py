@@ -12,8 +12,9 @@ output never become content.
 
 Between the graph finishing and the report being appended, the runner runs the citation step:
 the hyperlinks a report may not carry are removed, each convertible citation marker becomes a
-marker tag, and the annotations claiming those tags are emitted once the text is appended (see
-`citations.py` and the report-citations capability). Nothing about it can fail the turn.
+marker tag, the References section is built from the metadata the step resolved, and the
+annotations claiming those tags are emitted once the text is appended (see `citations.py`,
+`references.py` and the report-citations capability). Nothing about it can fail the turn.
 
 Persistence is the caller's job — `run` returns the research message slice (the transcript plus
 the delivered report as an `AIMessage`) for the coordinator to persist with the preparation slice.
@@ -25,7 +26,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -43,7 +44,13 @@ from pydantic import BaseModel, Field
 
 from dial_deep_research.app.history import PrepState
 from dial_deep_research.app.mcp_tools import load_mcp_tools
-from dial_deep_research.app_properties import ApplicationProperties, DocumentMetadataSource
+from dial_deep_research.app_properties import (
+    ApplicationProperties,
+    DocumentMetadataSource,
+    ReportSection,
+    ServerReferencesTable,
+    references_section,
+)
 from dial_deep_research.utils.dial_annotations import send_annotations
 from dial_deep_research.utils.dial_stages import (
     DialStageReportFormatter,
@@ -72,7 +79,8 @@ from .dataset_metadata import (
 from .document_metadata import (
     KIND_METADATA_READ_FAILED,
     DocumentMetadataError,
-    read_document_titles,
+    read_document_metadata,
+    read_titles,
 )
 from .file_sharing import FileSharingError, share_documents
 from .graph import build_research_graph
@@ -83,6 +91,14 @@ from .nodes import (
     ResearchBudgetExhausted,
     ResearchReviewOutcome,
 )
+from .references import (
+    ReferencesTableContent,
+    build_references_section,
+    dataset_rows,
+    document_rows,
+    strip_references_section,
+)
+from .report_length import LENGTH_EXEMPTIONS
 from .state import build_initial_state
 from .tools import (
     FINISH_TOOL_NAME,
@@ -116,6 +132,7 @@ _KIND_CALL_FAILED = "call_failed"
 _KIND_IDS_UNRESOLVED = "ids_unresolved"
 _KIND_LINK_PASS_FAILED = "link_pass_failed"
 _KIND_CONVERSION_FAILED = "conversion_failed"
+_KIND_REFERENCES_BUILD_FAILED = "references_build_failed"
 _KIND_EMISSION_FAILED = "emission_failed"
 # The dataset tool gets a kind of its own rather than sharing the one above, so a warning says
 # which resolution was misconfigured; the rest of its kinds are named in `dataset_metadata.py`.
@@ -144,6 +161,45 @@ class _ReportDelivery(BaseModel):
     datasets_resolved: int = 0
     markers_left: int = 0
     hyperlinks_removed: int = 0
+
+
+def _with_references_section(
+    text: str,
+    *,
+    section: ReportSection,
+    tables: Sequence[ServerReferencesTable],
+    document_ids: Sequence[int],
+    document_metadata: Mapping[int, Mapping[str, Any]],
+    dataset_ids: Sequence[str],
+    dataset_sources: Mapping[str, DatasetSource],
+) -> str:
+    """The converted text with the built References section in place of any the writer wrote.
+
+    The rows are the sources the delivered report cites, in the order it first cites them, each
+    carrying what its server reported about it — so a source whose metadata did not resolve is
+    listed from its identifier rather than left out.
+
+    Stripping comes first: a draft is told not to write the section, but one that wrote it anyway
+    must not reach the reader beside the app's own.
+    """
+    rows_by_kind = {
+        "document": document_rows(document_ids, metadata=document_metadata),
+        "dataset": dataset_rows(
+            dataset_ids, records={urn: source.fields for urn, source in dataset_sources.items()}
+        ),
+    }
+    contents = [
+        ReferencesTableContent(
+            title=entry.table.title,
+            columns=entry.table.columns,
+            rows=rows_by_kind[entry.source_kind],
+        )
+        for entry in tables
+    ]
+    built = build_references_section(
+        heading=section.name, empty_text=section.description, tables=contents
+    )
+    return f"{strip_references_section(text, heading=section.name)}\n\n{built}"
 
 
 def _count_markers(text: str) -> int:
@@ -238,6 +294,8 @@ class ResearchRunner:
             dataset_metadata_tool=loaded.dataset_metadata_tool,
             configured_dataset_tool_name=properties.dataset_metadata_tool,
             pill_title_max_chars=properties.max_pill_title_chars,
+            references=references_section(properties.default_report_structure),
+            references_tables=properties.references_tables,
         )
         return self._messages
 
@@ -251,6 +309,8 @@ class ResearchRunner:
         dataset_metadata_tool: BaseTool | None,
         configured_dataset_tool_name: str | None,
         pill_title_max_chars: int | None,
+        references: ReportSection | None,
+        references_tables: Sequence[ServerReferencesTable],
     ) -> None:
         """Post-process the settled report, append it to the choice, and emit its annotations.
 
@@ -278,6 +338,8 @@ class ResearchRunner:
                 dataset_metadata_tool=dataset_metadata_tool,
                 configured_dataset_tool_name=configured_dataset_tool_name,
                 pill_title_max_chars=pill_title_max_chars,
+                references=references,
+                references_tables=references_tables,
             )
         except BaseException:
             # The step catches its own failures, so only something outside them reaches here —
@@ -315,13 +377,17 @@ class ResearchRunner:
         dataset_metadata_tool: BaseTool | None,
         configured_dataset_tool_name: str | None,
         pill_title_max_chars: int | None,
+        references: ReportSection | None,
+        references_tables: Sequence[ServerReferencesTable],
     ) -> _ReportDelivery:
-        """The two deterministic alterations of the settled draft, in their fixed order.
+        """The three deterministic alterations of the settled draft, in their fixed order.
 
-        Link removal first, then the citation conversion over the text that pass produced. The
-        two fail independently, and each failure keeps what the pass before it finished: a
-        failed link pass delivers the draft exactly as the review settled it, and a failed
-        conversion delivers the link-free text with every citation marker in place.
+        Link removal first, then the citation conversion over the text that pass produced, then
+        the References section built from the metadata the conversion resolved. The three fail
+        independently, and each failure keeps what the passes before it finished: a failed link
+        pass delivers the draft exactly as the review settled it, a failed conversion delivers the
+        link-free text with every citation marker in place, and a failed section build delivers
+        the converted text with every pill it earned and no section.
         """
         try:
             removal = remove_hyperlinks(draft)
@@ -345,15 +411,15 @@ class ResearchRunner:
                 self._set_activity(CITATIONS_ACTIVITY)
             # The three resolutions are independent, so the step costs one round trip rather
             # than three. Each swallows its own failure into an empty mapping, which is why
-            # `gather` needs no `return_exceptions`. The title read asks about every cited
+            # `gather` needs no `return_exceptions`. The metadata read asks about every cited
             # document, which is what frees it from the file-sharing call's answer.
-            document_urls, document_titles, dataset_sources = await asyncio.gather(
+            document_urls, document_metadata, dataset_sources = await asyncio.gather(
                 self._share_cited_documents(
                     tool=file_sharing_tool,
                     configured_tool_name=configured_tool_name,
                     document_ids=document_ids,
                 ),
-                self._read_document_titles(
+                self._read_document_metadata(
                     client=mcp_client, source=metadata_source, document_ids=document_ids
                 ),
                 self._read_dataset_sources(
@@ -363,13 +429,26 @@ class ResearchRunner:
                 ),
             )
             delivery.documents_resolved = len(document_urls)
-            delivery.datasets_resolved = len(dataset_sources)
+            # What the (8c) event calls a resolved dataset is one the catalogue reported a page
+            # URL for, which is what makes its citations convertible. The read keeps the others
+            # too, for their References rows, so the count is taken here rather than from its
+            # size.
+            delivery.datasets_resolved = sum(
+                1 for source in dataset_sources.values() if source.url is not None
+            )
             # A title for a document that resolved no URL labels nothing: that document's
             # citations keep their marker text, so there is no pill for the title to reach.
-            # Filtering here is what keeps the titled count bounded by the resolved one.
+            # Filtering here is what keeps the titled count bounded by the resolved one. The
+            # References row is not filtered with it — a source the report cites is listed
+            # whether or not the reader can open it.
+            titles = (
+                read_titles(document_metadata, title_key=metadata_source.title_key)
+                if metadata_source is not None
+                else {}
+            )
             titles_of_resolved = {
                 document_id: title
-                for document_id, title in document_titles.items()
+                for document_id, title in titles.items()
                 if document_id in document_urls
             }
             delivery.documents_titled = len(titles_of_resolved)
@@ -388,6 +467,25 @@ class ResearchRunner:
         delivery.text = converted.text
         delivery.annotations = converted.annotations
         delivery.markers_left = converted.markers_left
+
+        if references is None:
+            # The configured structure declares no references section, so nothing is built and
+            # the report decodes its citations nowhere — that configuration's own consequence.
+            return delivery
+        try:
+            delivery.text = _with_references_section(
+                delivery.text,
+                section=references,
+                tables=references_tables,
+                document_ids=document_ids,
+                document_metadata=document_metadata,
+                dataset_ids=dataset_ids,
+                dataset_sources=dataset_sources,
+            )
+        except Exception as error:
+            # Last of the three passes, so its failure costs the section alone: every pill the
+            # conversion earned is already in the text above.
+            self._warn_citation_failure(kind=_KIND_REFERENCES_BUILD_FAILED, error=error)
         return delivery
 
     async def _share_cited_documents(
@@ -439,23 +537,24 @@ class ResearchRunner:
             )
         return document_urls
 
-    async def _read_document_titles(
+    async def _read_document_metadata(
         self,
         *,
         client: MultiServerMCPClient,
         source: DocumentMetadataSource | None,
         document_ids: Sequence[int],
-    ) -> dict[int, str]:
-        """The publication title of every cited document one could be obtained for.
+    ) -> dict[int, dict[str, Any]]:
+        """What the resource reports about every cited document, by document id.
 
         Asked about **every** cited document rather than only the resolved ones, which is what
         lets this read run beside the file-sharing call instead of after it: the cited ids are
         known from the report text alone. The caller then labels from the titles of documents
-        that resolved a URL and from no others, since only those citations become pills.
+        that resolved a URL and from no others, since only those citations become pills, and
+        builds a References row for every cited document from the same answer.
 
-        Empty whenever no title can be obtained — no server names a metadata resource, the read
+        Empty whenever nothing can be obtained — no server names a metadata resource, the read
         failed, the answer could not be read — and every citation is then labelled from its
-        marker.
+        marker and every row built from its identifier.
 
         Graded one step below the file-sharing failures throughout, because a title costs a label
         rather than a link: a channel with no document server at all is routine and recorded at
@@ -473,7 +572,7 @@ class ResearchRunner:
         if not document_ids:
             return {}
         try:
-            return await read_document_titles(
+            return await read_document_metadata(
                 client=client, source=source, document_ids=document_ids
             )
         except DocumentMetadataError as failure:
@@ -781,7 +880,7 @@ class ResearchRunner:
             draft_number=outcome.draft_number,
             word_count=outcome.word_count,
             max_words=outcome.max_words,
-            length_exemptions=outcome.length_exemptions,
+            length_exemptions=LENGTH_EXEMPTIONS,
             violations=outcome.violations,
             error=outcome.error,
         )
@@ -802,7 +901,7 @@ class ResearchRunner:
             draft_number=outcome.draft_number,
             word_count=outcome.word_count,
             max_words=outcome.max_words,
-            length_exemptions=outcome.length_exemptions,
+            length_exemptions=LENGTH_EXEMPTIONS,
             max_versions=outcome.max_versions,
         )
         with self._choice.create_stage(title) as stage:

@@ -1,7 +1,7 @@
-"""Reading document titles from the configured metadata resource.
+"""Reading document metadata from the configured resource, and the titles taken out of it.
 
 Every case here is decided by what the resource answered, so the client is a stub: the module
-owns the URI it builds, the shape it accepts and the titles it takes out, and nothing else.
+owns the URI it builds, the shape it accepts and the titles read out of it, and nothing else.
 """
 
 from __future__ import annotations
@@ -17,7 +17,8 @@ from dial_deep_research.app.research.document_metadata import (
     KIND_METADATA_UNREADABLE,
     DocumentMetadataError,
     build_resource_uri,
-    read_document_titles,
+    read_document_metadata,
+    read_titles,
 )
 from dial_deep_research.app_properties import DocumentMetadataSource
 
@@ -45,8 +46,14 @@ class _StubClient:
 
 
 async def _titles(body: str, document_ids: list[int] | None = None) -> dict[int, str]:
+    """What a caller ends up with: the metadata the read returned, reduced to its titles."""
+    metadata = await _metadata(body, document_ids)
+    return read_titles(metadata, title_key=SOURCE.title_key)
+
+
+async def _metadata(body: str, document_ids: list[int] | None = None) -> dict[int, dict[str, Any]]:
     client = _StubClient(body=body)
-    return await read_document_titles(
+    return await read_document_metadata(
         client=client,  # type: ignore[arg-type]
         source=SOURCE,
         document_ids=document_ids or [1],
@@ -69,7 +76,7 @@ def test_only_the_placeholder_is_substituted() -> None:
 
 async def test_the_read_asks_for_the_ids_it_was_given() -> None:
     client = _StubClient(body="{}")
-    await read_document_titles(
+    await read_document_metadata(
         client=client,  # type: ignore[arg-type]
         source=SOURCE,
         document_ids=[4, 8],
@@ -122,7 +129,7 @@ async def test_an_id_missing_from_the_answer_does_not_disturb_the_others() -> No
 async def test_a_failing_read_raises_the_typed_error() -> None:
     client = _StubClient(error=RuntimeError("connection reset"))
     with pytest.raises(DocumentMetadataError) as excinfo:
-        await read_document_titles(
+        await read_document_metadata(
             client=client,  # type: ignore[arg-type]
             source=SOURCE,
             document_ids=[1],
@@ -151,7 +158,7 @@ async def test_an_answer_carrying_no_content_is_unreadable() -> None:
             return []
 
     with pytest.raises(DocumentMetadataError) as excinfo:
-        await read_document_titles(
+        await read_document_metadata(
             client=_EmptyClient(),  # type: ignore[arg-type]
             source=SOURCE,
             document_ids=[1],

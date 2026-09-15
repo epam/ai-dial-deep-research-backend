@@ -23,7 +23,13 @@ from langgraph.types import ValuesStreamPart
 
 from dial_deep_research.app.research import runner as runner_module
 from dial_deep_research.app.research.runner import CITATIONS_ACTIVITY, ResearchRunner
-from dial_deep_research.app_properties import DocumentMetadataSource
+from dial_deep_research.app_properties import (
+    DocumentMetadataSource,
+    ReferenceColumn,
+    ReferencesTable,
+    ReportSection,
+    ServerReferencesTable,
+)
 from tests.dial_spies import ChoiceSpy
 
 _TOOL_NAME = "share_documents"
@@ -94,9 +100,16 @@ class _MetadataClient:
     """
 
     def __init__(
-        self, titles: dict[int, str] | None = None, *, raises: Exception | None = None
+        self,
+        titles: dict[int, str] | None = None,
+        *,
+        metadata: dict[int, dict[str, Any]] | None = None,
+        raises: Exception | None = None,
     ) -> None:
-        self._titles = titles or {}
+        # `titles` is the short form for a suite that only cares about the label; `metadata`
+        # answers with whole objects, which is what a References row reads its columns out of.
+        self._metadata = {i: {_TITLE_KEY: title} for i, title in (titles or {}).items()}
+        self._metadata.update(metadata or {})
         self._raises = raises
         self.requested_uris: list[str] = []
 
@@ -104,7 +117,7 @@ class _MetadataClient:
         self.requested_uris.extend(uris)
         if self._raises is not None:
             raise self._raises
-        body = {str(i): {_TITLE_KEY: title} for i, title in self._titles.items()}
+        body = {str(i): fields for i, fields in self._metadata.items()}
         return [Blob.from_data(data=json.dumps(body), mime_type="application/json")]
 
 
@@ -139,6 +152,36 @@ def _catalogue_tool(
     )
 
 
+_DOCUMENTS_TABLE = ServerReferencesTable(
+    server_type="generic_rag",
+    table=ReferencesTable(
+        title="Documents",
+        columns=(
+            ReferenceColumn(heading="Publication", key=_TITLE_KEY),
+            ReferenceColumn(heading="Published", key="publication_date"),
+        ),
+    ),
+)
+
+_DATASETS_TABLE = ServerReferencesTable(
+    server_type="statgpt",
+    table=ReferencesTable(
+        title="Datasets",
+        columns=(
+            ReferenceColumn(heading="Dataset", key="name"),
+            ReferenceColumn(heading="Last update", key="lastUpdated"),
+        ),
+    ),
+)
+
+_REFERENCES = ReportSection(
+    name="References",
+    description="This report cites no source.",
+    protected=True,
+    references_section=True,
+)
+
+
 async def _deliver(
     runner: ResearchRunner,
     *,
@@ -149,7 +192,11 @@ async def _deliver(
     dataset_tool: BaseTool | None = None,
     configured_dataset_tool_name: str | None = None,
     pill_title_max_chars: int | None = 20,
+    references: ReportSection | None = None,
+    references_tables: tuple[ServerReferencesTable, ...] = (),
 ) -> None:
+    """Deliver the settled report. The References section is off unless a test asks for one,
+    so a suite about the citation conversion reads the converted text alone."""
     await runner._deliver_report(
         file_sharing_tool=tool,
         configured_tool_name=configured_tool_name,
@@ -158,6 +205,8 @@ async def _deliver(
         dataset_metadata_tool=dataset_tool,
         configured_dataset_tool_name=configured_dataset_tool_name,
         pill_title_max_chars=pill_title_max_chars,
+        references=references,
+        references_tables=references_tables,
     )
 
 
@@ -916,3 +965,141 @@ async def test_the_step_announces_itself_while_it_resolves_datasets() -> None:
 
     assert choice.stage_titles == ["Writing the report", CITATIONS_ACTIVITY]
     assert choice.open_stages == []
+
+
+# --- the References section ---------------------------------------------------------------------
+
+
+_DATE_KEY = "publication_date"
+
+
+async def test_the_section_is_appended_after_the_conversion() -> None:
+    """The pills are in the text, and the section the app built follows them."""
+    runner, choice = _make_runner()
+    _settle(runner, "Defaults rise. [doc 442, page 3]")
+
+    await _deliver(
+        runner,
+        tool=_sharing_tool(urls={"442": _URL}),
+        metadata_source=_METADATA_SOURCE,
+        mcp_client=_MetadataClient(metadata={442: {_TITLE_KEY: _TITLE, _DATE_KEY: "2025-03-01"}}),
+        references=_REFERENCES,
+        references_tables=(_DOCUMENTS_TABLE,),
+    )
+
+    assert '<cit data-id="' in choice.content
+    assert choice.content.index("<cit") < choice.content.index("## References")
+    assert "### Documents" in choice.content
+    assert f"| {_TITLE} | 2025-03-01 |" in choice.content
+
+
+async def test_every_cited_source_is_listed_even_without_a_pill() -> None:
+    """A document that resolved no URL keeps its marker text and still earns its row."""
+    runner, choice = _make_runner()
+    _settle(runner, "One. [doc 442, page 3] Two. [doc 9, page 1]")
+
+    await _deliver(
+        runner,
+        tool=_sharing_tool(urls={"442": _URL}),
+        metadata_source=_METADATA_SOURCE,
+        mcp_client=_MetadataClient(metadata={442: {_TITLE_KEY: _TITLE}}),
+        references=_REFERENCES,
+        references_tables=(_DOCUMENTS_TABLE,),
+    )
+
+    assert "[doc 9, page 1]" in choice.content
+    assert f"| {_TITLE} |" in choice.content
+    # The unresolved document is listed from its identifier rather than dropped.
+    assert "| doc 9 |" in choice.content
+
+
+async def test_a_dataset_with_no_portal_page_is_still_listed() -> None:
+    runner, choice = _make_runner()
+    _settle(runner, f"A claim. [dataset {_URN}]")
+
+    await _deliver(
+        runner,
+        configured_tool_name=None,
+        dataset_tool=_catalogue_tool(datasets=[{"id": _URN, "name": _DATASET_NAME}]),
+        configured_dataset_tool_name=_DATASET_TOOL_NAME,
+        references=_REFERENCES,
+        references_tables=(_DATASETS_TABLE,),
+    )
+
+    assert f"[dataset {_URN}]" in choice.content
+    assert f"| {_DATASET_NAME} |  |" in choice.content
+
+
+async def test_a_report_citing_nothing_says_so_in_the_section() -> None:
+    runner, choice = _make_runner()
+    _settle(runner, "## Overview\n\nNothing was found.")
+
+    await _deliver(
+        runner,
+        configured_tool_name=None,
+        references=_REFERENCES,
+        references_tables=(_DOCUMENTS_TABLE, _DATASETS_TABLE),
+    )
+
+    assert choice.content.endswith("## References\n\nThis report cites no source.")
+    assert "### Documents" not in choice.content
+
+
+async def test_a_section_the_writer_wrote_is_replaced_not_duplicated() -> None:
+    runner, choice = _make_runner()
+    _settle(
+        runner,
+        "Defaults rise. [doc 442, page 3]\n\n## References\n\n| id | title |\n| 442 | Recalled |\n",
+    )
+
+    await _deliver(
+        runner,
+        tool=_sharing_tool(urls={"442": _URL}),
+        metadata_source=_METADATA_SOURCE,
+        mcp_client=_MetadataClient(metadata={442: {_TITLE_KEY: _TITLE}}),
+        references=_REFERENCES,
+        references_tables=(_DOCUMENTS_TABLE,),
+    )
+
+    assert choice.content.count("## References") == 1
+    assert "Recalled" not in choice.content
+    assert f"| {_TITLE} |" in choice.content
+
+
+async def test_no_section_is_built_when_the_structure_declares_none() -> None:
+    runner, choice = _make_runner()
+    _settle(runner, "Defaults rise. [doc 442, page 3]")
+
+    await _deliver(
+        runner,
+        tool=_sharing_tool(urls={"442": _URL}),
+        references=None,
+        references_tables=(_DOCUMENTS_TABLE,),
+    )
+
+    assert "## References" not in choice.content
+
+
+async def test_a_failed_section_build_keeps_the_pills(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The build is the last pass, so its failure costs the section and nothing else."""
+
+    def explode(*args: Any, **kwargs: Any) -> str:
+        raise RuntimeError("no section today")
+
+    monkeypatch.setattr(runner_module, "build_references_section", explode)
+    runner, choice = _make_runner()
+    _settle(runner, "Defaults rise. [doc 442, page 3]")
+
+    with caplog.at_level(logging.WARNING):
+        await _deliver(
+            runner,
+            tool=_sharing_tool(urls={"442": _URL}),
+            references=_REFERENCES,
+            references_tables=(_DOCUMENTS_TABLE,),
+        )
+
+    assert '<cit data-id="' in choice.content
+    assert "## References" not in choice.content
+    assert "kind=references_build_failed" in caplog.text

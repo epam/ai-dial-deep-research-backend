@@ -5,13 +5,15 @@ testable without a server, a model or a browser. Two callers share them: the res
 delivery step, and the annotations demo completion. A behaviour shown in the demo is therefore
 the behaviour a real report gets.
 
-The delivered text is produced by two alterations, in this order:
+The delivered text is produced by three alterations, in this order:
 
 1. `remove_hyperlinks`, which leaves nothing in the report pointing the reader outward.
 2. the citation conversion — `cited_document_ids` and `cited_dataset_ids` over the link-free
    text, the documents' URLs and titles and the datasets' catalogue records resolved for what
    they report, then `convert_citations` — which replaces each convertible marker with a marker
    tag and returns the annotations that claim those tags.
+3. the References section, built by `references.py` from the same resolved metadata and appended
+   to the converted text. This module knows nothing about it beyond the order.
 
 A citation's labels are a leading part naming the source and a fixed trailing part saying what
 kind of source it is: `<publication title>, page <ix>` for a document, `<dataset name> dataset`
@@ -38,10 +40,10 @@ import logging
 import re
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 # The tag written at each converted citation, and the tag name every annotation's selector
 # carries. The client rewrites a tag whose id an annotation claims into a pill, and shows a tag
@@ -113,19 +115,26 @@ class CitationMarker(BaseModel):
 class DatasetSource(BaseModel):
     """What the catalogue reported about one cited dataset.
 
-    The three travel together because they arrive together, in one record of one answer: a URL
-    without the name it belongs to could label a pill with the wrong dataset. Only `url` is
-    required, and it is what makes the citation convertible at all; a record with no usable name
-    is labelled from the URN, and one with no date carries one fewer fact on its card.
+    They travel together because they arrive together, in one record of one answer: a URL without
+    the name it belongs to could label a pill with the wrong dataset. Every field is optional, and
+    each absence costs one thing: `url` is what makes the citation convertible, so a record without
+    one is cited as text and still listed in the report's References section; a record with no
+    usable name is labelled from the URN; one with no date carries one fewer fact on its card.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    url: str
+    # `None` where the catalogue reported no URL, and where it reported one a browser cannot open:
+    # an unusable URL is normalized away at the boundary, so nothing further has to re-decide it.
+    url: str | None = None
     name: str | None = None
     # Carried exactly as the tool reported it — the app is not the authority on what a server's
     # value means, so it is neither reformatted nor rendered as a relative phrase.
     last_updated: str | None = None
+    # The record as the catalogue reported it, whole and unvalidated, which is what a References
+    # row reads its configured columns out of. The three fields above are the pill's own view of
+    # the same record: named by the contract, and normalized where the pill needs them to be.
+    fields: dict[str, Any] = Field(default_factory=dict)
 
 
 class HtmlTagSelector(BaseModel):
@@ -215,9 +224,14 @@ class _ConvertibleDocumentCitation(BaseModel):
 
 
 class _ConvertibleDatasetCitation(BaseModel):
-    """A dataset citation its condition holds for: the URN it names, and what the catalogue said."""
+    """A dataset citation its condition holds for: the URN it names, and what the catalogue said.
+
+    `url` is carried beside the record rather than read back out of it, because being convertible
+    is exactly having one: the record's own `url` is optional, and this one is not.
+    """
 
     dataset_id: str
+    url: str
     source: DatasetSource
 
     @property
@@ -583,7 +597,7 @@ def _dataset_body(
         source=AnnotationSource(
             attachment=AnnotationAttachment(
                 type=DATASET_MIME_TYPE,
-                url=source.url,
+                url=citation.url,
                 title=f"{_shorten_for_pill(leading, pill_chars)}{_DATASET_LABEL_SUFFIX}",
             )
         ),
@@ -615,9 +629,8 @@ def _convertible_citation(
 
     One condition per kind of source, both decided here and both about whether the reader can
     open what the pill would point at. A document citation needs a PDF URL for the document it
-    names. A dataset citation needs a record for the URN it names, carrying a URL a browser can
-    open — a storage-relative path would make the client offer a file download rather than a
-    page.
+    names. A dataset citation needs a record for the URN it names, carrying a URL — the record's
+    reader has already refused one a browser could not open, so there is nothing to re-decide.
     """
     if marker.document_id is not None and marker.page is not None:
         url = document_urls.get(marker.document_id)
@@ -628,9 +641,15 @@ def _convertible_citation(
         )
     if marker.dataset_id is not None:
         source = dataset_sources.get(marker.dataset_id)
-        if source is None or not is_web_url(source.url):
+        # A record with no URL is a cited dataset all the same — it keeps its marker text here
+        # and is still listed in the References section, which is why the read no longer drops it.
+        # The URL is re-checked rather than trusted: the catalogue reader normalizes an unusable
+        # one away, and this function is also called with sources a caller built itself.
+        if source is None or source.url is None or not is_web_url(source.url):
             return None
-        return _ConvertibleDatasetCitation(dataset_id=marker.dataset_id, source=source)
+        return _ConvertibleDatasetCitation(
+            dataset_id=marker.dataset_id, url=source.url, source=source
+        )
     return None
 
 

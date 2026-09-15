@@ -12,7 +12,17 @@ from pytest import MonkeyPatch
 
 import dial_deep_research.app.mcp_tools as tools_mod
 from dial_deep_research.app.mcp_tools import build_mcp_client, load_mcp_tools
-from dial_deep_research.app_properties import MCPClientSettings, MCPServerType
+from dial_deep_research.app_properties import (
+    MCPClientSettings,
+    MCPServerType,
+    ReferenceColumn,
+    ReferencesTable,
+)
+
+
+def _table(title: str, key: str) -> ReferencesTable:
+    """A minimal References table, which every server entry must carry."""
+    return ReferencesTable(title=title, columns=(ReferenceColumn(heading=title, key=key),))
 
 
 def _connection(client: MultiServerMCPClient, server_name: str) -> Any:
@@ -33,6 +43,7 @@ def _deployment_server(
         file_sharing_tool=file_sharing_tool,
         document_metadata_resource="documents://metadata/{document_ids}",
         document_title_key="publication_title",
+        references_table=_table("Documents", "publication_title"),
     )
 
 
@@ -43,6 +54,7 @@ def _dataset_server(server_name: str = "datasets") -> MCPClientSettings:
         server_type="statgpt",
         deployment_id="statgpt-mcp",
         dataset_metadata_tool="list_datasets",
+        references_table=_table("Datasets", "name"),
     )
 
 
@@ -178,6 +190,7 @@ def _file_sharing_server(
         file_sharing_tool=tool_name,
         document_metadata_resource="documents://metadata/{document_ids}",
         document_title_key="publication_title",
+        references_table=_table("Documents", "publication_title"),
     )
 
 
@@ -267,6 +280,7 @@ def _dataset_metadata_server(
         deployment_id="statgpt-mcp",
         tools_to_include=tools_to_include or [],
         dataset_metadata_tool=tool_name,
+        references_table=_table("Datasets", "name"),
     )
 
 

@@ -53,6 +53,10 @@ def _properties() -> ApplicationProperties:
                     "file_sharing_tool": "get_citation_url",
                     "document_metadata_resource": "documents://metadata/{document_ids}",
                     "document_title_key": "publication_title",
+                    "references_table": {
+                        "title": "Documents",
+                        "columns": [{"heading": "Title", "key": "publication_title"}],
+                    },
                 }
             ],
         }

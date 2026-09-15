@@ -62,13 +62,12 @@ from .prompts import (
     RESEARCH_REVIEW_SYSTEM_PROMPT,
     ReportReview,
     ResearchReview,
-    render_length_exemptions,
     render_next_instruction,
     render_plan,
     render_protected_section_names,
     render_report_structure,
 )
-from .report_length import count_report_words
+from .report_length import LENGTH_EXEMPTIONS, count_report_words
 from .report_rules import build_report_rules, render_writer_instructions
 from .state import ResearchState
 from .tools import RULE_NEVER_ALONE, RULE_ONCE_PER_TURN, UPDATE_STATUS_TOOL_NAME
@@ -333,9 +332,7 @@ class ReportReviewOutcome(BaseModel):
     """One report review's result, handed to the runner so it can render a DIAL stage.
 
     Carries no DIAL types: the node decides what to report, the runner decides how it is
-    rendered. `length_exemptions` names what `word_count` leaves out, so the stage can state the
-    measure it shows rather than let a reader count the report and find a different number.
-    `violations` is everything the next revision must fix — the review model's violations, with
+    rendered. `violations` is everything the next revision must fix — the review model's violations, with
     the app-measured length violation prepended when the draft exceeds the ceiling. `error` records a failed review call (the exception kind); the length violation
     joins the list regardless, so a failed call still carries it. The violation text belongs
     in the stage only — never in a log record, per the logging-policy content allowlist.
@@ -344,7 +341,6 @@ class ReportReviewOutcome(BaseModel):
     draft_number: int
     word_count: int
     max_words: int
-    length_exemptions: str
     violations: list[str]
     error: str | None
     duration_seconds: float
@@ -370,8 +366,7 @@ ReportReviewResultStageEmitter = Callable[[ReportReviewOutcome], None]
 class ReportBudgetExhausted(BaseModel):
     """The version budget skipping a report review, handed to the runner to render as a stage.
 
-    `length_exemptions` names what `word_count` leaves out, so the stage can state the measure it
-    shows. The counterpart of `ResearchBudgetExhausted` on the report side: both are reported by the
+    The counterpart of `ResearchBudgetExhausted` on the report side: both are reported by the
     router that decides the hand-off, and both carry the budget beside the number it bounds.
     """
 
@@ -379,7 +374,6 @@ class ReportBudgetExhausted(BaseModel):
     word_count: int
     max_words: int
     max_versions: int
-    length_exemptions: str
 
 
 ReportBudgetExhaustedEmitter = Callable[[ReportBudgetExhausted], None]
@@ -448,9 +442,9 @@ def make_report_node(
             report_messages.append(
                 HumanMessage(
                     content=REPORT_REVISION_REQUEST.format(
-                        word_count=count_report_words(previous_draft, sections=sections),
+                        word_count=count_report_words(previous_draft),
                         max_words=max_words,
-                        length_exemptions=render_length_exemptions(sections),
+                        length_exemptions=LENGTH_EXEMPTIONS,
                         instruction=state.get("report_revision_instruction") or "",
                         draft=previous_draft,
                     )
@@ -495,7 +489,7 @@ def make_report_node(
             llm_duration,
             len(report_messages),
             len(text),
-            count_report_words(text, sections=sections),
+            count_report_words(text),
             format_token_usage(response.usage_metadata),
         )
         # No `AIMessage` into `messages`: drafts stay out of the transcript, so a rejected one
@@ -527,7 +521,7 @@ def make_report_review_node(
         emit_activity(REPORT_REVIEW_ACTIVITY)
         start = time.monotonic()
         draft = state["report"] or ""
-        word_count = count_report_words(draft, sections=sections)
+        word_count = count_report_words(draft)
         draft_number = state.get("report_version", 0)
 
         review_messages = [
@@ -581,7 +575,6 @@ def make_report_review_node(
             draft_number=draft_number,
             word_count=word_count,
             max_words=max_words,
-            length_exemptions=render_length_exemptions(sections),
             violations=violations,
             error=error,
             duration_seconds=duration,
@@ -689,7 +682,7 @@ def route_after_report(
             report_version=draft_number, max_versions=max_versions
         ):
             return "report-review"
-        word_count = count_report_words(state.get("report") or "", sections=sections)
+        word_count = count_report_words(state.get("report") or "")
         logger.info(
             "Report delivered without review: draft=%d max_versions=%d words=%d",
             draft_number,
@@ -703,7 +696,6 @@ def route_after_report(
                     word_count=word_count,
                     max_words=max_words,
                     max_versions=max_versions,
-                    length_exemptions=render_length_exemptions(sections),
                 )
             )
         return "end"

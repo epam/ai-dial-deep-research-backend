@@ -1,21 +1,21 @@
 """Reading a report draft's Markdown: its section headings, and how long it is.
 
-Two jobs that share one definition of "this line is a section heading" (`##` and its text), so
-the rule that checks the headings and the count that skips the references section can never
-disagree about what they are looking at.
+Several jobs that share one definition of "this line is a section heading" (`##` and its text), so
+the rule that checks the headings, the count that measures the draft, and the delivery step that
+finds a section by name can never disagree about what they are looking at.
 
-The length the ceiling bounds is layered on `count_words`: it leaves out the parts whose size the
-writer does not really choose — the inline citations, and the references section where the
-configured structure declares one. What remains is the report's prose.
+The length the ceiling bounds is layered on `count_words`: it leaves out the one part whose size
+the writer does not really choose, the inline citations. What remains is the report's prose. The
+references section needs no exemption, being no part of a draft: the app writes it after the
+report loop settles (see `references.py`).
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 from typing import NamedTuple
 
-from dial_deep_research.app_properties import ReportSection, references_section
 from dial_deep_research.utils.content import count_words
 
 # The two inline citation forms the report prompt defines: `[doc 150, page 3]` and
@@ -32,6 +32,11 @@ _CITATION_RE = re.compile(r"[ \t]*\[\s*(?:doc(?:ument)?|dataset)\b[^\]\n]*\]", r
 # Any Markdown ATX heading, with its level in group 1 and its text in group 2. Sections are the
 # level-two ones; the rest are the sub-headings a section may carry.
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+
+# What `count_report_words` leaves out, as a noun phrase for the prompts and the review stage. A
+# constant rather than something rendered per instance: the references section is written by the
+# app after the loop settles, so a draft's citations are the only thing the measure can exempt.
+LENGTH_EXEMPTIONS = "the inline citations"
 
 SECTION_HEADING_LEVEL = 2
 
@@ -62,43 +67,36 @@ def iter_headings(draft: str) -> Iterator[Heading]:
             yield Heading(level=len(match.group(1)), text=match.group(2).strip())
 
 
-def count_report_words(draft: str, *, sections: Sequence[ReportSection]) -> int:
+def count_report_words(draft: str) -> int:
     """The report length the word ceiling bounds.
 
     The one definition, used wherever a report length is stated — the revision instruction, the
     over-ceiling gate, the review stage, the log records — so those can never disagree. Markdown
     syntax inside the counted text still scores as words, as `count_words` describes.
+
+    Only the inline citations are left out. The references section is not: the app writes it after
+    the loop settles, so no draft carries one, and a draft that writes one anyway is a structure
+    violation whose words count like any other — a violation must not also earn length budget.
     """
-    return count_words(strip_inline_citations(_drop_references_section(draft, sections=sections)))
+    return count_words(strip_inline_citations(draft))
 
 
-def _drop_references_section(draft: str, *, sections: Sequence[ReportSection]) -> str:
-    """Return the draft up to its references-section heading, when it has one.
+def find_section_heading_line(draft: str, *, name: str) -> int | None:
+    """The index of the line carrying this section's `##` heading, or `None` when it has none.
 
-    Three conditions, all required, and each failing one leaves the draft whole:
-
-    1. the configured structure declares a references section (its last one);
-    2. the draft carries a `##` heading — the level every section must use — whose text is that
-       section's configured name;
-    3. everything from that heading to the end of the draft is the section's body.
-
-    A draft that renamed the section, left it out, or wrote it at another heading level keeps
-    every word: each of those is a structure violation report-review is about to reject, and a
-    violation must not also earn length budget.
+    The one place that looks a section up by its configured name, so the delivery step and
+    anything else that needs one agree about what counts as a match. The heading must be at the
+    level every section uses; the name is compared through `normalize_heading`, so decoration a
+    writer added around it still matches.
     """
-    section = references_section(sections)
-    if section is None:
-        return draft
-    wanted = normalize_heading(section.name)
-
-    lines = draft.splitlines()
-    for i, line in enumerate(lines):
+    wanted = normalize_heading(name)
+    for i, line in enumerate(draft.splitlines()):
         match = _HEADING_RE.match(line)
         if match is None or len(match.group(1)) != SECTION_HEADING_LEVEL:
             continue
         if normalize_heading(match.group(2)) == wanted:
-            return "\n".join(lines[:i])
-    return draft
+            return i
+    return None
 
 
 def normalize_heading(text: str) -> str:

@@ -45,6 +45,8 @@ async def _deliver(runner: ResearchRunner) -> None:
         dataset_metadata_tool=None,
         configured_dataset_tool_name=None,
         pill_title_max_chars=20,
+        references=None,
+        references_tables=(),
     )
 
 
@@ -184,6 +186,10 @@ def _properties(**overrides: Any) -> ApplicationProperties:
                     "file_sharing_tool": "get_citation_url",
                     "document_metadata_resource": "documents://metadata/{document_ids}",
                     "document_title_key": "publication_title",
+                    "references_table": {
+                        "title": "Documents",
+                        "columns": [{"heading": "Title", "key": "publication_title"}],
+                    },
                 }
             ],
             **overrides,

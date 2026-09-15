@@ -55,14 +55,14 @@
         },
         {
           "name": "References",
-          "description": "Decode every source cited in the report.\nIf any document was cited, add a \"Documents\" table, with columns: `id`, `title`, `publication date`.\nIf any dataset was cited, add a \"Datasets\" table, with columns: `title`.\nEach table lists only the sources of its type actually cited in the report,\nso a type with nothing cited drops its own table.\nThe section itself is always written: if the research cited no source at all,\nsay so plainly here rather than leaving the section out or inventing entries.",
+          "description": "This report cites no source: the research found no citable evidence.",
           "protected": true,
           "references_section": true
         }
       ],
       "description": "The ordered sections a report follows, each rendered as a Markdown `##` heading. Section names must be unique, at least one section must be protected, and only the last section may set references_section. Report-wide rules (the word ceiling, the ban on confidence scores and processing times, the inline citation format) are not configured here — only the sections and what belongs in them.",
       "items": {
-        "description": "One section of the report structure.\n\n`description` is the single home for that section's rules — what belongs in it, how to\nrender it, any table columns it carries. It is passed verbatim to the report writer and\nto report-review, so changing a section's behavior means editing this one string.",
+        "description": "One section of the report structure.\n\nFor a section the report writer writes, `description` is the single home for that section's\nrules — what belongs in it, how to render it, any table columns it carries. It is passed\nverbatim to the report writer and to report-review, so changing a section's behavior means\nediting this one string.\n\nThe references section is the one the writer does not write: the application builds it from\nwhat the servers reported about the sources the report cites. Its `description` therefore\ncarries the text the section itself shows when the report cited no source at all, which is the\nonly prose an app-built section holds.",
         "properties": {
           "name": {
             "description": "The section's heading in the report.",
@@ -71,7 +71,7 @@
             "type": "string"
           },
           "description": {
-            "description": "Everything the report writer and the review step need to know about this section's content: its purpose, what belongs in it, how to render it, any table columns. This is the only place a section's rules live.",
+            "description": "For a section the report writer writes: everything the writer and the review step need to know about its content — its purpose, what belongs in it, how to render it, any table columns — and the only place those rules live. For the references section, which the application builds rather than the writer: the text that section shows when the report cited no source at all. A reader sees that text, so write it in the language this channel's readers read.",
             "minLength": 1,
             "title": "Description",
             "type": "string"
@@ -84,7 +84,7 @@
           },
           "references_section": {
             "default": false,
-            "description": "Whether this section is the report's list of sources. Only the last section may be one, and a structure need not have one at all. Its length follows from how much the research cited rather than from what the report chose to say, so its words do not count toward max_report_words; in every other way it is a section like any other.",
+            "description": "Whether this section is the report's list of sources. Only the last section may be one, and a structure need not have one at all. The application builds this section itself, from what the servers reported about the sources the report cites, so the report writer is not asked to write it and its columns come from each MCP server's references_table rather than from this section's description.",
             "title": "References Section",
             "type": "boolean"
           }
@@ -251,11 +251,58 @@
             "default": null,
             "description": "Name of this server's tool listing the datasets this channel exposes. The application calls it when it delivers a report, to learn a cited dataset's name and the address of its page, so a dataset citation becomes a pill that opens that page. The tool takes no arguments and answers with the whole catalogue; the application selects the datasets the report cites. It stays available to the research agent, which uses the same listing to discover which datasets exist, so naming it here only adds a caller. Required on a statgpt server, and only a statgpt server may set it: without it every dataset citation is delivered as a bare URN in square brackets, which names nothing the reader can open.",
             "title": "Dataset Metadata Tool"
+          },
+          "references_table": {
+            "description": "How this server's cited sources are listed in the report's References section: the sub-heading the table is written under, and its columns. The application builds that section itself from what the servers reported about the sources the report cites, so this is where a channel says what a row holds. Required on every server, whatever it serves and whatever the report structure declares: a server without a table is a server whose cited sources cannot be listed. An instance whose structure declares no references section simply builds none.",
+            "properties": {
+              "title": {
+                "description": "The sub-heading this table is written under, for example Documents or Datasets. A reader sees it, so write it in the language this channel's readers read.",
+                "minLength": 1,
+                "title": "Title",
+                "type": "string"
+              },
+              "columns": {
+                "description": "The table's columns, in the order they are rendered. The order matters beyond layout: the first column is the one a reader identifies a row by, so it is the one that falls back to the source's identifier — a document id, or a dataset's URN — when its key resolves nothing. Put the column naming the source first.",
+                "items": {
+                  "description": "One column of a References table: the heading a reader sees, and the key it reads.",
+                  "properties": {
+                    "heading": {
+                      "description": "The column's header text in the report's References table. A reader sees it, so write it in the language this channel's readers read.",
+                      "minLength": 1,
+                      "title": "Heading",
+                      "type": "string"
+                    },
+                    "key": {
+                      "description": "The name this server reports the value under — a key of a document's metadata object, or a field of a dataset's catalogue record. A source that reports nothing usable under it leaves the cell empty, except in the first column, which falls back to the source's own identifier.",
+                      "minLength": 1,
+                      "title": "Key",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "heading",
+                    "key"
+                  ],
+                  "title": "ReferenceColumn",
+                  "type": "object"
+                },
+                "minItems": 1,
+                "title": "Columns",
+                "type": "array"
+              }
+            },
+            "required": [
+              "title",
+              "columns"
+            ],
+            "title": "ReferencesTable",
+            "type": "object"
           }
         },
         "required": [
           "server_name",
-          "server_type"
+          "server_type",
+          "references_table"
         ],
         "title": "MCPClientSettings",
         "type": "object"

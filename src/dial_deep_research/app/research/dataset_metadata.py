@@ -1,15 +1,20 @@
 """Calling the configured dataset-metadata tool, and reading the catalogue it answers with.
 
 A dataset citation needs three things the app does not hold: the dataset's human name, which
-labels the pill and the card; the address of its page, which is what the pill's card opens; and
-its last-update date, which that card carries when the server knows one. All three come from one
-MCP tool. The contract that tool must satisfy — no arguments, a `datasets` array as its
-structured result, `url` and `lastUpdated` optional per record — is stated by the
-report-citations capability; this module depends on nothing else about it.
+labels the pill and the card and leads its References row; the address of its page, which is what
+the pill's card opens; and its last-update date, which that card carries when the server knows
+one. All three come from one MCP tool. The contract that tool must satisfy — no arguments, a
+`datasets` array as its structured result, `url` and `lastUpdated` optional per record — is stated
+by the report-citations capability; this module depends on nothing else about it.
 
 The tool answers with the channel's whole catalogue, so selecting the cited datasets happens
 here. A cited URN is matched against a record's `id` character for character, as the
 source-attribution capability requires.
+
+A selected record is carried out twice over: as the four fields the contract names, which is what
+a pill is built from, and as the record the server sent, which is what a References row reads its
+configured columns out of. The two views are why a record with nothing a pill can use is still
+worth keeping.
 
 Every failure here is one exception carrying a `kind`, the token the citation step's warning
 reports. Nothing in this module logs: the answer is a tool response body, and the caller owns
@@ -92,12 +97,16 @@ class DatasetMetadataError(Exception):
 async def read_dataset_sources(
     *, tool: BaseTool, dataset_ids: Sequence[str]
 ) -> dict[str, DatasetSource]:
-    """What the catalogue reports about each cited dataset a pill can be drawn for.
+    """What the catalogue reports about each cited dataset, by URN.
 
-    A dataset the answer omits, or reports without a URL a browser can open, is simply absent
-    from the result; its citations keep the marker text the report writer wrote. A record with no
-    usable name is kept, its citation labelled from the URN, because what makes a dataset citable
-    is the page rather than the name.
+    Every record whose `id` is cited is kept, whatever it carries: the pill is not the only thing
+    that reads one, and the report's References section lists a cited dataset whether or not it can
+    be opened. What a missing field costs is decided where that field is used — a record with no
+    usable name is labelled from the URN, and one whose URL a browser cannot open carries no URL,
+    so its citations keep the marker text the report writer wrote.
+
+    A dataset the answer omits is simply absent from the result, and its References row is built
+    from its URN alone.
 
     The tool is invoked **tool-call-shaped** for the reason `share_documents` is: a
     plain-argument call returns no `ToolMessage`, and the structured result travels in that
@@ -128,19 +137,45 @@ async def read_dataset_sources(
         # deliberately not read — a second read path, for a case no server we can test against
         # produces, would decide silently which copy an answer came from.
         raise DatasetMetadataError(KIND_DATASET_NO_STRUCTURED_RESULT)
+    structured = artifact["structured_content"]
     try:
-        catalogue = _Catalogue.model_validate(artifact["structured_content"])
+        catalogue = _Catalogue.model_validate(structured)
     except ValidationError as error:
         raise DatasetMetadataError(KIND_DATASET_UNREADABLE_RESULT) from error
 
+    raw_by_id = _raw_records_by_id(structured)
     cited = set(dataset_ids)
     sources: dict[str, DatasetSource] = {}
     for record in catalogue.datasets:
-        if record.id is None or record.id not in cited or record.url is None:
+        if record.id is None or record.id not in cited:
             continue
-        if not is_web_url(record.url):
-            continue
+        # A URL the client could not follow is normalized away here rather than carried inward: a
+        # pill that opens nothing is worse than a marker that at least names its source, and every
+        # later reader of this record would otherwise have to re-decide the same question.
+        url = record.url if record.url is not None and is_web_url(record.url) else None
         sources[record.id] = DatasetSource(
-            url=record.url, name=record.name, last_updated=record.last_updated
+            url=url,
+            name=record.name,
+            last_updated=record.last_updated,
+            fields=raw_by_id.get(record.id, {}),
         )
     return sources
+
+
+def _raw_records_by_id(structured: Any) -> dict[str, dict[str, Any]]:
+    """The reported records as they arrived, keyed by id, for the References rows to read.
+
+    Read off the raw answer rather than off the validated catalogue, because validation declares
+    the four fields the pill needs and a row may be configured to read any other field the channel
+    reports. A record whose id is not a string is skipped: it matches no cited URN either.
+    """
+    if not isinstance(structured, dict):
+        return {}
+    records = structured.get("datasets")
+    if not isinstance(records, list):
+        return {}
+    return {
+        record["id"]: record
+        for record in records
+        if isinstance(record, dict) and isinstance(record.get("id"), str)
+    }

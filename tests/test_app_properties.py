@@ -21,6 +21,18 @@ def direct_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+# Every server entry must declare the References table its cited sources are listed in.
+_DOCUMENTS_TABLE: dict = {
+    "title": "Documents",
+    "columns": [{"heading": "Title", "key": "publication_title"}],
+}
+
+_DATASETS_TABLE: dict = {
+    "title": "Datasets",
+    "columns": [{"heading": "Datasets", "key": "name"}],
+}
+
+
 VALID_PROPERTIES: dict = {
     "prompts": {
         "client_name": "Test Corp",
@@ -31,6 +43,10 @@ VALID_PROPERTIES: dict = {
         {
             "server_name": "rag",
             "server_type": "generic_rag",
+            "references_table": {
+                "title": "Documents",
+                "columns": [{"heading": "Documents", "key": "publication_title"}],
+            },
             "deployment_id": "generic-rag-mcp",
             "file_sharing_tool": "get_citation_url",
             "document_metadata_resource": "documents://metadata/{document_ids}",
@@ -236,7 +252,7 @@ def test_schema_inlines_list_item_model() -> None:
     schema = ApplicationProperties.model_json_schema()
     items = schema["properties"]["mcp_servers"]["items"]
     assert "$ref" not in items
-    assert set(items["required"]) == {"server_name", "server_type"}
+    assert set(items["required"]) == {"server_name", "server_type", "references_table"}
     assert "tools_to_include" in items["properties"]
 
 
@@ -281,6 +297,10 @@ def test_one_server_of_each_type_is_accepted() -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "references_table": {
+                    "title": "Documents",
+                    "columns": [{"heading": "Documents", "key": "publication_title"}],
+                },
                 "deployment_id": "a",
                 "file_sharing_tool": "get_citation_url",
                 "document_metadata_resource": "documents://metadata/{document_ids}",
@@ -289,6 +309,10 @@ def test_one_server_of_each_type_is_accepted() -> None:
             {
                 "server_name": "datasets",
                 "server_type": "statgpt",
+                "references_table": {
+                    "title": "Datasets",
+                    "columns": [{"heading": "Datasets", "key": "name"}],
+                },
                 "deployment_id": "b",
                 "dataset_metadata_tool": "list_datasets",
             },
@@ -309,6 +333,10 @@ def test_two_servers_of_one_type_are_rejected() -> None:
             {
                 "server_name": "rag-a",
                 "server_type": "generic_rag",
+                "references_table": {
+                    "title": "Documents",
+                    "columns": [{"heading": "Documents", "key": "publication_title"}],
+                },
                 "deployment_id": "a",
                 "file_sharing_tool": "get_citation_url",
                 "document_metadata_resource": "documents://metadata/{document_ids}",
@@ -317,6 +345,10 @@ def test_two_servers_of_one_type_are_rejected() -> None:
             {
                 "server_name": "rag-b",
                 "server_type": "generic_rag",
+                "references_table": {
+                    "title": "Documents",
+                    "columns": [{"heading": "Documents", "key": "publication_title"}],
+                },
                 "deployment_id": "b",
                 "file_sharing_tool": "get_citation_url",
                 "document_metadata_resource": "documents://metadata/{document_ids}",
@@ -341,12 +373,20 @@ def test_two_dataset_servers_are_rejected_too() -> None:
             {
                 "server_name": "stat-a",
                 "server_type": "statgpt",
+                "references_table": {
+                    "title": "Datasets",
+                    "columns": [{"heading": "Datasets", "key": "name"}],
+                },
                 "deployment_id": "a",
                 "dataset_metadata_tool": "list_datasets",
             },
             {
                 "server_name": "stat-b",
                 "server_type": "statgpt",
+                "references_table": {
+                    "title": "Datasets",
+                    "columns": [{"heading": "Datasets", "key": "name"}],
+                },
                 "deployment_id": "b",
                 "dataset_metadata_tool": "list_datasets",
             },
@@ -361,7 +401,12 @@ def test_a_document_server_must_name_its_file_sharing_tool() -> None:
     """Without it every document citation ships as plain text, which is a broken server."""
     with pytest.raises(ValidationError) as excinfo:
         MCPClientSettings.model_validate(
-            {"server_name": "rag", "server_type": "generic_rag", "deployment_id": "x"}
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "deployment_id": "x",
+                "references_table": _DOCUMENTS_TABLE,
+            }
         )
     assert "must name its file_sharing_tool" in str(excinfo.value)
 
@@ -372,6 +417,10 @@ def test_a_dataset_server_may_leave_the_file_sharing_tool_unset() -> None:
         {
             "server_name": "datasets",
             "server_type": "statgpt",
+            "references_table": {
+                "title": "Datasets",
+                "columns": [{"heading": "Datasets", "key": "name"}],
+            },
             "deployment_id": "x",
             "dataset_metadata_tool": "list_datasets",
         }
@@ -382,7 +431,13 @@ def test_a_dataset_server_may_leave_the_file_sharing_tool_unset() -> None:
 def test_a_server_with_no_connection_reports_that_before_the_missing_tool() -> None:
     """A server that cannot be reached at all is the more fundamental misconfiguration."""
     with pytest.raises(ValidationError) as excinfo:
-        MCPClientSettings.model_validate({"server_name": "rag", "server_type": "generic_rag"})
+        MCPClientSettings.model_validate(
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "references_table": _DOCUMENTS_TABLE,
+            }
+        )
     assert "either deployment_id or connection must be set" in str(excinfo.value)
 
 
@@ -393,6 +448,10 @@ def test_one_server_may_name_a_file_sharing_tool() -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "references_table": {
+                    "title": "Documents",
+                    "columns": [{"heading": "Documents", "key": "publication_title"}],
+                },
                 "deployment_id": "a",
                 "file_sharing_tool": "share_documents",
                 "document_metadata_resource": "documents://metadata/{document_ids}",
@@ -401,6 +460,10 @@ def test_one_server_may_name_a_file_sharing_tool() -> None:
             {
                 "server_name": "datasets",
                 "server_type": "statgpt",
+                "references_table": {
+                    "title": "Datasets",
+                    "columns": [{"heading": "Datasets", "key": "name"}],
+                },
                 "deployment_id": "b",
                 "dataset_metadata_tool": "list_datasets",
             },
@@ -418,6 +481,10 @@ def test_no_server_naming_one_switches_inline_citations_off() -> None:
             {
                 "server_name": "datasets",
                 "server_type": "statgpt",
+                "references_table": {
+                    "title": "Datasets",
+                    "columns": [{"heading": "Datasets", "key": "name"}],
+                },
                 "deployment_id": "a",
                 "dataset_metadata_tool": "list_datasets",
             }
@@ -437,6 +504,10 @@ def test_only_a_document_server_may_name_a_file_sharing_tool() -> None:
             {
                 "server_name": "datasets",
                 "server_type": "statgpt",
+                "references_table": {
+                    "title": "Datasets",
+                    "columns": [{"heading": "Datasets", "key": "name"}],
+                },
                 "deployment_id": "b",
                 "file_sharing_tool": "copy_to_user",
             }
@@ -455,6 +526,10 @@ def test_no_configuration_can_name_two_file_sharing_tools() -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "references_table": {
+                    "title": "Documents",
+                    "columns": [{"heading": "Documents", "key": "publication_title"}],
+                },
                 "deployment_id": "a",
                 "file_sharing_tool": "get_citation_url",
                 "document_metadata_resource": "documents://metadata/{document_ids}",
@@ -463,6 +538,10 @@ def test_no_configuration_can_name_two_file_sharing_tools() -> None:
             {
                 "server_name": "datasets",
                 "server_type": "statgpt",
+                "references_table": {
+                    "title": "Datasets",
+                    "columns": [{"heading": "Datasets", "key": "name"}],
+                },
                 "deployment_id": "b",
                 "file_sharing_tool": "copy_to_user",
             },
@@ -479,6 +558,10 @@ def test_duplicate_server_names_are_rejected() -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "references_table": {
+                    "title": "Documents",
+                    "columns": [{"heading": "Documents", "key": "publication_title"}],
+                },
                 "deployment_id": "a",
                 "file_sharing_tool": "get_citation_url",
                 "document_metadata_resource": "documents://metadata/{document_ids}",
@@ -487,6 +570,10 @@ def test_duplicate_server_names_are_rejected() -> None:
             {
                 "server_name": "rag",
                 "server_type": "statgpt",
+                "references_table": {
+                    "title": "Datasets",
+                    "columns": [{"heading": "Datasets", "key": "name"}],
+                },
                 "deployment_id": "b",
                 "dataset_metadata_tool": "list_datasets",
             },
@@ -502,6 +589,10 @@ def test_deployment_mode_server_loads() -> None:
         {
             "server_name": "rag",
             "server_type": "generic_rag",
+            "references_table": {
+                "title": "Documents",
+                "columns": [{"heading": "Documents", "key": "publication_title"}],
+            },
             "deployment_id": "generic-rag-mcp",
             "file_sharing_tool": "get_citation_url",
             "document_metadata_resource": "documents://metadata/{document_ids}",
@@ -518,6 +609,10 @@ def test_direct_mode_server_loads(direct_mode: None) -> None:
         {
             "server_name": "rag",
             "server_type": "generic_rag",
+            "references_table": {
+                "title": "Documents",
+                "columns": [{"heading": "Documents", "key": "publication_title"}],
+            },
             "connection": "$env:{MY_MCP_CONN}",
             "tools_to_include": ["search_docs"],
             "file_sharing_tool": "get_citation_url",
@@ -537,6 +632,10 @@ def test_connection_and_deployment_id_together_are_rejected(direct_mode: None) -
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "references_table": {
+                    "title": "Documents",
+                    "columns": [{"heading": "Documents", "key": "publication_title"}],
+                },
                 "deployment_id": "x",
                 "connection": "$env:{MY_MCP_CONN}",
             }
@@ -546,7 +645,13 @@ def test_connection_and_deployment_id_together_are_rejected(direct_mode: None) -
 
 def test_no_mode_configured_is_rejected() -> None:
     with pytest.raises(ValidationError) as excinfo:
-        MCPClientSettings.model_validate({"server_name": "rag", "server_type": "generic_rag"})
+        MCPClientSettings.model_validate(
+            {
+                "server_name": "rag",
+                "server_type": "generic_rag",
+                "references_table": _DOCUMENTS_TABLE,
+            }
+        )
     assert "either deployment_id or connection must be set" in str(excinfo.value)
 
 
@@ -574,6 +679,10 @@ def test_default_placeholder_form_is_rejected(direct_mode: None) -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "references_table": {
+                    "title": "Documents",
+                    "columns": [{"heading": "Documents", "key": "publication_title"}],
+                },
                 "connection": "$env:{SOME_VAR|whatever}",
             }
         )
@@ -599,6 +708,10 @@ def test_malformed_connection_bundle_is_rejected(
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "references_table": {
+                    "title": "Documents",
+                    "columns": [{"heading": "Documents", "key": "publication_title"}],
+                },
                 "connection": "$env:{MY_MCP_CONN}",
             }
         )
@@ -613,6 +726,10 @@ def test_unresolved_env_placeholder_fails_validation(
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "references_table": {
+                    "title": "Documents",
+                    "columns": [{"heading": "Documents", "key": "publication_title"}],
+                },
                 "connection": "$env:{MISSING_CONN}",
             }
         )
@@ -681,6 +798,10 @@ def _document_server(**overrides: object) -> dict[str, object]:
     return {
         "server_name": "rag",
         "server_type": "generic_rag",
+        "references_table": {
+            "title": "Documents",
+            "columns": [{"heading": "Documents", "key": "publication_title"}],
+        },
         "deployment_id": "a",
         "file_sharing_tool": "get_citation_url",
         **_TITLE_SOURCE,
@@ -705,6 +826,10 @@ def test_a_document_server_naming_no_title_source_is_rejected() -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "references_table": {
+                    "title": "Documents",
+                    "columns": [{"heading": "Documents", "key": "publication_title"}],
+                },
                 "deployment_id": "a",
                 "file_sharing_tool": "get_citation_url",
             }
@@ -720,6 +845,10 @@ def test_one_title_field_without_the_other_is_rejected(field: str) -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "references_table": {
+                    "title": "Documents",
+                    "columns": [{"heading": "Documents", "key": "publication_title"}],
+                },
                 "deployment_id": "a",
                 "file_sharing_tool": "get_citation_url",
                 field: _TITLE_SOURCE[field],
@@ -752,6 +881,10 @@ def test_only_a_document_server_may_name_a_title_source(field: str) -> None:
             {
                 "server_name": "datasets",
                 "server_type": "statgpt",
+                "references_table": {
+                    "title": "Datasets",
+                    "columns": [{"heading": "Datasets", "key": "name"}],
+                },
                 "deployment_id": "b",
                 field: _TITLE_SOURCE[field],
             }
@@ -767,6 +900,10 @@ def test_properties_expose_the_one_configured_title_source() -> None:
             {
                 "server_name": "datasets",
                 "server_type": "statgpt",
+                "references_table": {
+                    "title": "Datasets",
+                    "columns": [{"heading": "Datasets", "key": "name"}],
+                },
                 "deployment_id": "b",
                 "dataset_metadata_tool": "list_datasets",
             },
@@ -812,6 +949,10 @@ def _dataset_server(**overrides: object) -> dict[str, object]:
     return {
         "server_name": "datasets",
         "server_type": "statgpt",
+        "references_table": {
+            "title": "Datasets",
+            "columns": [{"heading": "Datasets", "key": "name"}],
+        },
         "deployment_id": "b",
         "dataset_metadata_tool": "list_datasets",
         **overrides,
@@ -829,7 +970,12 @@ def test_a_dataset_server_naming_no_dataset_metadata_tool_is_rejected() -> None:
     """Without the tool every dataset citation ships as a bare URN, which opens nothing."""
     with pytest.raises(ValidationError) as excinfo:
         MCPClientSettings.model_validate(
-            {"server_name": "datasets", "server_type": "statgpt", "deployment_id": "b"}
+            {
+                "server_name": "datasets",
+                "server_type": "statgpt",
+                "deployment_id": "b",
+                "references_table": _DATASETS_TABLE,
+            }
         )
     assert "must name its dataset_metadata_tool" in str(excinfo.value)
 
@@ -856,3 +1002,119 @@ def test_properties_expose_no_dataset_metadata_tool_when_no_dataset_server_is_co
     """A dataset server must name one, so `None` means this channel serves no datasets."""
     data = {**VALID_PROPERTIES, "mcp_servers": [_document_server()]}
     assert ApplicationProperties.model_validate(data).dataset_metadata_tool is None
+
+
+# --- the References table each server declares ---------------------------------------------------
+
+
+def _server(**overrides: object) -> dict:
+    data: dict = {
+        "server_name": "rag",
+        "server_type": "generic_rag",
+        "deployment_id": "x",
+        "file_sharing_tool": "get_citation_url",
+        "document_metadata_resource": "documents://metadata/{document_ids}",
+        "document_title_key": "publication_title",
+        "references_table": _DOCUMENTS_TABLE,
+    }
+    data.update(overrides)
+    return data
+
+
+def test_a_server_without_a_references_table_is_rejected() -> None:
+    """A server whose cited sources cannot be listed is a broken channel, not a choice."""
+    data = _server()
+    del data["references_table"]
+
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(data)
+
+    assert any(err["loc"] == ("references_table",) for err in excinfo.value.errors())
+
+
+@pytest.mark.parametrize(
+    ("table", "case"),
+    [
+        ({"title": "", "columns": [{"heading": "Title", "key": "t"}]}, "the title is empty"),
+        ({"title": "Documents", "columns": []}, "there are no columns"),
+        (
+            {"title": "Documents", "columns": [{"heading": "", "key": "t"}]},
+            "a column heading is empty",
+        ),
+        (
+            {"title": "Documents", "columns": [{"heading": "Title", "key": ""}]},
+            "a column key is empty",
+        ),
+    ],
+)
+def test_an_unusable_references_table_is_rejected(table: dict, case: str) -> None:
+    with pytest.raises(ValidationError):
+        MCPClientSettings.model_validate(_server(references_table=table))
+    assert case  # names the case under test
+
+
+def test_the_configured_column_order_is_preserved() -> None:
+    """The order is behavior: the first column is the one that falls back to the identifier."""
+    table = {
+        "title": "Documents",
+        "columns": [
+            {"heading": "Publication", "key": "publication_title"},
+            {"heading": "Published", "key": "publication_date"},
+        ],
+    }
+
+    server = MCPClientSettings.model_validate(_server(references_table=table))
+
+    assert [c.heading for c in server.references_table.columns] == ["Publication", "Published"]
+    assert [c.key for c in server.references_table.columns] == [
+        "publication_title",
+        "publication_date",
+    ]
+
+
+def test_the_title_key_and_the_first_column_are_independent() -> None:
+    """The pill's title exists whether or not the structure declares a references section, so
+    the two are configured apart and may name different keys."""
+    table = {"title": "Documents", "columns": [{"heading": "Name", "key": "document_name"}]}
+
+    server = MCPClientSettings.model_validate(
+        _server(document_title_key="publication_title", references_table=table)
+    )
+
+    assert server.document_title_key == "publication_title"
+    assert server.references_table.columns[0].key == "document_name"
+
+
+def test_a_table_is_required_even_with_no_references_section_configured() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "default_report_structure": [
+            {"name": "Summary", "description": "The answer.", "protected": True}
+        ],
+    }
+
+    properties = ApplicationProperties.model_validate(data)
+
+    assert properties.default_report_structure[-1].references_section is False
+    assert properties.mcp_servers[0].references_table.title == "Documents"
+
+
+def test_the_references_tables_follow_the_configured_server_order() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "mcp_servers": [
+            {
+                "server_name": "datasets",
+                "server_type": "statgpt",
+                "deployment_id": "statgpt-mcp",
+                "dataset_metadata_tool": "list_datasets",
+                "references_table": _DATASETS_TABLE,
+            },
+            _server(),
+        ],
+    }
+
+    tables = ApplicationProperties.model_validate(data).references_tables
+
+    assert [t.table.title for t in tables] == ["Datasets", "Documents"]
+    assert [t.source_kind for t in tables] == ["dataset", "document"]
