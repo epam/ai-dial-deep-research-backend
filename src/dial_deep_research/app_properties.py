@@ -11,7 +11,6 @@ artifact of the same schema, kept in sync by `scripts/dump_app_schema.py`.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
 from copy import deepcopy
 from typing import Annotated, Any, Literal
 
@@ -437,18 +436,20 @@ class MCPClientSettings(BaseModel):
 
 
 class ReportSection(BaseModel):
-    """One section of the report structure.
+    """One section of the report structure, which is one section the report writer writes.
 
-    For a section the report writer writes, `description` is the single home for that section's
-    rules — what belongs in it, how to render it, any table columns it carries. It is passed
-    verbatim to the report writer and to report-review, so changing a section's behavior means
-    editing this one string.
+    `description` is the single home for that section's rules — what belongs in it, how to render
+    it, any table columns it carries. It is passed verbatim to the report writer and to
+    report-review, so changing a section's behavior means editing this one string.
 
-    The references section is the one the writer does not write: the application builds it from
-    what the servers reported about the sources the report cites. Its `description` therefore
-    carries the text the section itself shows when the report cited no source at all, which is the
-    only prose an app-built section holds.
+    The References section is no section of this list: the application builds and appends it
+    (`references_section_name` and `references_section_empty_text` are its whole configuration),
+    which is why an unknown field is refused here rather than ignored. A stored structure still
+    carrying the withdrawn `references_section` flag would otherwise keep a References entry the
+    writer is then asked to write beside the one the app appends.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str = Field(
         min_length=1,
@@ -456,12 +457,9 @@ class ReportSection(BaseModel):
     )
     description: str = Field(
         min_length=1,
-        description="For a section the report writer writes: everything the writer and the review"
-        " step need to know about its content — its purpose, what belongs in it, how to render it,"
-        " any table columns — and the only place those rules live. For the references section,"
-        " which the application builds rather than the writer: the text that section shows when the"
-        " report cited no source at all. A reader sees that text, so write it in the language this"
-        " channel's readers read.",
+        description="Everything the report writer and the review step need to know about this"
+        " section's content: its purpose, what belongs in it, how to render it, any table columns."
+        " This is the only place a section's rules live.",
     )
     protected: bool = Field(
         default=False,
@@ -469,19 +467,11 @@ class ReportSection(BaseModel):
         " neither dropped nor restyled by anything the user asked for, and neither can the rules in"
         " its description. At least one section must be protected.",
     )
-    references_section: bool = Field(
-        default=False,
-        description="Whether this section is the report's list of sources. Only the last section"
-        " may be one, and a structure need not have one at all. The application builds this"
-        " section itself, from what the servers reported about the sources the report cites, so the"
-        " report writer is not asked to write it and its columns come from each MCP server's"
-        " references_table rather than from this section's description.",
-    )
 
 
-# What the references section shows when the report cited nothing. It is the section's whole
+# What the References section shows when the report cited nothing. It is the section's whole
 # content in that case, so it is written as prose a reader reads rather than as instructions.
-_REFERENCES_DESCRIPTION = "This report cites no source: the research found no citable evidence."
+_REFERENCES_EMPTY_TEXT = "This report cites no source: the research found no citable evidence."
 
 DEFAULT_REPORT_STRUCTURE: list[ReportSection] = [
     ReportSection(
@@ -509,34 +499,7 @@ DEFAULT_REPORT_STRUCTURE: list[ReportSection] = [
         description="The bottom line the analysis supports, and the limits of what the findings can"
         " answer. No new facts here.",
     ),
-    ReportSection(
-        name="References",
-        description=_REFERENCES_DESCRIPTION,
-        protected=True,
-        references_section=True,
-    ),
 ]
-
-
-def references_section(sections: Sequence[ReportSection]) -> ReportSection | None:
-    """The structure's references section, or `None` when it declares none.
-
-    Only the last section may be one (`ApplicationProperties._validate_report_structure`), so this
-    is the single place that has to know where to look for it.
-    """
-    last = sections[-1] if sections else None
-    return last if last is not None and last.references_section else None
-
-
-def writer_sections(sections: Sequence[ReportSection]) -> list[ReportSection]:
-    """The sections the report writer writes: the structure without its references section.
-
-    One derivation for the prompts and the structure check alike, so the writer cannot be told to
-    omit a section the check then demands.
-    """
-    if references_section(sections) is None:
-        return list(sections)
-    return list(sections[:-1])
 
 
 class Prompts(BaseModel):
@@ -580,10 +543,11 @@ class ApplicationProperties(BaseModel):
     default_report_structure: list[ReportSection] = Field(
         default=DEFAULT_REPORT_STRUCTURE,
         min_length=1,
-        description="The ordered sections a report follows, each rendered as a Markdown `##`"
-        " heading. Section names must be unique, at least one section must be protected, and only"
-        " the last section may set references_section. Report-wide rules (the word ceiling, the"
-        " ban on confidence scores and processing times, the inline citation format) are not"
+        description="The ordered sections the report writer writes, each rendered as a Markdown"
+        " `##` heading. Section names must be unique and at least one section must be protected."
+        " The References section is not one of them: the application appends it to every report,"
+        " under the heading references_section_name. Report-wide rules (the word ceiling, the ban"
+        " on confidence scores and processing times, the inline citation format) are not"
         " configured here — only the sections and what belongs in them.",
     )
     max_report_words: int = Field(
@@ -604,6 +568,22 @@ class ApplicationProperties(BaseModel):
         " one review call. The last permitted version is delivered without another review — its"
         " verdict could not be acted on. 1 means the first draft is delivered unreviewed, with no"
         " review at all.",
+    )
+    references_section_name: str = Field(
+        default="References",
+        min_length=1,
+        description="The heading the application writes the report's References section under. The"
+        " application builds that section itself, from what the servers reported about the sources"
+        " the report cites, so this names a section the report writer never writes. A reader sees"
+        " it, so write it in the language this channel's readers read.",
+    )
+    references_section_empty_text: str = Field(
+        default=_REFERENCES_EMPTY_TEXT,
+        min_length=1,
+        description="What the References section says when the report cited no source at all. It is"
+        " the whole of the section in that case — a report with nothing to cite says so rather than"
+        " showing a bare heading — and the only prose an app-built section holds. A reader sees it,"
+        " so write it in the language this channel's readers read.",
     )
     max_pill_title_chars: int | None = Field(
         default=20,
@@ -664,13 +644,11 @@ class ApplicationProperties(BaseModel):
 
     @model_validator(mode="after")
     def _validate_report_structure(self) -> ApplicationProperties:
-        """Unique section names, at least one protected section, and the references section last.
+        """Unique section names, and at least one protected section.
 
         Uniqueness mirrors `_validate_unique_server_names`: duplicate headings make "every
         configured section is present" ambiguous. The protected-section floor keeps configuration
-        from producing a report whose every section a user instruction may remove. A report lists
-        its sources at the end, so at most one section may be the references section and it must be
-        the last; a structure may also have none, and then nothing decodes its citations.
+        from producing a report whose every section a user instruction may remove.
         """
         sections = self.default_report_structure
         names = [section.name for section in sections]
@@ -681,11 +659,31 @@ class ApplicationProperties(BaseModel):
             raise ValueError(
                 "default_report_structure must contain at least one section with protected=true"
             )
-        misplaced = [section.name for section in sections[:-1] if section.references_section]
-        if misplaced:
+        return self
+
+    @model_validator(mode="after")
+    def _validate_no_section_claims_the_references_heading(self) -> ApplicationProperties:
+        """No configured section carries the heading the app writes its References section under.
+
+        The app appends that section to every report, so a section of the same name is one the
+        report writer is told to write — by the structure it must reproduce — and told not to
+        write, by the rule naming the appended section. The reader would see the heading twice.
+
+        Compared case-folded and stripped, because the collision is about the heading a reader
+        sees rather than about an exact string: `references` and `References` render the same. The
+        error names both halves of the fix, the section and the property, since either can change.
+        """
+        wanted = self.references_section_name.strip().casefold()
+        claimed = [
+            section.name
+            for section in self.default_report_structure
+            if section.name.strip().casefold() == wanted
+        ]
+        if claimed:
             raise ValueError(
-                "only the last section may set references_section=true;"
-                f" misplaced section(s): {misplaced}"
+                "no section may be named like the appended References section"
+                f" (references_section_name={self.references_section_name!r});"
+                f" rename the section or the property: {claimed}"
             )
         return self
 

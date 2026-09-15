@@ -2,8 +2,9 @@
 
 ### Requirement: The References section is built by the app from the cited sources' metadata
 
-The app SHALL write the report's References section itself as part of the citation step, on every
-turn that delivers a report, and the report writer SHALL NOT write it. The section is no part of the
+The app SHALL write the report's References section itself as part of the citation step of every
+turn that delivers a report, and the report writer SHALL NOT write it. Only a failure earlier in
+that step leaves a delivery without the section (see the citation-failure requirement). The section is no part of the
 configured report structure: its heading comes from `references_section_name` and its cited-nothing
 text from `references_section_empty_text` (**application-config-schema**), and what the writer is
 given and checked against is owned by **report-composition**. Every row SHALL be built from what a
@@ -35,16 +36,18 @@ column's configured key — for a document, that key in the document's metadata 
 that field of the dataset's catalogue record. A value SHALL be rendered by these rules, so what the
 channel stores decides the cell rather than the app's ability to interpret it:
 
-- a non-empty string, as written;
+- a string carrying something other than whitespace, as written but stripped of the whitespace
+  around it;
 - a number or a boolean, as its text;
 - a list, as its items joined with `, `, each item rendered by these same rules;
-- anything else, and any absent or empty value, as an empty cell.
+- anything else, and any absent, empty or whitespace-only value, as an empty cell.
 
 A rendered value SHALL be escaped so that it cannot break the table it sits in: a `|` SHALL be
 escaped, and a line break SHALL become a space.
 
 **The first column names the source, and it is the column that degrades.** Where the first column's
-key resolves nothing, that cell SHALL carry the source's identifier instead — `doc <id>` for a
+key resolves nothing — including a value that is present but carries only whitespace, which is
+nothing a reader can identify a source by — that cell SHALL carry the source's identifier instead — `doc <id>` for a
 document, the URN as the marker carried it for a dataset — which is the fallback a citation pill's
 label already uses. Every other column SHALL be left empty when its key resolves nothing. Nothing in
 a row SHALL mark it as degraded, for the reason no pill label does: which lookup failed is the
@@ -117,6 +120,13 @@ a row lists is one the delivered report cites.
   section it wrote itself
 - **THEN** both documents SHALL have a row, both citations SHALL be converted where their
   conditions hold, and no row SHALL name a source the delivered text does not cite
+
+#### Scenario: A value that only looks filled leaves its cell empty
+
+- **WHEN** a cited document's first-column key holds a string of spaces, and its other column
+  holds a value padded with spaces
+- **THEN** the first cell SHALL carry the source's identifier rather than the spaces, and the other
+  cell SHALL carry its value with the padding gone
 
 #### Scenario: A value that would break the table is escaped
 

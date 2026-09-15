@@ -112,6 +112,16 @@ SHALL expose:
   Section `name`s SHALL be unique across the list — as MCP `server_name`s already are — since
   duplicate headings make "every configured section is present" and the review step's
   ordered-section check ambiguous.
+
+  **No section may carry the References section's heading.** Validation SHALL reject a structure
+  containing a section whose `name` matches `references_section_name`, compared with the
+  surrounding whitespace ignored and the letter case folded: the collision is about the heading a
+  reader sees, so `references` collides with `References`. The error SHALL name the offending
+  section or sections and the property they collide with, since either half is a fix — rename the
+  section, or set the property to another heading. The rule exists because the application appends
+  its section unconditionally: a section of that name is one the report writer is told to write, by
+  the configured structure it must reproduce, and told not to write, by the rule naming the
+  appended section.
 - `references_section_name: str` — default `References`, non-empty (`min_length=1`); the heading
   the application writes its References section under. A reader sees it, so a channel sets it in
   the language its readers read.
@@ -176,6 +186,13 @@ lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
 - **THEN** validation SHALL raise a pydantic `ValidationError` naming the unknown field, rather
   than accepting a References section the report writer would be asked to write beside the one the
   application appends
+
+#### Scenario: A section claiming the References heading is rejected
+
+- **WHEN** `ApplicationProperties.model_validate` receives a `default_report_structure` containing a
+  section named `references` while `references_section_name` is at its default `References`
+- **THEN** validation SHALL raise a pydantic `ValidationError` naming that section and
+  `references_section_name`
 
 #### Scenario: A channel writes the section's strings in its readers' language
 

@@ -18,7 +18,6 @@ from dial_deep_research.app.research.references import (
     build_references_section,
     dataset_rows,
     document_rows,
-    strip_references_section,
 )
 from dial_deep_research.app_properties import ReferenceColumn
 
@@ -239,36 +238,3 @@ def test_dataset_rows_follow_the_cited_order_and_keep_unresolved_urns() -> None:
 
     assert [row.identifier for row in rows] == [_URN, "ACME:OTHER"]
     assert rows[1].fields == {}
-
-
-# --- removing a section the writer wrote -----------------------------------------------------
-
-
-def test_a_references_section_the_writer_wrote_is_removed() -> None:
-    text = "## Overview\n\nThe answer.\n\n## References\n\n| doc id |\n"
-
-    assert strip_references_section(text, heading="References") == "## Overview\n\nThe answer."
-
-
-def test_a_decorated_heading_is_removed_too() -> None:
-    text = "## Overview\n\nThe answer.\n\n## **References**\n\n| doc id |\n"
-
-    assert strip_references_section(text, heading="References") == "## Overview\n\nThe answer."
-
-
-def test_a_renamed_section_is_left_alone() -> None:
-    text = "## Overview\n\nThe answer.\n\n## Bibliography\n\n| doc id |\n"
-
-    assert strip_references_section(text, heading="References") == text
-
-
-def test_a_heading_at_another_level_is_left_alone() -> None:
-    text = "## Overview\n\nThe answer.\n\n### References\n\n| doc id |\n"
-
-    assert strip_references_section(text, heading="References") == text
-
-
-def test_a_text_without_the_section_is_unchanged() -> None:
-    text = "## Overview\n\nThe answer.\n"
-
-    assert strip_references_section(text, heading="References") == text

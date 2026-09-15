@@ -47,9 +47,7 @@ from dial_deep_research.app.mcp_tools import load_mcp_tools
 from dial_deep_research.app_properties import (
     ApplicationProperties,
     DocumentMetadataSource,
-    ReportSection,
     ServerReferencesTable,
-    references_section,
 )
 from dial_deep_research.utils.dial_annotations import send_annotations
 from dial_deep_research.utils.dial_stages import (
@@ -96,7 +94,6 @@ from .references import (
     build_references_section,
     dataset_rows,
     document_rows,
-    strip_references_section,
 )
 from .report_length import LENGTH_EXEMPTIONS
 from .state import build_initial_state
@@ -166,21 +163,22 @@ class _ReportDelivery(BaseModel):
 def _with_references_section(
     text: str,
     *,
-    section: ReportSection,
+    heading: str,
+    empty_text: str,
     tables: Sequence[ServerReferencesTable],
     document_ids: Sequence[int],
     document_metadata: Mapping[int, Mapping[str, Any]],
     dataset_ids: Sequence[str],
     dataset_sources: Mapping[str, DatasetSource],
 ) -> str:
-    """The converted text with the built References section in place of any the writer wrote.
+    """The converted text with the built References section appended to it.
 
     The rows are the sources the delivered report cites, in the order it first cites them, each
     carrying what its server reported about it — so a source whose metadata did not resolve is
     listed from its identifier rather than left out.
 
-    Stripping comes first: a draft is told not to write the section, but one that wrote it anyway
-    must not reach the reader beside the app's own.
+    Nothing is taken out of the text: a draft that wrote a references section of its own keeps it,
+    having already been reported for the extra heading while the loop had a version left.
     """
     rows_by_kind = {
         "document": document_rows(document_ids, metadata=document_metadata),
@@ -197,10 +195,8 @@ def _with_references_section(
         )
         for entry in tables
     ]
-    built = build_references_section(
-        heading=section.name, empty_text=section.description, tables=contents
-    )
-    return f"{strip_references_section(text, heading=section.name)}\n\n{built}"
+    built = build_references_section(heading=heading, empty_text=empty_text, tables=contents)
+    return f"{text}\n\n{built}"
 
 
 def _count_markers(text: str) -> int:
@@ -254,6 +250,7 @@ class ResearchRunner:
             report_structure=properties.default_report_structure,
             max_report_words=properties.max_report_words,
             max_report_versions=properties.max_report_versions,
+            references_section_name=properties.references_section_name,
             emit_research_review_result_stage=self._emit_research_review_result_stage,
             emit_research_budget_exhausted=self._emit_research_budget_exhausted_stage,
             emit_report_review_result_stage=self._emit_report_review_result_stage,
@@ -295,7 +292,8 @@ class ResearchRunner:
             dataset_metadata_tool=loaded.dataset_metadata_tool,
             configured_dataset_tool_name=properties.dataset_metadata_tool,
             pill_title_max_chars=properties.max_pill_title_chars,
-            references=references_section(properties.default_report_structure),
+            references_heading=properties.references_section_name,
+            references_empty_text=properties.references_section_empty_text,
             references_tables=properties.references_tables,
         )
         return self._messages
@@ -310,7 +308,8 @@ class ResearchRunner:
         dataset_metadata_tool: BaseTool | None,
         configured_dataset_tool_name: str | None,
         pill_title_max_chars: int | None,
-        references: ReportSection | None,
+        references_heading: str,
+        references_empty_text: str,
         references_tables: Sequence[ServerReferencesTable],
     ) -> None:
         """Post-process the settled report, append it to the choice, and emit its annotations.
@@ -339,7 +338,8 @@ class ResearchRunner:
                 dataset_metadata_tool=dataset_metadata_tool,
                 configured_dataset_tool_name=configured_dataset_tool_name,
                 pill_title_max_chars=pill_title_max_chars,
-                references=references,
+                references_heading=references_heading,
+                references_empty_text=references_empty_text,
                 references_tables=references_tables,
             )
         except BaseException:
@@ -378,7 +378,8 @@ class ResearchRunner:
         dataset_metadata_tool: BaseTool | None,
         configured_dataset_tool_name: str | None,
         pill_title_max_chars: int | None,
-        references: ReportSection | None,
+        references_heading: str,
+        references_empty_text: str,
         references_tables: Sequence[ServerReferencesTable],
     ) -> _ReportDelivery:
         """The three deterministic alterations of the settled draft, in their fixed order.
@@ -469,14 +470,11 @@ class ResearchRunner:
         delivery.annotations = converted.annotations
         delivery.markers_left = converted.markers_left
 
-        if references is None:
-            # The configured structure declares no references section, so nothing is built and
-            # the report decodes its citations nowhere — that configuration's own consequence.
-            return delivery
         try:
             delivery.text = _with_references_section(
                 delivery.text,
-                section=references,
+                heading=references_heading,
+                empty_text=references_empty_text,
                 tables=references_tables,
                 document_ids=document_ids,
                 document_metadata=document_metadata,

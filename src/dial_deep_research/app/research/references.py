@@ -25,8 +25,14 @@ Two rules carry most of the behaviour:
 
 No row is interactive: no cell carries a link or a marker tag. A cited document's shared URL is
 storage-relative, so an ordinary Markdown link to it opens nothing, and making a row openable means
-an annotation of its own, which renders the row as a pill with a citation card. Because nothing
-here writes a link, the report's no-hyperlink guarantee holds over the delivered text whole.
+an annotation of its own, which renders the row as a pill with a citation card. The no-hyperlink
+rule governs what the report writer writes, and nothing here writes openable markup of its own.
+
+The section is appended to a draft and nothing is taken out of one. A draft that writes its own
+references section carries an extra `##` heading, which the structure check reports and the
+revision loop acts on; a draft that spends its last version still carrying one is delivered with
+that section followed by this one. Removing it here would mean removing a heading and everything
+below it, which takes whatever the writer put after it.
 """
 
 from __future__ import annotations
@@ -38,7 +44,7 @@ from pydantic import BaseModel
 
 from dial_deep_research.app_properties import ReferenceColumn
 
-from .report_length import SECTION_HEADING_LEVEL, SECTION_HEADING_PREFIX, find_section_heading_line
+from .report_length import SECTION_HEADING_LEVEL, SECTION_HEADING_PREFIX
 
 # The heading level each server's table is written under: one below the section's own, which is
 # what the report-composition rule that sub-headings sit at `###` or deeper requires.
@@ -81,9 +87,9 @@ def build_references_section(
     """The whole References section as Markdown, ready to append to the delivered report.
 
     Args:
-        heading: the configured section name, written as a `##` heading.
-        empty_text: what the section says when no source was cited at all — the configured
-            references section's description, which is the only prose an app-built section holds.
+        heading: `references_section_name`, written as a `##` heading.
+        empty_text: `references_section_empty_text`, what the section says when no source was cited
+            at all, which is the only prose an app-built section holds.
         tables: one per configured server, in the order the tables are written. A table with no
             rows contributes nothing.
 
@@ -93,24 +99,6 @@ def build_references_section(
     blocks = [_render_table(table) for table in tables if table.rows]
     body = "\n\n".join(blocks) if blocks else empty_text
     return f"{SECTION_HEADING_PREFIX} {heading}\n\n{body}"
-
-
-def strip_references_section(text: str, *, heading: str) -> str:
-    """The text without a references section the report writer wrote anyway.
-
-    A draft is told not to write the section, and one that writes it is reported as a structure
-    violation and measured with the rest — but it must not reach the reader beside the app's own,
-    so it is removed here, at delivery.
-
-    The heading is found by `find_section_heading_line`, so this agrees with the rest of the app
-    about what a section heading is: at `##`, and lenient about the decoration a writer may add
-    around the name, so `## **References**` is removed rather than delivered twice. Everything from
-    that heading to the end goes with it, the section being last.
-    """
-    line = find_section_heading_line(text, name=heading)
-    if line is None:
-        return text
-    return "\n".join(text.splitlines()[:line]).rstrip()
 
 
 def _render_table(table: ReferencesTableContent) -> str:

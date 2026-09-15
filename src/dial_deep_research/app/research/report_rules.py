@@ -21,7 +21,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
-from dial_deep_research.app_properties import ReportSection, references_section, writer_sections
+from dial_deep_research.app_properties import ReportSection
 
 from .citations import find_hyperlinks
 from .prompts import render_report_structure
@@ -47,11 +47,11 @@ class ReportRule(ABC):
 
 
 def build_report_rules(
-    *, sections: Sequence[ReportSection], max_words: int
+    *, sections: Sequence[ReportSection], max_words: int, references_name: str
 ) -> tuple[ReportRule, ...]:
     """The rules for one instance's configuration, in the order they appear in the prompt."""
     return (
-        ReportStructureRule(sections=sections),
+        ReportStructureRule(sections=sections, references_name=references_name),
         ReportLengthRule(max_words=max_words),
         ReportHyperlinkRule(),
     )
@@ -70,32 +70,25 @@ class ReportStructureRule(ReportRule):
     `##` headings the draft carries. The violation states both lists and lets the writer find the
     difference, rather than the rule enumerating which kind of mismatch it was.
 
-    The comparison is exact, down to case and decoration, because these headings are what the
-    delivery step finds a section by, and that lookup is deliberately lenient about the same
-    decoration — so a `## **References**` heading is reported here rather than passing unnoticed.
+    The comparison is exact, down to case and decoration: the configuration names the heading the
+    report must carry, so `## **Conclusion**` is a heading the reader was not promised.
 
-    The sections it expects are the ones the writer writes: `writer_sections`, the configured
-    structure without its references section, which the app builds itself. One derivation feeds
-    both the instruction and the check, so the writer cannot be told to omit a section this then
-    demands — and a draft that writes the references section anyway is reported as the extra `##`
+    The sections it expects are the configured structure entire — the References section is no part
+    of it, the app appending that one itself — so the instruction and the check are fed the same
+    list and a draft that writes a references section of its own is reported as the extra `##`
     heading it is.
     """
 
-    def __init__(self, *, sections: Sequence[ReportSection]) -> None:
-        self._sections = writer_sections(sections)
-        self._references = references_section(sections)
+    def __init__(self, *, sections: Sequence[ReportSection], references_name: str) -> None:
+        self._sections = list(sections)
+        self._references_name = references_name
 
     def writer_instruction(self) -> str:
-        # The references section is named rather than merely left off the list: a model writing a
-        # research report adds one by habit, and the omission alone would not stop it.
-        references_rule = (
-            _REFERENCES_RULE.format(references_name=self._references.name)
-            if self._references is not None
-            else ""
-        )
+        # The section is named rather than merely left off the list: a model writing a research
+        # report adds one by habit, and the omission alone would not stop it.
         return _STRUCTURE_INSTRUCTION.format(
             report_structure=render_report_structure(self._sections),
-            references_rule=references_rule,
+            references_rule=_REFERENCES_RULE.format(references_name=self._references_name),
         )
 
     def violations(self, draft: str) -> list[str]:
@@ -209,8 +202,10 @@ _REFERENCES_RULE = """
 
 **Do not write a "{references_name}" section, and do not list your sources anywhere else.** The
 application adds that section itself once you are finished, built from the metadata of the sources
-you cited, so anything you write there would be replaced and would count against your word budget
-in the meantime. Cite sources inline, as specified below, and stop at your last content section."""
+you cited. A section you write is not removed for you: it is reported as a heading the report may
+not carry, it spends your word budget, and the reader is left with two lists of sources. No
+instruction in the question or the plan changes this. Cite sources inline, as specified below, and
+stop at your last content section."""
 
 
 _LENGTH_INSTRUCTION = """\

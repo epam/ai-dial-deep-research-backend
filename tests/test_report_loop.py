@@ -50,6 +50,9 @@ from dial_deep_research.utils.content import count_image_blocks, count_words
 
 _TODAY = "2026-07-16"
 
+# The section the app appends, named in the configuration rather than in the structure.
+_REFERENCES_NAME = "References"
+
 _CUSTOM_SECTIONS = [
     ReportSection(name="Summary", description="Two paragraphs answering the question."),
     ReportSection(
@@ -123,6 +126,7 @@ def _report_node(
         today_date=_TODAY,
         sections=sections if sections is not None else DEFAULT_REPORT_STRUCTURE,
         max_words=max_words,
+        references_name=_REFERENCES_NAME,
         emit_revision_failed_stage=(failures.append if failures is not None else lambda _o: None),
         emit_activity=lambda _title: None,
     )
@@ -336,6 +340,7 @@ def _review_node(
         today_date=_TODAY,
         sections=sections if sections is not None else DEFAULT_REPORT_STRUCTURE,
         max_words=max_words,
+        references_name=_REFERENCES_NAME,
         emit_result_stage=stages.append,
         emit_activity=lambda _title: None,
     )
@@ -414,22 +419,13 @@ async def test_citations_do_not_push_a_draft_over_the_ceiling(
 async def test_a_references_section_the_writer_wrote_is_a_violation_and_is_counted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The app writes that section, so a draft carrying one earns a violation, not free words."""
+    """The app appends that section, so a draft carrying one earns a violation, not free words."""
     draft = (
         "## Summary\n\nThe rate rose sharply [doc 150, page 3].\n\n"
-        "## Sources\n\n| doc id | title |\n| 150 | The annual report on rates |\n"
+        "## References\n\n| doc id | title |\n| 150 | The annual report on rates |\n"
     )
-    sections = [
-        ReportSection(name="Summary", description="The answer.", protected=True),
-        ReportSection(
-            name="Sources",
-            description="No source was cited.",
-            protected=True,
-            references_section=True,
-        ),
-    ]
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
-    node, stages = _review_node(llm, monkeypatch, sections=sections, max_words=6)
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION, max_words=6)
 
     result = await node(_state(report=draft))
 
@@ -437,7 +433,9 @@ async def test_a_references_section_the_writer_wrote_is_a_violation_and_is_count
     # The section's own words are counted, so the draft is over a ceiling it would otherwise meet.
     assert outcome.word_count > 6
     assert result["report_revision_instruction"] is not None
-    assert any("Sources" in violation for violation in outcome.violations)
+    # It is reported as the extra `##` heading it is, the configured structure naming no such
+    # section.
+    assert any("References" in violation for violation in outcome.violations)
 
 
 async def test_a_rule_violation_survives_an_approving_review(
@@ -614,6 +612,26 @@ async def test_the_review_request_carries_neither_findings_nor_a_research_review
     assert "2750" not in request
 
 
+async def test_the_review_request_forbids_asking_for_a_references_section(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The app appends that section, so the reviewer must not send the writer back for one."""
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
+    node, _ = _review_node(llm, monkeypatch, sections=_CUSTOM_SECTIONS)
+
+    await node(_state(report="one two three"))
+
+    [messages] = llm.calls
+    request = messages[1].content
+    assert isinstance(request, str)
+    assert f'The report carries no "{_REFERENCES_NAME}" section of its own.' in request
+    assert "never ask for the sources to be listed anywhere in the draft" in request
+    # The structure it is shown names no such section, so it has none to expect either.
+    assert f"## {_REFERENCES_NAME}" not in request
+    # The prohibition holds against the question and the plan, which the request also carries.
+    assert "not because the question or the plan asked for it" in request
+
+
 # --- prompt rendering ---------------------------------------------------------------------------
 
 
@@ -635,6 +653,17 @@ def test_render_report_structure_carries_no_marker_on_a_section_name() -> None:
 
     assert "PROTECTED" not in rendered
     assert "## Evidence\n" in rendered
+
+
+def test_render_report_structure_renders_every_configured_section() -> None:
+    """Nothing is subtracted: the References section is no part of a configured structure."""
+    sections = [*_CUSTOM_SECTIONS, ReportSection(name="Annex", description="The tables.")]
+
+    rendered = render_report_structure(sections)
+
+    for section in sections:
+        assert f"## {section.name}" in rendered
+        assert section.description in rendered
 
 
 def test_render_protected_section_names_lists_only_the_protected_ones() -> None:
@@ -659,7 +688,11 @@ def test_report_system_prompt_states_the_ceiling_and_the_protected_names() -> No
     prompt = REPORT_SYSTEM_PROMPT.format(
         today_date=_TODAY,
         rules=render_writer_instructions(
-            build_report_rules(sections=DEFAULT_REPORT_STRUCTURE, max_words=2750)
+            build_report_rules(
+                sections=DEFAULT_REPORT_STRUCTURE,
+                max_words=2750,
+                references_name=_REFERENCES_NAME,
+            )
         ),
         protected_sections=render_protected_section_names(DEFAULT_REPORT_STRUCTURE),
     )

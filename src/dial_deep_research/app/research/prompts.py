@@ -10,7 +10,7 @@ from collections.abc import Sequence
 
 from pydantic import BaseModel, Field
 
-from dial_deep_research.app_properties import ReportSection, writer_sections
+from dial_deep_research.app_properties import ReportSection
 
 from .report_length import SECTION_HEADING_PREFIX
 
@@ -192,7 +192,7 @@ Plans pursued so far:
 
 
 def render_report_structure(sections: Sequence[ReportSection]) -> str:
-    """Render the sections the writer writes for a prompt: heading name, then its own rules.
+    """Render the configured sections for a prompt: heading name, then its own rules.
 
     A section's `description` is passed verbatim — it is the single home for that section's
     rules, so nothing here rewrites or summarizes it. The name is rendered alone, with no marker
@@ -203,22 +203,17 @@ def render_report_structure(sections: Sequence[ReportSection]) -> str:
     Each entry is rendered as the exact heading the report must carry — `## Name`, then the rules
     beneath it — so the listing is a template to copy rather than a description to translate.
 
-    The references section is not among them: the app builds it after the loop settles, so naming
-    it here would ask the writer for a section its draft is then judged for carrying.
+    Every configured section is rendered, nothing subtracted: the References section is no part of
+    the structure, the app appending it after the loop settles.
     """
     return "\n\n".join(
-        f"{SECTION_HEADING_PREFIX} {section.name}\n\n{section.description}"
-        for section in writer_sections(sections)
+        f"{SECTION_HEADING_PREFIX} {section.name}\n\n{section.description}" for section in sections
     )
 
 
 def render_protected_section_names(sections: Sequence[ReportSection]) -> str:
-    """Comma-separated names of the protected sections the writer writes, for the precedence rule.
-
-    A references section is left out whether or not it is protected: the precedence rule tells the
-    writer which of its own sections a user instruction may not touch, and this is not one of them.
-    """
-    names = [section.name for section in writer_sections(sections) if section.protected]
+    """Comma-separated names of the protected sections, for the precedence rule."""
+    names = [section.name for section in sections if section.protected]
     return ", ".join(names)
 
 
@@ -368,6 +363,11 @@ for. The headings and their formatting are checked by the app, not by you.
 </report_structure>
 
 Protected sections (these survive any instruction): {protected_sections}
+
+The report carries no "{references_name}" section of its own. The application appends that section
+once the draft is settled, built from the metadata of the sources the report cites. **Never ask for
+one, and never ask for the sources to be listed anywhere in the draft** — not on your own judgement
+and not because the question or the plan asked for it.
 
 The research question the report answers:
 <research_question>

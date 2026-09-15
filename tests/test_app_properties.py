@@ -95,18 +95,12 @@ def test_report_defaults_resolve_without_configuration() -> None:
         "Key Findings",
         "Detailed Analysis",
         "Conclusion",
-        "References",
     ]
-    assert [section.protected for section in sections] == [True, False, False, False, True]
-    # Only the closing References section is the sources listing, and only it is exempt from the
-    # word ceiling.
-    assert [section.references_section for section in sections] == [
-        False,
-        False,
-        False,
-        False,
-        True,
-    ]
+    assert [section.protected for section in sections] == [True, False, False, False]
+    # The References section is no section of the structure: the app appends it, under this
+    # heading, carrying this text when the report cited nothing.
+    assert properties.references_section_name == "References"
+    assert properties.references_section_empty_text.endswith("no citable evidence.")
     assert properties.max_report_words == 2750
     assert properties.max_report_versions == 3
 
@@ -144,38 +138,94 @@ def test_structure_with_no_protected_section_is_rejected() -> None:
     assert "at least one section with protected=true" in message
 
 
-def test_a_references_section_before_the_last_one_is_rejected() -> None:
+def test_a_section_carrying_the_withdrawn_references_flag_is_rejected() -> None:
+    # A stored structure that still marks a section as the references one would otherwise keep a
+    # References section the writer is asked to write beside the one the app appends.
     data = {
         **VALID_PROPERTIES,
         "default_report_structure": [
+            {"name": "Summary", "description": "The answer.", "protected": True},
             {
                 "name": "Sources",
                 "description": "The cited sources.",
-                "protected": True,
                 "references_section": True,
             },
-            {"name": "Summary", "description": "The answer."},
         ],
     }
     with pytest.raises(ValidationError) as excinfo:
         ApplicationProperties.model_validate(data)
     message = str(excinfo.value)
-    assert "only the last section may set references_section=true" in message
-    assert "Sources" in message
+    assert "references_section" in message
+    assert "Extra inputs are not permitted" in message
 
 
-def test_a_structure_with_no_references_section_is_accepted() -> None:
-    # A deployment may configure a report that lists no sources; nothing is then exempt from the
-    # word ceiling.
+@pytest.mark.parametrize("name", ["References", "references", "  REFERENCES  "])
+def test_a_section_claiming_the_references_heading_is_rejected(name: str) -> None:
+    """The app appends that heading, so a section of the same name is told both to be and not."""
     data = {
         **VALID_PROPERTIES,
         "default_report_structure": [
             {"name": "Summary", "description": "The answer.", "protected": True},
-            {"name": "Outlook", "description": "What follows."},
+            {"name": name, "description": "The sources."},
         ],
     }
+
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(data)
+
+    message = str(excinfo.value)
+    assert "references_section_name" in message
+    assert name in message
+
+
+def test_a_section_named_anything_else_validates() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "default_report_structure": [
+            {"name": "Summary", "description": "The answer.", "protected": True},
+            {"name": "Bibliography", "description": "The sources."},
+        ],
+    }
+
     sections = ApplicationProperties.model_validate(data).default_report_structure
-    assert [section.references_section for section in sections] == [False, False]
+
+    assert [section.name for section in sections] == ["Summary", "Bibliography"]
+
+
+def test_a_section_may_carry_a_renamed_references_heading() -> None:
+    """The collision is against the configured heading, not against the word References."""
+    data = {
+        **VALID_PROPERTIES,
+        "references_section_name": "Quellen",
+        "default_report_structure": [
+            {"name": "Summary", "description": "The answer.", "protected": True},
+            {"name": "References", "description": "Something else entirely."},
+        ],
+    }
+
+    properties = ApplicationProperties.model_validate(data)
+
+    assert properties.references_section_name == "Quellen"
+
+
+def test_the_section_strings_are_the_channels_to_set() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "references_section_name": "Quellen",
+        "references_section_empty_text": "Dieser Bericht nennt keine Quelle.",
+    }
+
+    properties = ApplicationProperties.model_validate(data)
+
+    assert properties.references_section_name == "Quellen"
+    assert properties.references_section_empty_text == "Dieser Bericht nennt keine Quelle."
+
+
+@pytest.mark.parametrize("field", ["references_section_name", "references_section_empty_text"])
+def test_an_empty_section_string_is_rejected(field: str) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate({**VALID_PROPERTIES, field: ""})
+    assert field in str(excinfo.value)
 
 
 def test_duplicate_report_section_names_are_rejected() -> None:
@@ -260,12 +310,7 @@ def test_schema_inlines_report_section_items() -> None:
     schema = ApplicationProperties.model_json_schema()
     items = schema["properties"]["default_report_structure"]["items"]
     assert "$ref" not in items
-    assert set(items["properties"]) == {
-        "name",
-        "description",
-        "protected",
-        "references_section",
-    }
+    assert set(items["properties"]) == {"name", "description", "protected"}
 
 
 def test_at_least_one_mcp_server_required() -> None:
@@ -1085,7 +1130,7 @@ def test_the_title_key_and_the_first_column_are_independent() -> None:
     assert server.references_table.columns[0].key == "document_name"
 
 
-def test_a_table_is_required_even_with_no_references_section_configured() -> None:
+def test_a_table_is_required_whatever_the_report_structure_says() -> None:
     data = {
         **VALID_PROPERTIES,
         "default_report_structure": [
@@ -1095,7 +1140,7 @@ def test_a_table_is_required_even_with_no_references_section_configured() -> Non
 
     properties = ApplicationProperties.model_validate(data)
 
-    assert properties.default_report_structure[-1].references_section is False
+    assert [section.name for section in properties.default_report_structure] == ["Summary"]
     assert properties.mcp_servers[0].references_table.title == "Documents"
 
 

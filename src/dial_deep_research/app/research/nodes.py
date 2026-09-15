@@ -410,6 +410,7 @@ def make_report_node(
     today_date: str,
     sections: Sequence[ReportSection],
     max_words: int,
+    references_name: str,
     emit_revision_failed_stage: ReportRevisionFailureEmitter,
     emit_activity: ActivityEmitter,
 ) -> ReportNode:
@@ -427,7 +428,11 @@ def make_report_node(
                 content=REPORT_SYSTEM_PROMPT.format(
                     today_date=today_date,
                     rules=render_writer_instructions(
-                        build_report_rules(sections=sections, max_words=max_words)
+                        build_report_rules(
+                            sections=sections,
+                            max_words=max_words,
+                            references_name=references_name,
+                        )
                     ),
                     protected_sections=render_protected_section_names(sections),
                 )
@@ -505,6 +510,7 @@ def make_report_review_node(
     today_date: str,
     sections: Sequence[ReportSection],
     max_words: int,
+    references_name: str,
     emit_result_stage: ReportReviewResultStageEmitter,
     emit_activity: ActivityEmitter,
 ) -> ReportReviewNode:
@@ -516,7 +522,9 @@ def make_report_review_node(
     and plan, never the research findings, which is why it cannot reopen evidence coverage. A
     failing call never fails the turn: the rules still run and their violations still stand.
     """
-    rules = build_report_rules(sections=sections, max_words=max_words)
+    rules = build_report_rules(
+        sections=sections, max_words=max_words, references_name=references_name
+    )
 
     async def report_review(state: ResearchState) -> dict[str, Any]:
         emit_activity(REPORT_REVIEW_ACTIVITY)
@@ -531,6 +539,7 @@ def make_report_review_node(
                 content=REPORT_REVIEW_REQUEST.format(
                     report_structure=render_report_structure(sections),
                     protected_sections=render_protected_section_names(sections),
+                    references_name=references_name,
                     query=state["original_query"],
                     plan=render_plan(state["plans"][0]) if state["plans"] else "(none)",
                     draft=draft,

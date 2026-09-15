@@ -1,8 +1,8 @@
 """Reading a report draft's Markdown: its section headings, and how long it is.
 
-Several jobs that share one definition of "this line is a section heading" (`##` and its text), so
-the rule that checks the headings, the count that measures the draft, and the delivery step that
-finds a section by name can never disagree about what they are looking at.
+Two jobs that share one definition of "this line is a section heading" (`##` and its text), so the
+rule that checks the headings and the count that measures the draft can never disagree about what
+they are looking at.
 
 The length the ceiling bounds is layered on `count_words`: it leaves out the one part whose size
 the writer does not really choose, the inline citations. What remains is the report's prose. The
@@ -43,9 +43,6 @@ SECTION_HEADING_LEVEL = 2
 # The hashes a section heading starts with, for the places that render or quote one.
 SECTION_HEADING_PREFIX = "#" * SECTION_HEADING_LEVEL
 
-# Leading `1.` / `1)` ordinals, which a writer may add to a heading the configuration names plain.
-_ORDINAL_RE = re.compile(r"^\d+[.)]\s*")
-
 
 def strip_inline_citations(text: str) -> str:
     """Remove the inline `[doc …]` and `[dataset …]` citations from report text."""
@@ -79,33 +76,3 @@ def count_report_words(draft: str) -> int:
     violation whose words count like any other — a violation must not also earn length budget.
     """
     return count_words(strip_inline_citations(draft))
-
-
-def find_section_heading_line(draft: str, *, name: str) -> int | None:
-    """The index of the line carrying this section's `##` heading, or `None` when it has none.
-
-    The one place that looks a section up by its configured name, so the delivery step and
-    anything else that needs one agree about what counts as a match. The heading must be at the
-    level every section uses; the name is compared through `normalize_heading`, so decoration a
-    writer added around it still matches.
-    """
-    wanted = normalize_heading(name)
-    for i, line in enumerate(draft.splitlines()):
-        match = _HEADING_RE.match(line)
-        if match is None or len(match.group(1)) != SECTION_HEADING_LEVEL:
-            continue
-        if normalize_heading(match.group(2)) == wanted:
-            return i
-    return None
-
-
-def normalize_heading(text: str) -> str:
-    """Reduce a heading to what can be compared with a configured section name.
-
-    Decoration a writer may add around the name — bold markers, an ordinal, a trailing colon — is
-    dropped, so only a genuinely different name fails to match here. The structure rule is stricter
-    and reports that decoration as a violation; being lenient here means the delivery step still
-    finds a decorated section, so it is removed rather than delivered beside the app's own.
-    """
-    text = _ORDINAL_RE.sub("", text.strip().strip("*_").strip())
-    return text.strip().rstrip(":").strip().casefold()
