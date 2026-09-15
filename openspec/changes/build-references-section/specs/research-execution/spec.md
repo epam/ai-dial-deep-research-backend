@@ -95,10 +95,10 @@ not its citations converted, so an unconverted marker still resolves to a named 
 
 #### Scenario: The writer is not asked to write the references section
 
-- **WHEN** the report writer's prompt is rendered from a structure whose last section sets
-  `references_section: true`
-- **THEN** that section SHALL NOT appear among the sections the writer is told to write, and a draft
-  that writes it anyway SHALL be reported as a structure violation (see **report-composition**)
+- **WHEN** the report writer's prompt is rendered from the configured structure
+- **THEN** no references section SHALL appear among the sections the writer is told to write, the
+  prompt SHALL state that the application appends that section itself, and a draft that writes one
+  anyway SHALL be reported as a structure violation (see **report-composition**)
 
 #### Scenario: An unfamiliar attribution spelling still yields correct markers
 

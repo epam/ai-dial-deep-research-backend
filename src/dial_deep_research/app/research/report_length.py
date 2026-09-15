@@ -104,8 +104,8 @@ def normalize_heading(text: str) -> str:
 
     Decoration a writer may add around the name — bold markers, an ordinal, a trailing colon — is
     dropped, so only a genuinely different name fails to match here. The structure rule is stricter
-    and reports that decoration as a violation; being lenient here keeps a decorated heading from
-    also costing the draft its length exemption.
+    and reports that decoration as a violation; being lenient here means the delivery step still
+    finds a decorated section, so it is removed rather than delivered beside the app's own.
     """
     text = _ORDINAL_RE.sub("", text.strip().strip("*_").strip())
     return text.strip().rstrip(":").strip().casefold()

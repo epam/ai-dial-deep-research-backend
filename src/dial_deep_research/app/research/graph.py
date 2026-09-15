@@ -122,7 +122,6 @@ def build_research_graph(
         path=route_after_report(
             max_versions=max_report_versions,
             max_words=max_report_words,
-            sections=report_structure,
             emit_budget_exhausted=emit_report_budget_exhausted,
         ),
         path_map={"report-review": "report-review", "end": END},

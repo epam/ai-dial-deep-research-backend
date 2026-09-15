@@ -6,12 +6,13 @@ The report SHALL be organized into the sections configured for the application i
 (`default_report_structure`, see the **application-config-schema** capability), in the
 configured order, each rendered as a Markdown heading carrying the configured section name.
 
-**The references section is the one section the writer does not write.** Where the configured
-structure declares one, the application builds it after the report loop settles (see
-**report-citations**, which owns what it contains). It SHALL therefore be excluded from the
-structure the report writer is given, from the structure the review step is given, and from the
-list of headings the app's own structure check expects. Everything below about sections applies to
-the sections the writer writes; a delivered report still carries the references section, and still
+**The references section is the one section the writer does not write.** The application builds it
+after the report loop settles and appends it to every report (see **report-citations**, which owns
+what it contains), and no configured section is ever that section. So nothing has to be subtracted
+from the structure the writer is given, from the structure the review step is given, or from the
+list of headings the app's own structure check expects: all three are the configured structure
+itself. Everything below about sections applies to the sections the writer writes; a delivered
+report still carries the references section, and still
 carries it last.
 
 **Heading levels are fixed.** Every configured section SHALL be a `##` heading carrying exactly
@@ -39,7 +40,9 @@ citation format in particular SHALL remain non-configurable — DIAL chat will r
 from it, so it is an interface every instance shares, not a per-deployment preference.
 
 The default structure, used by an instance that configures none, SHALL be **Overview → Key
-Findings → Detailed Analysis → Conclusion → References**, with Overview and References protected.
+Findings → Detailed Analysis → Conclusion**, with Overview protected. The References section is not
+part of any configured structure: the application appends it to every report after the loop settles
+(**report-citations**).
 
 The report SHALL open with the Overview, which answers "what was done, and what is the answer"
 before the findings arrive: the research question restated, the sources and topics the research
@@ -51,31 +54,26 @@ Every configured section the writer writes SHALL be present in the report. A sec
 filled with text the findings do not support in order to make it appear; a section the findings
 leave nothing to say about SHALL say that plainly instead of being dropped.
 
-Where the configured structure includes a references section — as the default does — a report that
-cites no source at all SHALL still carry that section, saying so, rather than omitting it: that
-outcome is a failure of the research to find citable evidence, and hiding it as a missing section
-would misrepresent the report as unsourced by choice. The application writes that statement, from
-the section's configured description. Where a deployment has configured a structure with no
-references section, no such section SHALL be synthesized: inline citations still appear in the
-body (their format being report-wide and non-configurable), and nothing decodes them. That is a
-deliberate consequence of the configuration, and the requirements above bind only what the
-configured structure declares.
+A report that cites no source at all SHALL still carry the References section, saying so, rather
+than omitting it: that outcome is a failure of the research to find citable evidence, and hiding it
+as a missing section would misrepresent the report as unsourced by choice. The application writes
+that statement, from `references_section_empty_text`. No configuration SHALL be able to switch the
+section off, and no section of a configured structure SHALL be a references section.
 
 #### Scenario: Default structure applies when nothing is configured
 
 - **WHEN** a research turn runs on an instance that does not configure a report structure
-- **THEN** the delivered report SHALL carry the sections Overview, Key Findings, Detailed Analysis,
-  Conclusion, and References, as Markdown headings, in that order — the first four written by the
-  report writer and the last built by the app
+- **THEN** the delivered report SHALL carry the sections Overview, Key Findings, Detailed Analysis
+  and Conclusion as Markdown headings in that order, written by the report writer, followed by the
+  References section the app appends
 
 #### Scenario: Configured structure replaces the default
 
 - **WHEN** an instance configures a structure of `Summary`, `Evidence`, `Outlook`, with `Evidence`
-  marked protected (some section must be, so the structure validates — and protection is not tied to
-  references)
-- **THEN** the report SHALL carry exactly those three section headings in that order, no Key
-  Findings or Detailed Analysis heading SHALL appear, and each section's content SHALL follow
-  its configured description
+  marked protected (some section must be, so the structure validates)
+- **THEN** the report SHALL carry exactly those three section headings in that order followed by the
+  appended References section, no Key Findings or Detailed Analysis heading SHALL appear, and each
+  written section's content SHALL follow its configured description
 
 #### Scenario: A section's rules come only from its description
 
@@ -83,12 +81,13 @@ configured structure declares.
 - **THEN** editing that section's `description` SHALL be sufficient, and no prompt text outside
   the configured structure SHALL have to change with it
 
-#### Scenario: The writer is not given the references section
+#### Scenario: Neither prompt offers a references section to write
 
-- **WHEN** the report writer's prompt and the review step's prompt are rendered from a structure
-  whose last section sets `references_section: true`
-- **THEN** neither prompt SHALL carry that section's heading or its description, and the writer SHALL
-  be told to write the other sections only
+- **WHEN** the report writer's prompt and the review step's prompt are rendered from the configured
+  structure
+- **THEN** the rendered structure SHALL be exactly that structure, with no section subtracted from
+  it, and both prompts SHALL state that the application appends the References section itself and
+  that neither the writer nor the reviewer may write or ask for one
 
 #### Scenario: A report with nothing to cite still carries the section
 
@@ -98,10 +97,9 @@ configured structure declares.
 
 #### Scenario: A references heading the writer wrote is a violation
 
-- **WHEN** a draft writes `## References` while the configured structure's references section is
-  named `References`
+- **WHEN** a draft writes `## References` while no configured section carries that name
 - **THEN** the app's own structure check SHALL report it as a `##` heading that is not one of the
-  sections the writer writes, and a revision SHALL be required while the version budget allows
+  configured sections, and a revision SHALL be required while the version budget allows
 
 #### Scenario: A section written at the wrong heading level is a violation
 
@@ -114,6 +112,97 @@ configured structure declares.
 - **WHEN** the findings leave a configured section with nothing substantive to say
 - **THEN** that section SHALL say so plainly and SHALL NOT be filled with text the findings do
   not support
+
+### Requirement: Protected sections and their rules survive any user instruction
+
+Some sections carry the report's integrity rather than its shape, and SHALL be **protected**:
+neither removable nor alterable by anything the user asked for. Protection covers two things —
+the section's **presence** in the report, and the **rules in its description** that generate its
+content.
+
+A section is protected iff its configuration marks it so (`ReportSection.protected`, see the
+**application-config-schema** capability), and at least one section SHALL always be protected —
+configuration cannot yield a report whose every section a user may remove. The shipped default
+protects Overview. A deployment MAY protect further sections of its own, and
+protection then means the same thing for them.
+
+**The References section is beyond an instruction's reach without being a protected section.** It
+is no part of any configured structure: the application appends it to every report it delivers
+(**report-citations**), so an instruction to leave the sources out has nothing to act on. The writer
+SHALL be told not to write such a section and not to list its sources anywhere else, and the review
+step SHALL be told never to instruct a revision to write one, whatever the research question or the
+approved plan asked for. Neither is asked to *check* for one: the heading check is the app's, in
+Python, as this capability's own requirement states.
+
+The inline citation format is protected report-wide rather than per section, because it applies
+to every section's body: no user instruction SHALL change it, and it is not configurable at all.
+
+The user's wording reaches the report writer already: the research question and the plan steps
+are part of its prompt, and either may carry an instruction about structure or formatting. The
+app SHALL therefore state the protection explicitly to **both** the report writer and the review
+step, alongside the configured sections and the query and plan those instructions may hide in,
+naming which sections may not be dropped or restyled.
+
+**Protection SHALL be stated as a rule of its own and SHALL NOT be rendered as a marker on a
+section's name.** The report writer is told to use the configured names as the report's headings,
+so anything attached to a name can be copied into the delivered report. Protection is a fact about
+the app's rules rather than part of what the report says, and it SHALL appear in no text a user
+sees.
+
+Precedence SHALL be: a user instruction applies to everything except the protected sections, their
+rules, and the report-wide rules of this capability — the word ceiling, the prohibited
+meta-annotations, the inline citation format, and the appended References section. None of those SHALL yield to an instruction; an
+instruction to ignore the length limit, to add confidence ratings, or to restyle citations SHALL
+be refused exactly as an instruction to drop a protected section is. Where an instruction conflicts
+with any of them, the rule wins and the rest of the instruction is still honoured as far as it can
+be. A report SHALL NOT carry
+commentary explaining that an instruction was declined — the report contains the report.
+
+Nothing in this requirement obliges the writer to *follow* a user's format request: routing a
+requested format to the report is deliberately not part of this change (issue #45). This
+requirement bounds what such a request can ever do, whenever it arrives.
+
+#### Scenario: An instruction to drop the references is refused
+
+- **WHEN** the research question or a plan step asks for a report with no references or sources
+  section
+- **THEN** the delivered report SHALL still carry the appended References section with its source
+  tables, and the review step SHALL NOT act on the request — there is no draft section to drop, the
+  application writing the section after the loop settles
+
+#### Scenario: An instruction to restyle citations is refused
+
+- **WHEN** a user instruction asks for citations as numbered footnotes instead of the defined
+  `[doc <id>, page <ix>]` form
+- **THEN** the delivered report SHALL keep the defined citation format, and the review step SHALL
+  treat a draft that adopted the requested format as needing a revision
+
+#### Scenario: A protected section survives a conflicting instruction
+
+- **WHEN** a user asks for an answer in two sentences, which cannot coexist with the configured
+  sections and a full References section
+- **THEN** the References section SHALL still be present however brief the rest becomes, and the
+  report SHALL NOT explain the conflict to the user. Whether the body itself gets shorter is not
+  guaranteed by this change — following a requested format is issue #45's — but nothing about the
+  brevity request may remove a protected section.
+
+#### Scenario: A reader never learns which sections are protected
+
+- **WHEN** a report is delivered from a structure whose Overview section is protected
+- **THEN** neither the section's heading nor any other text in the response SHALL mark it as
+  protected, and the protection SHALL be visible only in the rules the app gives its own models
+
+#### Scenario: A harmless format instruction is not treated as an override
+
+- **WHEN** a user asks for the analysis as a comparison table, touching no protected section
+- **THEN** the review step SHALL NOT flag that as an override attempt on protected-section
+  grounds
+
+#### Scenario: An instruction to lift the length ceiling is refused
+
+- **WHEN** a user instruction asks for an exhaustive report with no length limit
+- **THEN** the ceiling SHALL still apply, and the review step SHALL require a revision of a draft
+  that exceeded it on the instruction's authority
 
 ### Requirement: Reports respect a configured word ceiling without abrupt truncation
 
@@ -240,10 +329,10 @@ the check over the finished draft, and the wording of the violation a revision a
 configured once from the instance's configuration and used at both points, so the writer can never
 be told something different from what its draft is judged against.
 
-**The structure check and the references section see the same list.** The sections the writer is
-told to write, the sections the check expects, and the sections the structure rule's violation names
-SHALL all be the configured structure minus its references section — one derivation used
-everywhere, so the writer cannot be told to omit a section the check then demands.
+**The structure check and the writer see the same list.** The sections the writer is told to write,
+the sections the check expects, and the sections the structure rule's violation names SHALL all be
+the configured structure itself, with nothing added and nothing subtracted anywhere — the
+References section is no part of it, so no derivation stands between the instruction and the check.
 
 **The review model SHALL NOT be asked to judge any of them.** It is told that the app checks the
 headings, the length and the hyperlinks, and its own checks are the ones that need a reader: a
@@ -270,9 +359,15 @@ rule, and a review call that fails SHALL NOT suppress one.
 - **THEN** its prompt SHALL state that the app checks the headings, the length and the hyperlinks
   itself, and SHALL NOT ask it to verify any of them
 
-#### Scenario: The expected headings exclude the references section
+#### Scenario: The expected headings are the configured structure itself
 
-- **WHEN** the structure check runs on a draft written from a configured structure whose last
-  section sets `references_section: true`
-- **THEN** the headings it expects SHALL be the other sections only, and a draft carrying exactly
-  those SHALL pass the check
+- **WHEN** the structure check runs on a draft written from a configured structure
+- **THEN** the headings it expects SHALL be exactly that structure's sections, with nothing
+  subtracted, and a draft carrying exactly those SHALL pass the check
+
+#### Scenario: The review model is told never to ask for a references section
+
+- **WHEN** the report-review call is issued
+- **THEN** its prompt SHALL state that the application appends the References section itself after
+  the loop settles, and SHALL forbid it to instruct a revision to write one or to list the report's
+  sources anywhere, whatever the research question or the approved plan asked for

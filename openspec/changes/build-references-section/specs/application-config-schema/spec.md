@@ -26,11 +26,11 @@ identifies the row by, so it is the column that falls back to the source's ident
 resolves nothing (**report-citations** owns that rule). Ordering is why `columns` is a list rather
 than an object keyed by heading: the order is behavior, not presentation.
 
-**Every server entry SHALL carry one**, whatever its `server_type` and whatever the instance's
-report structure declares. Every supported server type serves sources a report cites, so a server
-without a table is a server whose cited sources cannot be listed — the same reason a `generic_rag`
-server must name its file-sharing tool and a `statgpt` server its dataset-metadata tool. An instance
-whose structure declares no references section still validates and simply builds no section.
+**Every server entry SHALL carry one**, whatever its `server_type`. Every supported server type
+serves sources a report cites, so a server without a table is a server whose cited sources cannot be
+listed — the same reason a `generic_rag` server must name its file-sharing tool and a `statgpt`
+server its dataset-metadata tool. The report structure has no say in it: the References section is
+built for every report a channel delivers.
 
 **Requiring it is a breaking configuration change**: an instance whose server entries do not carry a
 `references_table` fails validation, and its turns are delivered as "application not configured"
@@ -38,9 +38,9 @@ until its properties are edited.
 
 The app SHALL NOT derive a column from anything else it is configured with. In particular the
 document title key (`document_title_key`) and a table's first column are configured separately and
-MAY name different keys: the title key labels a citation pill, which exists whether or not the
-structure declares a references section, while the column fills a row. A channel that wants them to
-agree names the same key twice, deliberately.
+MAY name different keys: a pill's title is shortened to the channel's pill-title budget while a
+row's cell is not, so a channel may want a short label on the pill and a fuller string in the row. A
+channel that wants them to agree names the same key twice, deliberately.
 
 #### Scenario: A server entry without a references table is rejected
 
@@ -61,12 +61,12 @@ agree names the same key twice, deliberately.
 - **THEN** the built table's header row SHALL read `Title` then `Published`, and the first column
   SHALL be the one that falls back to the source's identifier
 
-#### Scenario: A table is required even with no references section configured
+#### Scenario: A table is required whatever the report structure says
 
-- **WHEN** an instance configures a report structure whose every section leaves `references_section`
-  at its default of `False`
-- **THEN** its server entries SHALL still be required to carry a `references_table`, validation
-  SHALL succeed once they do, and no References section SHALL be built
+- **WHEN** an instance configures a report structure of its own, naming only sections the report
+  writer writes
+- **THEN** its server entries SHALL still each be required to carry a `references_table`, since the
+  References section is built for every report and the structure has no say in whether it is
 
 #### Scenario: The title key and the first column are independent
 
@@ -88,38 +88,37 @@ SHALL expose:
 - `max_research_graph_steps: int` — default `500`, constrained `ge=1`; the per-graph-run step
   ceiling passed to LangGraph as `recursion_limit` (see the **research-execution**
   capability's step-budget requirement for what it counts).
-- `default_report_structure: list[ReportSection]` — the ordered sections a report follows when
-  the user asks for no particular format, constrained `min_length=1`. `ReportSection` is a
-  nested model with four fields:
+- `default_report_structure: list[ReportSection]` — the ordered sections **the report writer
+  writes** when the user asks for no particular format, constrained `min_length=1`. The References
+  section is not among them and cannot be: the application builds it and appends it to every
+  report (see the **report-citations** capability), and its two strings are the properties below.
+  `ReportSection` is a nested model with three fields:
   - `name: str` — required, non-empty (`min_length=1`); the section's heading in the report.
-  - `description: str` — required, non-empty (`min_length=1`). For a section the report writer
-    writes, it is everything the writer and the review step need to know about that section's
-    content, and it is the **single home** for that section's rules: no other prompt, model, or
-    spec SHALL carry per-section content instructions. For the **references section**, which the
-    writer does not write, it is instead the text that section carries when the report cited no
-    source at all — the only prose an app-built section holds, configured because it is
-    user-facing text in the channel's own language.
+  - `description: str` — required, non-empty (`min_length=1`); everything the writer and the review
+    step need to know about that section's content, and the **single home** for that section's
+    rules: no other prompt, model, or spec SHALL carry per-section content instructions.
   - `protected: bool` — default `False`; whether user instructions may drop or restyle this
     section (see the **report-composition** capability's protected-sections requirement).
-  - `references_section: bool` — default `False`; whether this section is the report's list of
-    sources. It declares what the section *is*, not what the app does with it: the consequences —
-    that the application builds the section rather than the report writer, and that it is excluded
-    from the structure the writer is given and checked against — are defined by the
-    **report-composition** and **report-citations** capabilities.
 
-  The default value SHALL be the five sections Overview, Key Findings, Detailed Analysis,
-  Conclusion, and References, each with its description. Overview and References SHALL default to
-  `protected: true`, References SHALL default to `references_section: true`, and the References
-  description SHALL be the cited-nothing text rather than entry-format rules, the entry format
-  now being the `references_table` each MCP server declares.
+  `ReportSection` SHALL reject unknown fields (`extra="forbid"`), so a stored section entry
+  carrying the withdrawn `references_section` field fails validation rather than being accepted as
+  a section the writer is then asked to write beside the app's own.
+
+  The default value SHALL be the four sections Overview, Key Findings, Detailed Analysis and
+  Conclusion, each with its description, and Overview SHALL default to `protected: true`.
 
   The list SHALL be constrained to contain at least one section with `protected: true`, so no
-  configuration can produce a report whose every section a user instruction may remove. **Only the
-  last section MAY set `references_section: true`**, since a report lists its sources at the end; a
-  structure MAY set it on no section at all, and then no References section is built.
+  configuration can produce a report whose every section a user instruction may remove.
   Section `name`s SHALL be unique across the list — as MCP `server_name`s already are — since
   duplicate headings make "every configured section is present" and the review step's
   ordered-section check ambiguous.
+- `references_section_name: str` — default `References`, non-empty (`min_length=1`); the heading
+  the application writes its References section under. A reader sees it, so a channel sets it in
+  the language its readers read.
+- `references_section_empty_text: str` — default a single sentence saying the report cites no
+  source, non-empty (`min_length=1`); what the References section carries when the report cited
+  nothing at all. It is the only prose an app-built section holds, and a reader sees it, so a
+  channel sets it in the language its readers read.
 - `max_report_words: int` — default `2750`, constrained `ge=1`; the report's word ceiling (see
   the **report-composition** capability for how a word is counted and how the ceiling is
   enforced).
@@ -151,10 +150,10 @@ lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
 
 - **WHEN** `ApplicationProperties.model_validate` receives an object that configures no report
   properties
-- **THEN** validation SHALL succeed, `default_report_structure` SHALL be the five default
-  sections in order (Overview, Key Findings, Detailed Analysis, Conclusion, References) with
-  Overview and References carrying `protected: true`, References alone carrying
-  `references_section: true` and the cited-nothing text as its description, `max_report_words`
+- **THEN** validation SHALL succeed, `default_report_structure` SHALL be the four default sections
+  in order (Overview, Key Findings, Detailed Analysis, Conclusion) with Overview alone carrying
+  `protected: true`, `references_section_name` SHALL equal `References`,
+  `references_section_empty_text` SHALL be the default cited-nothing sentence, `max_report_words`
   SHALL equal `2750`, and `max_report_versions` SHALL equal `3`
 
 #### Scenario: Empty report structure is rejected
@@ -170,18 +169,20 @@ lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
 - **THEN** validation SHALL raise a pydantic `ValidationError` naming
   `default_report_structure` and stating that at least one section must be protected
 
-#### Scenario: A references section before the last one is rejected
+#### Scenario: A section entry carrying the withdrawn references flag is rejected
 
-- **WHEN** `ApplicationProperties.model_validate` receives a `default_report_structure` where a
-  section other than the last sets `references_section: true`
-- **THEN** validation SHALL raise a pydantic `ValidationError` stating that only the last section
-  may set it, and naming the misplaced section
+- **WHEN** `ApplicationProperties.model_validate` receives a `default_report_structure` whose
+  section entry still carries `references_section: true`
+- **THEN** validation SHALL raise a pydantic `ValidationError` naming the unknown field, rather
+  than accepting a References section the report writer would be asked to write beside the one the
+  application appends
 
-#### Scenario: A structure with no references section validates
+#### Scenario: A channel writes the section's strings in its readers' language
 
-- **WHEN** an instance configures a structure whose every section leaves `references_section` at
-  its default of `False`
-- **THEN** validation SHALL succeed, and no References section SHALL be built
+- **WHEN** an instance sets `references_section_name` and `references_section_empty_text` to
+  strings of its own
+- **THEN** validation SHALL succeed, the built section SHALL carry that heading, and a report
+  citing nothing SHALL carry that text
 
 #### Scenario: Duplicate section names are rejected
 
@@ -195,4 +196,4 @@ lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
 - **WHEN** an instance configures a structure that marks a "Regulatory disclaimer" section
   `protected: true`
 - **THEN** validation SHALL succeed and that section SHALL receive the same protection from user
-  instructions as the references section does
+  instructions as Overview does

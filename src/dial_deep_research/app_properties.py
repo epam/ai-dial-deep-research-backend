@@ -670,7 +670,7 @@ class ApplicationProperties(BaseModel):
         configured section is present" ambiguous. The protected-section floor keeps configuration
         from producing a report whose every section a user instruction may remove. A report lists
         its sources at the end, so at most one section may be the references section and it must be
-        the last — a structure may also have none, and then nothing is exempt from the word count.
+        the last; a structure may also have none, and then nothing decodes its citations.
         """
         sections = self.default_report_structure
         names = [section.name for section in sections]

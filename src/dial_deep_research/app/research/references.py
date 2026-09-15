@@ -139,11 +139,15 @@ def _render_value(value: Any) -> str:
 
     A channel owns its metadata, so a value is not required to be a string: a year stored as a
     number should fill its cell rather than blank it, and a list of topics should read as a list.
-    Anything else — a nested object, a null, an empty string — leaves the cell empty, which is what
-    a reader can act on, rather than a rendering of the app's confusion.
+    Anything else — a nested object, a null, a string with nothing but whitespace in it — leaves the
+    cell empty, which is what a reader can act on, rather than a rendering of the app's confusion.
+
+    A string is stripped, so a value that only looks filled leaves the cell empty like an absent
+    one — and in the first column that is what lets the row fall back to its source's identifier
+    instead of reading blank, which would leave a reader with no way to tell which source it is.
     """
     if isinstance(value, str):
-        return _escape_cell(value)
+        return _escape_cell(value.strip())
     if isinstance(value, bool):
         # Before the number branch: `bool` is a subclass of `int`, and `True` should not read `1`.
         return "true" if value else "false"

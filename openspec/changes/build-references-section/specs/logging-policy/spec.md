@@ -18,9 +18,9 @@ already outside the content allowlist at every level. How many sources the secti
 is already readable from the requested-document and requested-dataset counts on the (8c) event, so
 the warning adds no count of its own.
 
-**A structure that declares no references section SHALL NOT be recorded at all**, at any level. No
-build is attempted, nothing failed, and a channel whose report structure omits the section would
-otherwise emit a record on every report it delivers.
+**A build that succeeded SHALL NOT be recorded at all**, at any level. The section is built on
+every turn that delivers a report, so a record of the ordinary case would fire on every report and
+say nothing the (8c) event does not already carry.
 
 #### Scenario: A failed build warns once and delivers the report
 
@@ -35,8 +35,8 @@ otherwise emit a record on every report it delivers.
 - **THEN** the WARNING SHALL carry the failure kind and SHALL NOT carry a document title, a dataset
   name, a cited id, a URL, or any cell value
 
-#### Scenario: A structure with no references section is silent
+#### Scenario: A built section is recorded nowhere of its own
 
-- **WHEN** an instance whose configured structure sets `references_section` on no section delivers a
-  report citing two documents
-- **THEN** no record about the References section SHALL be emitted at any level
+- **WHEN** the References section is built and appended successfully
+- **THEN** no record about it SHALL be emitted at any level, the (8c) event's requested-source
+  counts already saying how many sources it listed

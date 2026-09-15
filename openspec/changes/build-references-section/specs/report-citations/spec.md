@@ -2,23 +2,24 @@
 
 ### Requirement: The References section is built by the app from the cited sources' metadata
 
-Where the configured structure declares a references section, the app SHALL write that section
-itself as part of the citation step, and the report writer SHALL NOT write it. Which section that is
-comes from the configuration (**application-config-schema**), and what the writer is given and
-checked against is owned by **report-composition**. Every row SHALL be built from what a server
-reported about a cited source, never from what a model recalled about it — which is the whole reason
-the section moves into the app.
+The app SHALL write the report's References section itself as part of the citation step, on every
+turn that delivers a report, and the report writer SHALL NOT write it. The section is no part of the
+configured report structure: its heading comes from `references_section_name` and its cited-nothing
+text from `references_section_empty_text` (**application-config-schema**), and what the writer is
+given and checked against is owned by **report-composition**. Every row SHALL be built from what a
+server reported about a cited source, never from what a model recalled about it — which is the whole
+reason the section moves into the app.
 
-**What the section contains.** The section SHALL open with a `##` heading carrying the configured
-section name. It SHALL then carry **one table per configured MCP server whose sources the delivered
+**What the section contains.** The section SHALL open with a `##` heading carrying
+`references_section_name`. It SHALL then carry **one table per configured MCP server whose sources the delivered
 report cites**, in the order the servers are configured. Each table SHALL open with a `###`
 sub-heading carrying that server's configured table title, and its header row SHALL be the columns
 that server's `references_table` configures, in the configured order.
 
 A server whose sources the report does not cite SHALL contribute no table at all. Where the report
-cites no source of any kind, the section SHALL carry no table and SHALL carry the references
-section's configured `description` text instead, so a report with nothing to cite says so rather
-than showing a bare heading.
+cites no source of any kind, the section SHALL carry no table and SHALL carry
+`references_section_empty_text` instead, so a report with nothing to cite says so rather than
+showing a bare heading.
 
 **One row per cited source.** Each table SHALL carry one row for each distinct source of its kind the
 delivered report cites, ordered by where that source is first cited in the report. A source SHALL be
@@ -53,25 +54,28 @@ another.
 **No row is interactive in this iteration.** No cell SHALL carry a hyperlink, a marker tag, or any
 other markup that opens something. A document's shared URL is storage-relative, so an ordinary
 Markdown link to it opens nothing; making a row openable therefore means an annotation of its own,
-which renders the row as a pill with a citation card. Because the app writes no link, the report's
-no-hyperlink guarantee (**report-composition**) holds over the delivered text whole and needs no
-exemption for app-written markup.
+which renders the row as a pill with a citation card. The no-hyperlink rule
+(**report-composition**) governs what the report writer writes, and the app writes no openable
+markup of its own, so the rule needs no exemption for an app-written section.
 
 **Where it is appended.** The built section SHALL be appended to the text the citation conversion
 produced — after the link-removal pass and after the conversion — and SHALL therefore reach both the
 assistant message content and the persisted report message. It SHALL NOT be searched for citation
 markers or for hyperlinks: the app wrote it, and nothing in it is either.
 
-**A section the draft wrote anyway is removed first.** Where the delivered draft carries a `##`
-heading whose text matches the configured references section's name, that heading and everything
-after it SHALL be removed before the built section is appended, so a reader never sees the section
-twice. The draft is still judged as the writer wrote it: the stray section is reported as a structure
-violation and its words count toward the ceiling (**report-composition**), because a violation must
-not earn length budget.
+**A section the draft wrote anyway is left where it is.** The app SHALL NOT remove text from a
+draft to make room for the built section. A draft that writes its own references section carries an
+extra `##` heading, which the structure check reports on every reviewed draft and the revision acts
+on (**report-composition**), so the loop is what removes it while a version remains; its words count
+toward the ceiling like any other, because a violation must not earn length budget. A draft that
+exhausts the version budget still carrying one SHALL be delivered with that section followed by the
+built one.
 
-**A structure declaring no references section gets none.** Where no configured section sets
-`references_section: true`, the app SHALL build nothing and append nothing, and the delivered report
-decodes its citations nowhere. That is the deliberate consequence of that configuration.
+The duplication is deliberate, and it is the cheaper failure: removing a heading and the text after
+it removes whatever the writer put below that heading, which a reader cannot see has happened,
+while two References sections are visible and cost a reader nothing. It also keeps the rows true —
+the cited ids are read before the section is appended and nothing is removed after, so every source
+a row lists is one the delivered report cites.
 
 #### Scenario: Every cited source gets a row
 
@@ -97,22 +101,22 @@ decodes its citations nowhere. That is the deliberate consequence of that config
 #### Scenario: A report citing nothing carries the configured text
 
 - **WHEN** a delivered report cites no document and no dataset
-- **THEN** the section SHALL be present, SHALL carry no table, and SHALL carry the references
-  section's configured `description` text
+- **THEN** the section SHALL be present, SHALL carry no table, and SHALL carry
+  `references_section_empty_text`
 
-#### Scenario: A draft that wrote the section anyway does not deliver it twice
+#### Scenario: A draft that wrote the section anyway keeps every section it wrote
 
-- **WHEN** the delivered draft carries a `## References` heading with rows the model wrote, and the
-  configured references section is named `References`
-- **THEN** the delivered text SHALL carry exactly one `## References` heading, the rows under it
-  SHALL be the app's, and the model's heading and rows SHALL NOT appear
+- **WHEN** a draft that exhausted its version budget carries a `## References` heading with rows the
+  model wrote, followed by a `## Conclusion` section
+- **THEN** the delivered text SHALL still carry that Conclusion, the model's references heading and
+  rows SHALL still be there, and the built section SHALL follow them
 
-#### Scenario: A structure with no references section gets no section
+#### Scenario: A source cited only inside the draft's own references section still gets a row
 
-- **WHEN** an instance configures a structure whose every section leaves `references_section` at its
-  default of `False`, and the delivered report cites two documents
-- **THEN** no section SHALL be appended, and the delivered text SHALL end with the draft's own last
-  section
+- **WHEN** a draft cites one document in its body and a second document only inside the references
+  section it wrote itself
+- **THEN** both documents SHALL have a row, both citations SHALL be converted where their
+  conditions hold, and no row SHALL name a source the delivered text does not cite
 
 #### Scenario: A value that would break the table is escaped
 
@@ -144,9 +148,9 @@ kinds of alteration, in this order:
    label kept where the form has one, the construct deleted whole where it has none. That capability
    owns which forms count and how each is repaired; this step owns only that they go first.
 2. **Replace each convertible citation marker** with that citation's marker tag.
-3. **Write the References section**, where the configured structure declares one — removing a
-   references section the draft wrote anyway, and appending the one the app builds from the cited
-   sources' metadata (see the References-section requirement below).
+3. **Append the References section** the app builds from the cited sources' metadata (see the
+   References-section requirement below). It is an addition only: this step removes no text the
+   writer wrote, including a references section the writer wrote itself.
 
 The order is fixed so the outcome is deterministic. The first two do not repair each other's input:
 link removal runs first, and citation conversion then reads the text it produced, making no

@@ -332,10 +332,11 @@ class ReportReviewOutcome(BaseModel):
     """One report review's result, handed to the runner so it can render a DIAL stage.
 
     Carries no DIAL types: the node decides what to report, the runner decides how it is
-    rendered. `violations` is everything the next revision must fix — the review model's violations, with
-    the app-measured length violation prepended when the draft exceeds the ceiling. `error` records a failed review call (the exception kind); the length violation
-    joins the list regardless, so a failed call still carries it. The violation text belongs
-    in the stage only — never in a log record, per the logging-policy content allowlist.
+    rendered. `violations` is everything the next revision must fix — the review model's
+    violations, with the app-measured length violation prepended when the draft exceeds the
+    ceiling. `error` records a failed review call (the exception kind); the length violation joins
+    the list regardless, so a failed call still carries it. The violation text belongs in the stage
+    only — never in a log record, per the logging-policy content allowlist.
     """
 
     draft_number: int
@@ -657,7 +658,6 @@ def route_after_research_review() -> Callable[[ResearchState], str]:
 def route_after_report(
     max_versions: int,
     max_words: int,
-    sections: Sequence[ReportSection],
     emit_budget_exhausted: ReportBudgetExhaustedEmitter,
 ) -> Callable[[ResearchState], str]:
     """Decide the edge out of the report node, and report the hand-off it decides on.

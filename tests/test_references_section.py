@@ -116,6 +116,15 @@ def test_the_first_column_falls_back_to_the_identifier() -> None:
     assert "| doc 207 |  |" in section
 
 
+def test_a_first_column_value_of_whitespace_falls_back_too() -> None:
+    """A value that only looks filled leaves a row a reader cannot identify, so it is not one."""
+    section = _section(
+        _documents(ReferenceRow(identifier="doc 207", fields={"publication_title": "   "}))
+    )
+
+    assert "| doc 207 |  |" in section
+
+
 def test_only_the_first_column_falls_back() -> None:
     section = _section(
         _documents(ReferenceRow(identifier="doc 207", fields={"publication_title": _TITLE}))
@@ -159,6 +168,8 @@ def test_rows_keep_the_order_they_were_given() -> None:
         pytest.param([2024, 2025], "2024, 2025", id="list-of-numbers"),
         pytest.param(None, "", id="null"),
         pytest.param("", "", id="empty-string"),
+        pytest.param("   ", "", id="whitespace-only-string"),
+        pytest.param("  Market Outlook 2025  ", "Market Outlook 2025", id="padded-string"),
         pytest.param({"nested": "object"}, "", id="object"),
     ],
 )
