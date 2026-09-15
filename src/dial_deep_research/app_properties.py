@@ -274,10 +274,10 @@ class MCPClientSettings(BaseModel):
         description="How this server's cited sources are listed in the report's References section:"
         " the sub-heading the table is written under, and its columns. The application builds that"
         " section itself from what the servers reported about the sources the report cites, so this"
-        " is where a channel says what a row holds. Required on every server, whatever it serves"
-        " and whatever the report structure declares: a server without a table is a server whose"
-        " cited sources cannot be listed. An instance whose structure declares no references"
-        " section simply builds none.",
+        " is where a channel says what a row holds. Required on every server, whatever it serves:"
+        " a server without a table is a server whose cited sources cannot be listed. The section is"
+        " built for every report, and the report structure has no say in whether it is — it names"
+        " only the sections the report writer writes.",
     )
 
     @property
@@ -554,11 +554,12 @@ class ApplicationProperties(BaseModel):
         default=2750,
         ge=1,
         description="The report's word ceiling, counted as whitespace-separated tokens of the"
-        " report's Markdown. The count leaves out the inline citations, and the references section"
-        " where the structure declares one, so it measures the report's prose rather than its"
-        " sourcing. Enforced by reviewing the finished report and revising it, never by cutting"
-        " text off: a report over the ceiling is rewritten to fit while the version budget allows,"
-        " and always ends at a complete sentence.",
+        " report's Markdown. The count leaves out the inline citations, so it measures the report's"
+        " prose rather than its sourcing. The References section is outside it because it is"
+        " outside the draft: the application appends that section after the report is settled, so"
+        " its length never consumes the writer's budget. Enforced by reviewing the finished report"
+        " and revising it, never by cutting text off: a report over the ceiling is rewritten to fit"
+        " while the version budget allows, and always ends at a complete sentence.",
     )
     max_report_versions: int = Field(
         default=3,

@@ -221,8 +221,9 @@ one INFO log record, so the loop's behavior is measurable without reading anyone
 
 - the draft number being reviewed (1 for the first draft, incrementing per revision);
 - the draft's measured word count and the configured ceiling, as numbers, together with what the
-  count leaves out, named from the configured structure — a reader who counts the delivered report
-  themselves gets a larger number, and the stage SHALL say why;
+  count leaves out, which is the inline citations — a reader who counts the delivered report
+  themselves gets a larger number, the appended References section included, and the stage SHALL
+  say why;
 - the violations, as a numbered markdown list — one entry per violation (stage content renders
   as markdown). The list is everything the next revision must fix: the review model's violations,
   with the app-rendered length violation prepended when the measured count exceeds the ceiling.
@@ -342,8 +343,9 @@ room the count does not give.
 
 A draft that writes a references section **anyway** SHALL lose nothing from the count: that heading
 is a structure violation the review step reports, and a violation SHALL NOT also earn length budget.
-It is removed at delivery rather than at measurement (see **report-citations**), so the writer is
-judged on what it wrote and the reader is not shown the section twice.
+Nothing removes it at delivery either — the app appends its own section and takes no text out (see
+**report-citations**) — so the revision loop is the only thing that can, and a draft that spends its
+last version still carrying one is delivered with that section followed by the built one.
 
 Length is never a model's judgement: it is measured in Python and enforced deterministically (see
 below). Where a model does need a length, it is supplied as a number rather than left for it to
