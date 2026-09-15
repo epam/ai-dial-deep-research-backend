@@ -122,6 +122,9 @@ async def test_extra_fields_in_a_record_are_ignored() -> None:
     sources = await read_dataset_sources(tool=tool, dataset_ids=[_URN])
 
     assert sources[_URN].name == _NAME
+    # Every reported field is carried whole, which is what a References column reads.
+    assert sources[_URN].raw_fields["numberOfIndicators"] == 47
+    assert sources[_URN].raw_fields["provider"] == "IMF"
 
 
 @pytest.mark.parametrize(
@@ -134,13 +137,17 @@ async def test_extra_fields_in_a_record_are_ignored() -> None:
         ({"id": _URN, "name": _NAME, "url": 42}, "the url is not a string"),
     ],
 )
-async def test_a_dataset_with_no_page_a_browser_can_open_is_absent(
+async def test_a_dataset_with_no_page_a_browser_can_open_is_kept_without_a_url(
     record: dict[str, Any], case: str
 ) -> None:
-    """Its citations keep their marker text; the call itself still succeeds."""
+    """It is a cited dataset either way: its citations keep their marker text for want of a page
+    to open, and the report's References section still lists it by name."""
     tool = _catalogue_tool(datasets=[record])
 
-    assert await read_dataset_sources(tool=tool, dataset_ids=[_URN]) == {}, case
+    sources = await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+
+    assert sources[_URN].url is None, case
+    assert sources[_URN].name == _NAME, case
 
 
 @pytest.mark.parametrize(

@@ -32,37 +32,28 @@
         {
           "name": "Overview",
           "description": "What the report set out to answer, what was searched to answer it, and the short answer. Restate the research question, name the sources and topics the research covered and the approach taken to cover them, then answer the question directly in two to four sentences. Keep it brief — the findings and the analysis follow below.",
-          "protected": true,
-          "references_section": false
+          "protected": true
         },
         {
           "name": "Key Findings",
           "description": "A brief summary of what the research found, leading with the direct answer to the user's question where the findings support one. Short paragraphs or bullets, not a retelling of the analysis that follows.",
-          "protected": false,
-          "references_section": false
+          "protected": false
         },
         {
           "name": "Detailed Analysis",
           "description": "The substance of the report: what the sources say, how they fit together, and what follows from them. Use sub-headings, short paragraphs, and tables where they aid clarity. Note where sources disagree or where a figure rests on a single source.",
-          "protected": false,
-          "references_section": false
+          "protected": false
         },
         {
           "name": "Conclusion",
           "description": "The bottom line the analysis supports, and the limits of what the findings can answer. No new facts here.",
-          "protected": false,
-          "references_section": false
-        },
-        {
-          "name": "References",
-          "description": "Decode every source cited in the report.\nIf any document was cited, add a \"Documents\" table, with columns: `id`, `title`, `publication date`.\nIf any dataset was cited, add a \"Datasets\" table, with columns: `title`.\nEach table lists only the sources of its type actually cited in the report,\nso a type with nothing cited drops its own table.\nThe section itself is always written: if the research cited no source at all,\nsay so plainly here rather than leaving the section out or inventing entries.",
-          "protected": true,
-          "references_section": true
+          "protected": false
         }
       ],
-      "description": "The ordered sections a report follows, each rendered as a Markdown `##` heading. Section names must be unique, at least one section must be protected, and only the last section may set references_section. Report-wide rules (the word ceiling, the ban on confidence scores and processing times, the inline citation format) are not configured here — only the sections and what belongs in them.",
+      "description": "The ordered sections the report writer writes, each rendered as a Markdown `##` heading. Section names must be unique and at least one section must be protected. The References section is not one of them: the application appends it to every report, under the heading references_section_name. Report-wide rules (the word ceiling, the ban on confidence scores and processing times, the inline citation format) are not configured here — only the sections and what belongs in them.",
       "items": {
-        "description": "One section of the report structure.\n\n`description` is the single home for that section's rules — what belongs in it, how to\nrender it, any table columns it carries. It is passed verbatim to the report writer and\nto report-review, so changing a section's behavior means editing this one string.",
+        "additionalProperties": false,
+        "description": "One section of the report structure, which is one section the report writer writes.\n\n`description` is the single home for that section's rules — what belongs in it, how to render\nit, any table columns it carries. It is passed verbatim to the report writer and to\nreport-review, so changing a section's behavior means editing this one string.\n\nThe References section is no section of this list: the application builds and appends it\n(`references_section_name` and `references_section_empty_text` are its whole configuration),\nwhich is why an unknown field is refused here rather than ignored. A stored structure still\ncarrying the withdrawn `references_section` flag would otherwise keep a References entry the\nwriter is then asked to write beside the one the app appends.",
         "properties": {
           "name": {
             "description": "The section's heading in the report.",
@@ -80,12 +71,6 @@
             "default": false,
             "description": "Whether this section survives any user instruction. A protected section can be neither dropped nor restyled by anything the user asked for, and neither can the rules in its description. At least one section must be protected.",
             "title": "Protected",
-            "type": "boolean"
-          },
-          "references_section": {
-            "default": false,
-            "description": "Whether this section is the report's list of sources. Only the last section may be one, and a structure need not have one at all. Its length follows from how much the research cited rather than from what the report chose to say, so its words do not count toward max_report_words; in every other way it is a section like any other.",
-            "title": "References Section",
             "type": "boolean"
           }
         },
@@ -106,7 +91,7 @@
     },
     "max_report_words": {
       "default": 2750,
-      "description": "The report's word ceiling, counted as whitespace-separated tokens of the report's Markdown. The count leaves out the inline citations, and the references section where the structure declares one, so it measures the report's prose rather than its sourcing. Enforced by reviewing the finished report and revising it, never by cutting text off: a report over the ceiling is rewritten to fit while the version budget allows, and always ends at a complete sentence.",
+      "description": "The report's word ceiling, counted as whitespace-separated tokens of the report's Markdown. The count leaves out the inline citations, so it measures the report's prose rather than its sourcing. The References section is outside it because it is outside the draft: the application appends that section after the report is settled, so its length never consumes the writer's budget. Enforced by reviewing the finished report and revising it, never by cutting text off: a report over the ceiling is rewritten to fit while the version budget allows, and always ends at a complete sentence.",
       "minimum": 1,
       "title": "Max Report Words",
       "type": "integer",
@@ -126,6 +111,28 @@
         "dial:propertyOrder": 5
       }
     },
+    "references_section_name": {
+      "default": "References",
+      "description": "The heading the application writes the report's References section under. The application builds that section itself, from what the servers reported about the sources the report cites, so this names a section the report writer never writes. A reader sees it, so write it in the language this channel's readers read.",
+      "minLength": 1,
+      "title": "References Section Name",
+      "type": "string",
+      "dial:meta": {
+        "dial:propertyKind": "server",
+        "dial:propertyOrder": 6
+      }
+    },
+    "references_section_empty_text": {
+      "default": "This report cites no source: the research found no citable evidence.",
+      "description": "What the References section says when the report cited no source at all. It is the whole of the section in that case — a report with nothing to cite says so rather than showing a bare heading — and the only prose an app-built section holds. A reader sees it, so write it in the language this channel's readers read.",
+      "minLength": 1,
+      "title": "References Section Empty Text",
+      "type": "string",
+      "dial:meta": {
+        "dial:propertyKind": "server",
+        "dial:propertyOrder": 7
+      }
+    },
     "max_pill_title_chars": {
       "anyOf": [
         {
@@ -141,7 +148,7 @@
       "title": "Max Pill Title Chars",
       "dial:meta": {
         "dial:propertyKind": "server",
-        "dial:propertyOrder": 6
+        "dial:propertyOrder": 8
       }
     },
     "mcp_servers": {
@@ -251,11 +258,58 @@
             "default": null,
             "description": "Name of this server's tool listing the datasets this channel exposes. The application calls it when it delivers a report, to learn a cited dataset's name and the address of its page, so a dataset citation becomes a pill that opens that page. The tool takes no arguments and answers with the whole catalogue; the application selects the datasets the report cites. It stays available to the research agent, which uses the same listing to discover which datasets exist, so naming it here only adds a caller. Required on a statgpt server, and only a statgpt server may set it: without it every dataset citation is delivered as a bare URN in square brackets, which names nothing the reader can open.",
             "title": "Dataset Metadata Tool"
+          },
+          "references_table": {
+            "description": "How this server's cited sources are listed in the report's References section: the sub-heading the table is written under, and its columns. The application builds that section itself from what the servers reported about the sources the report cites, so this is where a channel says what a row holds. Required on every server, whatever it serves: a server without a table is a server whose cited sources cannot be listed. The section is built for every report, and the report structure has no say in whether it is — it names only the sections the report writer writes.",
+            "properties": {
+              "title": {
+                "description": "The sub-heading this table is written under, for example Documents or Datasets. A reader sees it, so write it in the language this channel's readers read.",
+                "minLength": 1,
+                "title": "Title",
+                "type": "string"
+              },
+              "columns": {
+                "description": "The table's columns, in the order they are rendered. The order matters beyond layout: the first column is the one a reader identifies a row by, so it is the one that falls back to the source's identifier — a document id, or a dataset's URN — when its key resolves nothing. Put the column naming the source first.",
+                "items": {
+                  "description": "One column of a References table: the heading a reader sees, and the key it reads.",
+                  "properties": {
+                    "heading": {
+                      "description": "The column's header text in the report's References table. A reader sees it, so write it in the language this channel's readers read.",
+                      "minLength": 1,
+                      "title": "Heading",
+                      "type": "string"
+                    },
+                    "key": {
+                      "description": "The name this server reports the value under — a key of a document's metadata object, or a field of a dataset's catalogue record. A source that reports nothing usable under it leaves the cell empty, except in the first column, which falls back to the source's own identifier.",
+                      "minLength": 1,
+                      "title": "Key",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "heading",
+                    "key"
+                  ],
+                  "title": "ReferenceColumn",
+                  "type": "object"
+                },
+                "minItems": 1,
+                "title": "Columns",
+                "type": "array"
+              }
+            },
+            "required": [
+              "title",
+              "columns"
+            ],
+            "title": "ReferencesTable",
+            "type": "object"
           }
         },
         "required": [
           "server_name",
-          "server_type"
+          "server_type",
+          "references_table"
         ],
         "title": "MCPClientSettings",
         "type": "object"
@@ -265,7 +319,7 @@
       "type": "array",
       "dial:meta": {
         "dial:propertyKind": "server",
-        "dial:propertyOrder": 7
+        "dial:propertyOrder": 9
       }
     },
     "prompts": {
@@ -299,7 +353,7 @@
       "type": "object",
       "dial:meta": {
         "dial:propertyKind": "server",
-        "dial:propertyOrder": 8
+        "dial:propertyOrder": 10
       }
     }
   },

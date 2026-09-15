@@ -35,8 +35,15 @@ def _make_runner(*, content_already_streamed: bool = False) -> tuple[ResearchRun
     return runner, choice
 
 
+_EMPTY_SECTION = "## References\n\nThis report cites no source."
+
+
 async def _deliver(runner: ResearchRunner) -> None:
-    """Deliver the settled report the way `run` does, with inline citations switched off."""
+    """Deliver the settled report the way `run` does, with inline citations switched off.
+
+    No server's table is configured here, so the appended References section is its
+    cited-nothing text — this suite is about where the report lands, not what it lists.
+    """
     await runner._deliver_report(
         file_sharing_tool=None,
         configured_tool_name=None,
@@ -45,6 +52,9 @@ async def _deliver(runner: ResearchRunner) -> None:
         dataset_metadata_tool=None,
         configured_dataset_tool_name=None,
         pill_title_max_chars=20,
+        references_heading="References",
+        references_empty_text="This report cites no source.",
+        references_tables=(),
     )
 
 
@@ -56,7 +66,7 @@ async def test_settled_report_is_appended_once_with_no_separator() -> None:
     await _deliver(runner)
 
     # Only the draft the loop settled on, and no leading blank line: preparation streamed nothing.
-    assert choice.content == "draft two"
+    assert choice.content == f"draft two\n\n{_EMPTY_SECTION}"
 
 
 async def test_report_is_separated_when_preparation_streamed_text() -> None:
@@ -64,7 +74,7 @@ async def test_report_is_separated_when_preparation_streamed_text() -> None:
     runner._handle_part(_values([HumanMessage(content="q")], report="the report"))
     await _deliver(runner)
 
-    assert choice.content == "\n\nthe report"
+    assert choice.content == f"\n\nthe report\n\n{_EMPTY_SECTION}"
 
 
 async def test_delivered_report_is_appended_to_the_persisted_slice() -> None:
@@ -76,7 +86,7 @@ async def test_delivered_report_is_appended_to_the_persisted_slice() -> None:
 
     assert runner._messages[:-1] == transcript
     assert isinstance(runner._messages[-1], AIMessage)
-    assert runner._messages[-1].content == "the report"
+    assert runner._messages[-1].content == f"the report\n\n{_EMPTY_SECTION}"
 
 
 def test_research_tool_call_emits_stage_finish_iteration_does_not() -> None:
@@ -184,6 +194,10 @@ def _properties(**overrides: Any) -> ApplicationProperties:
                     "file_sharing_tool": "get_citation_url",
                     "document_metadata_resource": "documents://metadata/{document_ids}",
                     "document_title_key": "publication_title",
+                    "references_table": {
+                        "title": "Documents",
+                        "columns": [{"heading": "Title", "key": "publication_title"}],
+                    },
                 }
             ],
             **overrides,

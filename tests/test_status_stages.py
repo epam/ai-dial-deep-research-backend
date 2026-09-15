@@ -53,6 +53,10 @@ def _properties() -> ApplicationProperties:
                     "file_sharing_tool": "get_citation_url",
                     "document_metadata_resource": "documents://metadata/{document_ids}",
                     "document_title_key": "publication_title",
+                    "references_table": {
+                        "title": "Documents",
+                        "columns": [{"heading": "Title", "key": "publication_title"}],
+                    },
                 }
             ],
         }
@@ -327,6 +331,7 @@ async def test_the_report_node_names_its_work_before_calling_a_model(
         today_date="2026-08-14",
         sections=DEFAULT_REPORT_STRUCTURE,
         max_words=2750,
+        references_name="References",
         emit_revision_failed_stage=lambda _outcome: None,
         emit_activity=seen.append,
     )
@@ -346,6 +351,7 @@ async def test_report_review_names_its_work_before_calling_a_model(
         today_date="2026-08-14",
         sections=DEFAULT_REPORT_STRUCTURE,
         max_words=2750,
+        references_name="References",
         emit_result_stage=lambda _outcome: None,
         emit_activity=seen.append,
     )

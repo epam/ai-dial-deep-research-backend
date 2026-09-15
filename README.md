@@ -259,6 +259,21 @@ make infra-cleanup    # down + remove volumes (destroys DIAL core data)
 
 > **macOS and port 5000.** AirPlay Receiver binds port 5000, so the app can't. Set e.g. `APP_PORT=5001` in `.env` **before** `make infra-config` — the target bakes the port into the DIAL core routing config (see [DIAL core configuration](#dial-core-configuration)).
 
+### Pre-commit leak check
+
+`scripts/check_sensitive_info.sh` asks Claude Code to judge the staged diff against
+[`no_sensitive_info.md`](no_sensitive_info.md) and refuses the commit when it finds a leak. It runs
+as the `sensitive-info` hook in `.pre-commit-config.yaml`, next to the formatting hooks, and needs
+the `claude` CLI and `jq` on your `PATH`. Enable once per clone:
+
+```sh
+make install-precommit-hooks     # installs the dev dependencies, then writes .git/hooks/pre-commit
+```
+
+It makes one Sonnet call per commit, so expect a pause of tens of seconds. Judge what is staged
+without committing with `poetry run pre-commit run sensitive-info`, and skip the checks for a
+single commit with `git commit --no-verify`.
+
 ## Running the app in Docker (opt-in)
 
 `docker-compose.app.yml` is a compose overlay that runs the app as a container next to the

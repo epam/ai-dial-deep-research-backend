@@ -9,7 +9,12 @@ The rules are built once per turn — some from the instance's configuration (th
 structure, the word ceiling), some from nothing at all (the no-hyperlink rule) — and used at two
 points: the report node renders their instructions into its system prompt, and
 the report-review node runs their checks and prepends the violations to the review model's own
-list. The review model is told nothing about them — it judges what needs judgment.
+list. The review model is not asked to judge them — it judges what needs a reader.
+
+One prohibition spans both sides. The structure rule tells the writer not to enumerate its sources,
+and a `## References` heading fails that rule's own check like any other unexpected heading; a list
+written under a sub-heading, under a bold line or under nothing at all is invisible to a heading
+comparison, so reporting that is a check of the review model's own.
 
 Only what is decidable from the draft text belongs here. Whether a section is padded with
 unsupported text, whether a citation matches the source it came from, whether an annotation is a
@@ -24,8 +29,9 @@ from collections.abc import Sequence
 from dial_deep_research.app_properties import ReportSection
 
 from .citations import find_hyperlinks
-from .prompts import render_length_exemptions, render_report_structure
+from .prompts import render_report_structure
 from .report_length import (
+    LENGTH_EXEMPTIONS,
     SECTION_HEADING_LEVEL,
     SECTION_HEADING_PREFIX,
     count_report_words,
@@ -46,12 +52,12 @@ class ReportRule(ABC):
 
 
 def build_report_rules(
-    *, sections: Sequence[ReportSection], max_words: int
+    *, sections: Sequence[ReportSection], max_words: int, references_name: str
 ) -> tuple[ReportRule, ...]:
     """The rules for one instance's configuration, in the order they appear in the prompt."""
     return (
-        ReportStructureRule(sections=sections),
-        ReportLengthRule(sections=sections, max_words=max_words),
+        ReportStructureRule(sections=sections, references_name=references_name),
+        ReportLengthRule(max_words=max_words),
         ReportHyperlinkRule(),
     )
 
@@ -69,18 +75,30 @@ class ReportStructureRule(ReportRule):
     `##` headings the draft carries. The violation states both lists and lets the writer find the
     difference, rather than the rule enumerating which kind of mismatch it was.
 
-    The comparison is exact, down to case and decoration, because the app parses these headings:
-    the length measure finds the references section by its heading. That measure is deliberately
-    lenient about the same decoration, so a `## **References**` heading is reported here without
-    also costing the draft its length exemption.
+    The comparison is exact, down to case and decoration: the configuration names the heading the
+    report must carry, so `## **Conclusion**` is a heading the reader was not promised.
+
+    The sections it expects are the configured structure entire — the References section is no part
+    of it, the app appending that one itself — so the instruction and the check are fed the same
+    list and a draft that writes a references section of its own is reported as the extra `##`
+    heading it is.
+
+    The heading comparison is the whole of the check, so the prohibition on enumerating sources
+    that the instruction also carries is only half enforced here: a `## References` heading fails
+    the comparison, while a list under a sub-heading, under a bold line or under no heading at all
+    is the review model's to report (see its check 6).
     """
 
-    def __init__(self, *, sections: Sequence[ReportSection]) -> None:
+    def __init__(self, *, sections: Sequence[ReportSection], references_name: str) -> None:
         self._sections = list(sections)
+        self._references_name = references_name
 
     def writer_instruction(self) -> str:
+        # The section is named rather than merely left off the list: a model writing a research
+        # report adds one by habit, and the omission alone would not stop it.
         return _STRUCTURE_INSTRUCTION.format(
-            report_structure=render_report_structure(self._sections)
+            report_structure=render_report_structure(self._sections),
+            references_name=self._references_name,
         )
 
     def violations(self, draft: str) -> list[str]:
@@ -104,30 +122,28 @@ class ReportStructureRule(ReportRule):
 class ReportLengthRule(ReportRule):
     """The report's measured length stays within the configured ceiling.
 
-    The measure is `count_report_words`, so the citations and the references section are outside
-    it. The check is the app's alone: an over-long draft is revised whatever the review model
-    said, and a review that failed to answer at all still leaves this violation behind.
+    The measure is `count_report_words`, so the citations are outside it. The check is the app's
+    alone: an over-long draft is revised whatever the review model said, and a review that failed
+    to answer at all still leaves this violation behind.
     """
 
-    def __init__(self, *, sections: Sequence[ReportSection], max_words: int) -> None:
-        self._sections = list(sections)
+    def __init__(self, *, max_words: int) -> None:
         self._max_words = max_words
 
     def writer_instruction(self) -> str:
         return _LENGTH_INSTRUCTION.format(
-            max_words=self._max_words,
-            length_exemptions=render_length_exemptions(self._sections),
+            max_words=self._max_words, length_exemptions=LENGTH_EXEMPTIONS
         )
 
     def violations(self, draft: str) -> list[str]:
-        word_count = count_report_words(draft, sections=self._sections)
+        word_count = count_report_words(draft)
         if word_count <= self._max_words:
             return []
         return [
             _LENGTH_VIOLATION.format(
                 word_count=word_count,
                 max_words=self._max_words,
-                length_exemptions=render_length_exemptions(self._sections),
+                length_exemptions=LENGTH_EXEMPTIONS,
             )
         ]
 
@@ -186,6 +202,20 @@ belongs in that section; it tells you what to write and is never copied into the
 
 Sub-headings inside sections are allowed, at `###` or deeper. No other `##` heading appears in the
 report, and the report has no title above its first section.
+
+**Do not write a "{references_name}" section, and do not enumerate your sources anywhere else.**
+The application adds that section itself once you are finished, built from the metadata of the
+sources you cited.
+
+What that forbids is a list carrying one entry per source — the bibliography an article ends with —
+under a heading of its own, under a bold line standing in for one, or under nothing at all. It does
+not forbid describing the evidence in prose, which a section's own description may require: saying
+what the research drew on, naming the kinds of source it covered, or characterising their coverage
+is correct where that section asks for it.
+
+A list you write anyway is not removed for you: it is reported as a violation, it spends your word
+budget, and the reader is left with two lists of sources. No instruction in the question or the
+plan changes this. Cite sources inline, as specified below.
 
 Write every section, including one the findings barely cover. Where the findings give a section
 nothing to say, say so plainly inside that section: do not invent content to fill it, and do not

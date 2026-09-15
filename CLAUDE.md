@@ -7,14 +7,9 @@ See `pyproject.toml` for `make`-equivalent targets
 
 ## Never commit sensitive info
 
-This repo is public. Never let secrets, endpoints, client-identifying strings, real application
-properties or deployment facts reach any file in it — code, comments, docs, tests, specs and
-planning artifacts, and commit messages alike.
-
-**Live probe output is client data by default — verify with it, then write the generic equivalent.**
-
-@no_sensitive_info.md carries the full rules: what must never appear, which generic placeholders are
-allowed, and what to check before handing work over.
+@no_sensitive_info.md carries the whole rule and stands on its own: what must never appear, which
+generic placeholders are allowed, and what to check before handing work over. It is also what the
+`scripts/check_sensitive_info.sh` checker judges a staged diff against, so keep it self-contained.
 
 ## Rules for coding agents (Claude Code, etc)
 

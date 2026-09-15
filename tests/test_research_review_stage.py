@@ -252,6 +252,7 @@ async def _run_graph_with_the_cap_reached(
         report_structure=_SECTIONS,
         max_report_words=2750,
         max_report_versions=1,
+        references_section_name="References",
         emit_research_review_result_stage=lambda outcome: (
             findings.append(outcome),
             order.append("findings"),

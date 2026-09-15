@@ -186,13 +186,14 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   research-agent tool calls surface as timed DIAL stages. What reaches the user is that draft after
   the delivery step below, the one permitted transformation between the two.
 - **Report delivery** (`ResearchRunner._deliver_report`, `app/research/citations.py`,
-  `app/research/file_sharing.py`, `app/research/document_metadata.py`,
+  `app/research/references.py`, `app/research/file_sharing.py`,
+  `app/research/document_metadata.py`,
   `app/research/dataset_metadata.py`): the citation step, run once
   per turn between the graph finishing
-  and the report being appended. It makes two alterations to the settled draft, in this order:
+  and the report being appended. It makes three alterations to the settled draft, in this order:
   every hyperlink form goes (a link keeps its label, an image is dropped whole, an autolink or bare
   URL is deleted), then each convertible citation marker is replaced by an empty marker tag,
-  `<cit data-id="…"></cit>`. Each kind of citation has its own condition, and both are about
+  `<cit data-id="…"></cit>`, then the References section is built and appended. Each kind of citation has its own condition, and both are about
   whether the reader can open what the pill points at: a `[doc <id>, page <ix>]` marker converts
   when the file-sharing tool returned a PDF URL for that document, and a `[dataset <urn>]` marker
   converts when the dataset-metadata tool reported that URN with an absolute `http` or `https`
@@ -217,11 +218,37 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   `* Last update: <date>`. The payload is dumped with `exclude_none=True`, so a field that does not
   apply is absent rather than null. No label carries a URL: a dataset's page is reached by
   clicking the pill and then the card's open-in-browser action, both of which belong to the client.
+  The **References section is written by the app**, not by the report writer, from the metadata
+  the same step already resolved — so its rows are a server's facts rather than a model's
+  recollection. It carries a `##` heading with `references_section_name` and one `###` table per
+  configured MCP server whose sources the report cites, in the order the servers are configured;
+  a server with nothing cited contributes no table, and a report that cited nothing carries
+  `references_section_empty_text` instead. Each table's sub-heading and its
+  ordered columns come from `mcp_servers[].references_table`, each column a heading a reader sees
+  and the metadata key or catalogue field it reads. Every cited source gets a row whether or not
+  its metadata resolved and whether or not its citations became pills; the first column names the
+  source and falls back to `doc <id>` or the URN when its key resolves nothing, while every other
+  column is left blank, and nothing marks a row as degraded. A cell renders a string as written, a
+  number or boolean as its text and a list joined with `, `, escaping `|` and collapsing line
+  breaks so a value cannot break the table. No row carries a link or a marker tag: a cited
+  document's shared URL is storage-relative, so an ordinary Markdown link to it opens nothing, and
+  making a row openable would mean an annotation and therefore a citation card. The no-hyperlink rule
+  governs what the report writer writes, and nothing here writes openable markup of its own. The
+  section is appended and nothing is taken out of the draft: a draft that wrote its own references
+  section is reported for the extra `##` heading while a version remains, and its words count
+  toward the ceiling, but a draft that spends its last version still carrying one is delivered with
+  that section followed by the app's. Removing it would mean removing a heading and everything
+  below it, which takes whatever the writer put after it. The section is built for every delivered
+  report; no configuration switches it off.
+  The build is the last pass, so its failure costs the section alone and is one WARNING
+  (`kind=references_build_failed`); every pill the conversion earned is already in the text.
   The step's three resolutions are issued together in one `asyncio.gather`, each failing
   independently into an empty mapping, so the step costs one round trip. The
-  titles come from one MCP resource read per turn, at the URI named by
-  `mcp_servers[].document_metadata_resource` with the cited ids substituted, taking the value under
-  `mcp_servers[].document_title_key`. A `generic_rag` server must name both, and the read asks about
+  document metadata comes from one MCP resource read per turn, at the URI named by
+  `mcp_servers[].document_metadata_resource` with the cited ids substituted. It answers with each
+  document's stored metadata whole; the label takes the value under
+  `mcp_servers[].document_title_key` and a References row takes its configured columns out of the
+  same answer, so a pill's title and its row's first cell are one fact rather than two lookups. A `generic_rag` server must name both, and the read asks about
   every cited document — which is what frees it from the file-sharing answer — while only the titles
   of documents that resolved a URL reach a label or the titled count. Its failures are graded one step
   below the file-sharing ones because a title costs a label rather than a link: naming no resource
@@ -246,23 +273,30 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   Every record of the step carries counts and never a URL, a file name,
   a document title, a dataset name, or a cited document's or dataset's id.
 - **Report structure**: `default_report_structure` (an application property) — an ordered list of
-  `{name, description, protected, references_section}` sections, Overview → Key Findings →
-  Detailed Analysis → Conclusion → References by default. Every section is rendered as a `##`
+  `{name, description, protected}` sections, Overview → Key Findings → Detailed Analysis →
+  Conclusion by default. Unknown fields are refused, so a stored entry still carrying the
+  withdrawn `references_section` flag fails validation rather than becoming a section the writer is
+  asked to write beside the app's own. Every section is rendered as a `##`
   heading, and the app checks that itself (see the rules bullet below). A section's `description`
   is the single home for its content rules and is passed verbatim to both the report node and
-  report-review. A protected section (Overview and References, by default) may be neither dropped
+  report-review. A protected section (Overview, by default) may be neither dropped
   nor restyled by anything the user asked for; at least one section must be protected. Both models
   are told which sections are protected as a rule of their own — the marker is never rendered next
-  to a section name, which the report node is told to use as the heading. `references_section`
-  marks the report's sources listing; only the last section may set it, and a structure may
-  declare none.
+  to a section name, which the report node is told to use as the heading. The References section is
+  no section of this list: the app appends it, so the structure both prompts are given is the
+  configured structure entire. The writer is told not to write one, and report-review holds the
+  same prohibition as one of its checks — so it reports a list the draft wrote and has no ground to
+  demand one, whatever the question or the plan said. What both rules forbid is an **enumeration**,
+  a list carrying one entry per source; describing the evidence in prose is not that, and a section
+  whose description asks for it — the Overview names the kinds of source the research covered — is
+  correct to do so.
 - **Word ceiling**: `max_report_words` (default 2750). A report's length is the number of
-  whitespace-separated tokens left after dropping the inline citations and the references section,
+  whitespace-separated tokens left after dropping the inline citations,
   so the ceiling bounds the report's prose rather than its sourcing — `count_report_words` in
-  `app/research/report_length.py` is the one definition. The references section is dropped only
-  when the structure declares one and the draft wrote it as a `##` heading under its configured
-  name; a renamed, missing, or wrongly-levelled heading is measured with the rest, so a structure
-  violation earns no length budget. The count is computed in Python and given to the report node
+  `app/research/report_length.py` is the one definition. The references section needs no
+  exemption, being no part of a draft: the app appends it after the loop settles. A draft that
+  writes one anyway is measured with it, so a structure violation earns no length budget. The
+  count is computed in Python and given to the report node
   as a number, so no model has to count; report-review never sees the count — the app's own length
   rule adds the violation when the count exceeds the ceiling. The ceiling is enforced by
   rewriting, never by truncation: no token cap is placed on the report call, and a shortening
@@ -283,8 +317,7 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   still reads well without it; the delivery step's removal is the guarantee behind it, for a draft
   the review never got to revise. The detection is shared — the rule and the delivery step both
   call `citations.find_hyperlinks` — so the two cannot disagree about what a hyperlink is. Because the structure check passes only when every heading matches the
-  configuration, the references section is then found by the length measure by construction; that
-  correspondence is covered by tests rather than by a runtime signal.
+  configuration, a references section a draft wrote is always reported while a version remains.
 - **Version budget**: `max_report_versions` (default 3) — at most that many report versions, the
   first draft included, so at most three report calls. The last permitted version is delivered as
   it stands, without another review call: its verdict could not be acted on. A failed
