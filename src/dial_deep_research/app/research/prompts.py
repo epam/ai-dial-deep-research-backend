@@ -334,8 +334,10 @@ Check exactly these, and report a violation for each rule the draft breaks:
 5. **Citation format.** Inline citations must follow the following format:
    - `[doc <id>, page <ix>]` for documents — the document id and the cited page index, both
      present, so a document citation carrying no page is a violation
-   - `[dataset <urn>]` for datasets — the dataset's URN written whole, with its punctuation and
-     its version intact, rather than the dataset's display name
+   - `[dataset <urn>]` for datasets — the identifier the dataset tool reported. You cannot
+     see what the tool reported, but dataset URNs usually have a format
+     <agency>:<dataset_name>(version), like `IMF:WEO(1.0.0)`.
+     Example of incorrect citation: `[dataset World Economic Outlook]`.
    There must be no footnotes or numbered references (e.g. [1], [2])
 6. **No list of sources.** The draft enumerates its cited sources nowhere — no section, table or
    list carrying one entry per source, the bibliography an article ends with, whether under a

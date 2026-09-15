@@ -41,6 +41,7 @@
 - [x] 5.5 Word the writer's references rule from `references_section_name` rather than from a section entry, keeping it a prohibition on writing the section or enumerating sources anywhere else.
 - [x] 5.6 Add check 6 to `REPORT_REVIEW_SYSTEM_PROMPT` — the draft enumerates its cited sources nowhere, in any form — so that a list the writer wrote is reported. The app's structure check sees only `##` headings, so a sub-heading, a bold line or an unheaded list reaches the reader unreported. The reviewer's never demanding one follows from holding the check, so it needs no rule of its own, and `REPORT_REVIEW_REQUEST` carries no copy and no longer takes `references_name`.
 - [x] 5.6a Word both rules against an **enumeration** — one entry per source — rather than against mentioning sources, and say what is not one: the inline citations, and prose describing the evidence. The default Overview's description requires it to name the sources and topics the research covered, which a rule against mentioning them would contradict.
+- [x] 5.6b Word the review model's citation-format check against a citation's **shape**, with the same `IMF:WEO(1.0.0)` example the writer is given. The call sees no tool result, so "is this the identifier the tool reported?" is unanswerable and a readable name inside a URN is reported as a display name.
 - [x] 5.7 Delete `find_section_heading_line` and `normalize_heading` from `report_length.py`, nothing looking a section up by name any more.
 
 ## 6. Cleanups this change carries

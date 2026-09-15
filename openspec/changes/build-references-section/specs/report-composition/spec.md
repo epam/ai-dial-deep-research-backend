@@ -468,6 +468,17 @@ drew on, to name the kinds of source it covered, or to characterise their covera
 to do so. The Overview is exactly such a section in the default structure, so a rule worded against
 *mentioning* sources would contradict the structure it is enforcing.
 
+**Every check the review model is given SHALL be decidable from what that call receives.** It sees
+the draft, the configured structure, and the query and plan, and it deliberately sees neither the
+findings nor any tool result (**research-execution**). A check phrased against what a server
+reported is therefore unanswerable, and a model asked one resolves it by guessing. The
+citation-format check in particular SHALL be worded against the **shape** of a citation and SHALL
+carry an example of a well-formed dataset URN, rather than asking whether the identifier is the one
+the dataset tool returned — an identifier whose name reads like ordinary words is otherwise
+reported as a display name. Whether a cited URN matches a real record is not this model's to
+decide: the app compares it to the catalogue character for character (**source-attribution**) and
+simply draws no pill where nothing matches.
+
 The review model SHALL therefore be asked to report such an enumeration wherever it appears. Its
 never demanding one follows from the same check rather than from a second instruction: it is told
 its job is the checks alone, so a section it asked a revision to add would break one it holds.
@@ -519,6 +530,13 @@ called, so naming it there would add a per-instance input to a call that does no
   the draft carries one — under a heading, under a bold line standing in for one, or under none —
   and SHALL state that the inline citations and prose describing the evidence are not such an
   enumeration
+
+#### Scenario: A readable dataset identifier is not reported as a display name
+
+- **WHEN** a draft cites a dataset whose URN carries a legible name, such as
+  `[dataset IMF:WEO(1.0.0)]`, and the review model cannot see what the dataset tool reported
+- **THEN** the citation-format check SHALL NOT report it, the prompt having told the model to judge
+  the citation's shape and shown it a well-formed URN
 
 #### Scenario: A section naming its sources in prose is not a violation
 

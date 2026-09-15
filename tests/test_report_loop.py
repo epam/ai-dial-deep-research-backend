@@ -646,6 +646,36 @@ async def test_the_review_system_prompt_makes_a_written_references_section_a_vio
     assert _REFERENCES_NAME not in request.content
 
 
+async def test_the_review_system_prompt_can_decide_the_dataset_citation_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The citation check is worded against a citation's shape, which is all this call can see.
+
+    The review call receives neither the transcript nor any tool result, so "is this the
+    identifier the dataset tool reported?" is a question it cannot answer, and a model asked it
+    resolves it by guessing — a readable name inside a URN reads as a display name. It is given
+    an example and told to judge the shape instead.
+    """
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
+    node, _ = _review_node(llm, monkeypatch, sections=_CUSTOM_SECTIONS)
+
+    await node(_state(report="one two three"))
+
+    [system, request] = llm.calls[0]
+    assert isinstance(system.content, str)
+    # The shape a URN takes, so a readable name inside one is not read as a display name, and
+    # the same example the writer is given, so the two cannot drift on what a URN looks like.
+    assert "<agency>:<dataset_name>(version)" in system.content
+    assert "IMF:WEO(1.0.0)" in system.content
+    assert "You cannot" in system.content and "see what the tool reported" in system.content
+    # The failure the check does target, named as the counter-example.
+    assert "Example of incorrect citation: `[dataset World Economic Outlook]`." in system.content
+
+    # The findings stay out of the call, which is why the check has to be decidable without them.
+    assert isinstance(request.content, str)
+    assert "one two three" in request.content
+
+
 # --- prompt rendering ---------------------------------------------------------------------------
 
 
