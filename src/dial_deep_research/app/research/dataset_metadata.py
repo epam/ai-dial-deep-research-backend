@@ -157,7 +157,7 @@ async def read_dataset_sources(
             url=url,
             name=record.name,
             last_updated=record.last_updated,
-            fields=raw_by_id.get(record.id, {}),
+            raw_fields=raw_by_id.get(record.id, {}),
         )
     return sources
 

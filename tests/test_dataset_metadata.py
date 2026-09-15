@@ -123,8 +123,8 @@ async def test_extra_fields_in_a_record_are_ignored() -> None:
 
     assert sources[_URN].name == _NAME
     # Every reported field is carried whole, which is what a References column reads.
-    assert sources[_URN].fields["numberOfIndicators"] == 47
-    assert sources[_URN].fields["provider"] == "IMF"
+    assert sources[_URN].raw_fields["numberOfIndicators"] == 47
+    assert sources[_URN].raw_fields["provider"] == "IMF"
 
 
 @pytest.mark.parametrize(

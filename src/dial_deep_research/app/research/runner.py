@@ -185,7 +185,8 @@ def _with_references_section(
     rows_by_kind = {
         "document": document_rows(document_ids, metadata=document_metadata),
         "dataset": dataset_rows(
-            dataset_ids, records={urn: source.fields for urn, source in dataset_sources.items()}
+            dataset_ids,
+            records={urn: source.raw_fields for urn, source in dataset_sources.items()},
         ),
     }
     contents = [
