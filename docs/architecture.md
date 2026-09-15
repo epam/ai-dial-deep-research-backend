@@ -284,8 +284,12 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   are told which sections are protected as a rule of their own — the marker is never rendered next
   to a section name, which the report node is told to use as the heading. The References section is
   no section of this list: the app appends it, so the structure both prompts are given is the
-  configured structure entire, and both are told never to write or ask for such a section whatever
-  the question or the plan said.
+  configured structure entire. The writer is told not to write one, and report-review holds the
+  same prohibition as one of its checks — so it reports a list the draft wrote and has no ground to
+  demand one, whatever the question or the plan said. What both rules forbid is an **enumeration**,
+  a list carrying one entry per source; describing the evidence in prose is not that, and a section
+  whose description asks for it — the Overview names the kinds of source the research covered — is
+  correct to do so.
 - **Word ceiling**: `max_report_words` (default 2750). A report's length is the number of
   whitespace-separated tokens left after dropping the inline citations,
   so the ceiling bounds the report's prose rather than its sourcing — `count_report_words` in

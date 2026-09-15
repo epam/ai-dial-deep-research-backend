@@ -23,11 +23,12 @@ rather than a model's memory.
   sees and the text persisted for the next turn both carry it.
 
 - **Both the report writer and the report reviewer are told the section is not theirs.** The writer
-  is instructed not to write it and not to list its sources anywhere else. The reviewer is told the
-  same and is told never to ask a revision for one, whatever the research question or the approved
-  plan asked for; today nothing in the review request mentions the section at all. The reviewer is
-  not asked to *check* for it — the heading check is the app's, in Python, as this capability
-  already requires.
+  is instructed not to write it and not to enumerate its sources anywhere else. The reviewer holds
+  the same prohibition as one of its checks, so it reports one the draft wrote and has no ground to
+  demand one; today nothing in the review prompt mentions the section at all. The check is needed
+  because the app's heading check catches only a
+  references section written as a `##` heading: the same list under a `###` sub-heading, in bold,
+  or as a bare list of titles would otherwise be forbidden to the writer and detected by nobody.
 
 - **What a References table holds is configured per MCP server.** A new required `references_table`
   on each server entry carries the sub-heading the table is written under and its ordered columns,

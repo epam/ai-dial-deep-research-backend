@@ -86,8 +86,9 @@ section off, and no section of a configured structure SHALL be a references sect
 - **WHEN** the report writer's prompt and the review step's prompt are rendered from the configured
   structure
 - **THEN** the rendered structure SHALL be exactly that structure, with no section subtracted from
-  it, and both prompts SHALL state that the application appends the References section itself and
-  that neither the writer nor the reviewer may write or ask for one
+  it, and both prompts SHALL state that the application appends the References section itself — the
+  writer's forbidding it to write one, the review step's making one in the draft a violation, from
+  which its never asking for one follows
 
 #### Scenario: A report with nothing to cite still carries the section
 
@@ -129,10 +130,10 @@ protection then means the same thing for them.
 **The References section is beyond an instruction's reach without being a protected section.** It
 is no part of any configured structure: the application appends it to every report it delivers
 (**report-citations**), so an instruction to leave the sources out has nothing to act on. The writer
-SHALL be told not to write such a section and not to list its sources anywhere else, and the review
-step SHALL be told never to instruct a revision to write one, whatever the research question or the
-approved plan asked for. Neither is asked to *check* for one: the heading check is the app's, in
-Python, as this capability's own requirement states.
+SHALL be told not to write such a section and not to enumerate its sources anywhere else. The review
+step SHALL be given that same prohibition as one of its own checks, whatever the research question
+or the approved plan asked for; its never demanding one follows from holding the check rather than
+from a second instruction.
 
 The inline citation format is protected report-wide rather than per section, because it applies
 to every section's body: no user instruction SHALL change it, and it is not configurable at all.
@@ -449,8 +450,34 @@ References section is no part of it, so no derivation stands between the instruc
 **The review model SHALL NOT be asked to judge any of them.** It is told that the app checks the
 headings, the length and the hyperlinks, and its own checks are the ones that need a reader: a
 padded section, a section that should admit it has nothing to say, the protected-section rules, the
-prohibited annotations, valid Markdown, and the citation format. A model verdict SHALL NOT be able to pass a draft that breaks an app-checked
+prohibited annotations, valid Markdown, the citation format, and a list of sources the draft
+carries. A model verdict SHALL NOT be able to pass a draft that breaks an app-checked
 rule, and a review call that fails SHALL NOT suppress one.
+
+**A list of sources is the review model's to report, because the app cannot see every form of
+one.** The structure check reads `##` headings, so it catches a references section written as one
+and nothing else: the same list written under a `###` sub-heading, in bold standing in for a
+heading, under a bold line standing in for a heading, or under no heading at all breaks the
+writer's rule and reaches the reader unreported.
+
+**What is forbidden is an enumeration, not a mention.** The rule given to the writer and to the
+review model SHALL name a list carrying one entry per source — the bibliography an article ends
+with — in whatever form it takes, and SHALL exclude the two things it is not: the inline citations,
+and prose describing the evidence. A section whose description requires it to say what the research
+drew on, to name the kinds of source it covered, or to characterise their coverage SHALL be correct
+to do so. The Overview is exactly such a section in the default structure, so a rule worded against
+*mentioning* sources would contradict the structure it is enforcing.
+
+The review model SHALL therefore be asked to report such an enumeration wherever it appears. Its
+never demanding one follows from the same check rather than from a second instruction: it is told
+its job is the checks alone, so a section it asked a revision to add would break one it holds.
+Reporting a `##` references section the structure check also reports is accepted — a duplicated
+violation costs a revision nothing, while a missed one costs the reader.
+
+The check is the reviewer's standing behaviour rather than anything about the draft in hand, so it
+SHALL be stated in its **system prompt**. The per-turn request SHALL carry no copy of it, and SHALL
+NOT need the section's configured name to render: the check does not turn on what the heading is
+called, so naming it there would add a per-instance input to a call that does not use one.
 
 #### Scenario: An approving verdict cannot pass a mis-headed draft
 
@@ -477,9 +504,24 @@ rule, and a review call that fails SHALL NOT suppress one.
 - **THEN** the headings it expects SHALL be exactly that structure's sections, with nothing
   subtracted, and a draft carrying exactly those SHALL pass the check
 
-#### Scenario: The review model is told never to ask for a references section
+#### Scenario: The review model never asks for a references section
 
 - **WHEN** the report-review call is issued
-- **THEN** its prompt SHALL state that the application appends the References section itself after
-  the loop settles, and SHALL forbid it to instruct a revision to write one or to list the report's
-  sources anywhere, whatever the research question or the approved plan asked for
+- **THEN** its prompt SHALL state that the application appends the References section itself once
+  the draft is settled and that an enumeration of the report's sources in the draft is a violation,
+  whatever the research question or the approved plan asked for, so a revision it asks for SHALL
+  NOT demand one
+
+#### Scenario: The review model is told to report a references section the draft wrote
+
+- **WHEN** the report-review call is issued
+- **THEN** its prompt SHALL ask the model to report an enumeration of the report's sources wherever
+  the draft carries one — under a heading, under a bold line standing in for one, or under none —
+  and SHALL state that the inline citations and prose describing the evidence are not such an
+  enumeration
+
+#### Scenario: A section naming its sources in prose is not a violation
+
+- **WHEN** a draft's Overview names the kinds of source and the topics the research covered, as its
+  configured description requires, and the draft carries no list with one entry per source
+- **THEN** neither the app's own checks nor the review model's SHALL report it

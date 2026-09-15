@@ -38,8 +38,9 @@
 - [x] 5.2 Delete `_drop_references_section` from `report_length.py` and its use in `count_report_words`.
 - [x] 5.3 Render the report structure and the protected-section names from the configured structure itself, with no section subtracted at either layer.
 - [x] 5.4 Make `ReportStructureRule` expect the configured structure, so a `## References` heading in a draft is an extra heading the check reports.
-- [x] 5.5 Word the writer's references rule from `references_section_name` rather than from a section entry, keeping it a prohibition on writing the section or listing sources anywhere else.
-- [x] 5.6 Add the same prohibition to `REPORT_REVIEW_REQUEST`: the app appends the section itself, and the reviewer never asks a revision for one, whatever the question or the approved plan said. It is not asked to check for one.
+- [x] 5.5 Word the writer's references rule from `references_section_name` rather than from a section entry, keeping it a prohibition on writing the section or enumerating sources anywhere else.
+- [x] 5.6 Add check 6 to `REPORT_REVIEW_SYSTEM_PROMPT` — the draft enumerates its cited sources nowhere, in any form — so that a list the writer wrote is reported. The app's structure check sees only `##` headings, so a sub-heading, a bold line or an unheaded list reaches the reader unreported. The reviewer's never demanding one follows from holding the check, so it needs no rule of its own, and `REPORT_REVIEW_REQUEST` carries no copy and no longer takes `references_name`.
+- [x] 5.6a Word both rules against an **enumeration** — one entry per source — rather than against mentioning sources, and say what is not one: the inline citations, and prose describing the evidence. The default Overview's description requires it to name the sources and topics the research covered, which a rule against mentioning them would contradict.
 - [x] 5.7 Delete `find_section_heading_line` and `normalize_heading` from `report_length.py`, nothing looking a section up by name any more.
 
 ## 6. Cleanups this change carries
@@ -54,7 +55,7 @@
 - [x] 7.3 Test the delivery: the built section appended after the conversion, every cited source listed without a pill, and a build failure delivering the pills without the section.
 - [x] 7.4 Test the two new properties: their defaults resolving without configuration, an instance setting both, and a section entry carrying `references_section` rejected.
 - [x] 7.5 Replace the `strip_references_section` tests with one asserting that a draft's own references section and every section after it survive delivery, followed by the built section.
-- [x] 7.6 Test that the review request carries the prohibition, and that the rendered structure for both prompts is the configured structure entire.
+- [x] 7.6 Test that the review system prompt carries check 6 and that the request carries no copy of it, and that the rendered structure for both prompts is the configured structure entire.
 - [x] 7.7 Update the tests that assume a references section in the report structure, a `references_section` flag, or a structure that declares none.
 - [x] 7.8 Test the heading collision: a section named exactly the configured heading and one differing only in case are both rejected and the error names the section and the property, while a section named anything else still validates.
 

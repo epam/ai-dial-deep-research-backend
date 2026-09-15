@@ -539,7 +539,6 @@ def make_report_review_node(
                 content=REPORT_REVIEW_REQUEST.format(
                     report_structure=render_report_structure(sections),
                     protected_sections=render_protected_section_names(sections),
-                    references_name=references_name,
                     query=state["original_query"],
                     plan=render_plan(state["plans"][0]) if state["plans"] else "(none)",
                     draft=draft,

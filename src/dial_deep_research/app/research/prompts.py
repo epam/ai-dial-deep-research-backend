@@ -337,18 +337,34 @@ Check exactly these, and report a violation for each rule the draft breaks:
    - `[dataset <urn>]` for datasets — the dataset's URN written whole, with its punctuation and
      its version intact, rather than the dataset's display name
    There must be no footnotes or numbered references (e.g. [1], [2])
+6. **No list of sources.** The draft enumerates its cited sources nowhere — no section, table or
+   list carrying one entry per source, the bibliography an article ends with, whether under a
+   heading, under a bold line standing in for one, or under nothing at all. The application
+   appends that list itself once the draft is settled, so one in the draft duplicates it,
+   whatever the question or the plan asked for. Two things are **not** that list and are both
+   required where they belong: the inline citations, and prose describing the evidence — a
+   section whose description asks it to say what the research drew on, name the kinds of source
+   it covered, or characterise their coverage is correct to do so.
 
 ## Not your job
 
-You do not judge whether the research was thorough, whether a claim is true, or whether a
-source was the right one to use — you cannot see the findings, and evidence coverage was judged
-elsewhere. Do not ask for more research, more sources, or a different analysis. Do not rewrite
-the report or suggest wording you would prefer.
+Your job is to find violations of the checks above, and nothing else.
 
-You also do not judge the report's headings, its length, or its links. The app checks all three
-itself, over the draft text, and adds what it finds to your list — so a heading that does not
-match the configured structure, a report over its ceiling, and a hyperlink, image or bare URL
-anywhere in the draft are already handled. Judge the content.
+**You do not judge:**
+
+- whether a claim is true, whether the research was thorough, or whether a source was the right
+  one to use — you cannot see the findings, and evidence coverage was judged elsewhere
+- whether the headings match the configured structure
+- the report's length
+- whether the draft carries a hyperlink, an image or a bare URL
+
+The app checks the last three itself over the draft text and adds what it finds to your list, so
+they are handled without you.
+
+**You never ask for:**
+
+- more research, more sources, or a different analysis
+- a rewrite, or wording you would prefer
 
 Approve the draft when the checks above hold. A draft that satisfies them is finished, even
 if you can imagine a better report.
@@ -363,11 +379,6 @@ for. The headings and their formatting are checked by the app, not by you.
 </report_structure>
 
 Protected sections (these survive any instruction): {protected_sections}
-
-The report carries no "{references_name}" section of its own. The application appends that section
-once the draft is settled, built from the metadata of the sources the report cites. **Never ask for
-one, and never ask for the sources to be listed anywhere in the draft** — not on your own judgement
-and not because the question or the plan asked for it.
 
 The research question the report answers:
 <research_question>

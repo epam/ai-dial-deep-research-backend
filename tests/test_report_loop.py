@@ -612,24 +612,38 @@ async def test_the_review_request_carries_neither_findings_nor_a_research_review
     assert "2750" not in request
 
 
-async def test_the_review_request_forbids_asking_for_a_references_section(
+async def test_the_review_system_prompt_makes_a_written_references_section_a_violation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The app appends that section, so the reviewer must not send the writer back for one."""
+    """One check carries both halves: report a list of sources, and never demand one.
+
+    The app's structure check sees only `##` headings, so a list written under a sub-heading, in
+    bold, or with no heading at all reaches the reader unless the review reports it. Demanding one
+    needs no rule of its own — the reviewer's job is the checks alone, and this check makes such a
+    section a violation, so asking for one would be asking for a violation.
+    """
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, _ = _review_node(llm, monkeypatch, sections=_CUSTOM_SECTIONS)
 
     await node(_state(report="one two three"))
 
-    [messages] = llm.calls
-    request = messages[1].content
-    assert isinstance(request, str)
-    assert f'The report carries no "{_REFERENCES_NAME}" section of its own.' in request
-    assert "never ask for the sources to be listed anywhere in the draft" in request
-    # The structure it is shown names no such section, so it has none to expect either.
-    assert f"## {_REFERENCES_NAME}" not in request
-    # The prohibition holds against the question and the plan, which the request also carries.
-    assert "not because the question or the plan asked for it" in request
+    [system, request] = llm.calls[0]
+    assert isinstance(system.content, str)
+    assert "6. **No list of sources.**" in system.content
+    # What is forbidden is an enumeration, in any of the forms one can take. Naming the heading
+    # cases here is what keeps the check from being read as the app's heading check.
+    assert "no section, table or" in system.content
+    assert "under a bold line standing in for one, or under nothing at all" in system.content
+    # Why the rule holds, and that an instruction in the question or the plan does not lift it.
+    assert "The application" in system.content
+    assert "whatever the question or the plan asked for" in system.content
+    # The two things that are not that list, and that a section may be required to carry.
+    assert "the inline citations, and prose describing the evidence" in system.content
+
+    # Stated once: the per-turn request carries no copy and needs no section name to render.
+    assert isinstance(request.content, str)
+    assert "check 6" not in request.content
+    assert _REFERENCES_NAME not in request.content
 
 
 # --- prompt rendering ---------------------------------------------------------------------------

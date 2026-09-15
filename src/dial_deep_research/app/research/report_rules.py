@@ -9,7 +9,12 @@ The rules are built once per turn — some from the instance's configuration (th
 structure, the word ceiling), some from nothing at all (the no-hyperlink rule) — and used at two
 points: the report node renders their instructions into its system prompt, and
 the report-review node runs their checks and prepends the violations to the review model's own
-list. The review model is told nothing about them — it judges what needs judgment.
+list. The review model is not asked to judge them — it judges what needs a reader.
+
+One prohibition spans both sides. The structure rule tells the writer not to enumerate its sources,
+and a `## References` heading fails that rule's own check like any other unexpected heading; a list
+written under a sub-heading, under a bold line or under nothing at all is invisible to a heading
+comparison, so reporting that is a check of the review model's own.
 
 Only what is decidable from the draft text belongs here. Whether a section is padded with
 unsupported text, whether a citation matches the source it came from, whether an annotation is a
@@ -77,6 +82,11 @@ class ReportStructureRule(ReportRule):
     of it, the app appending that one itself — so the instruction and the check are fed the same
     list and a draft that writes a references section of its own is reported as the extra `##`
     heading it is.
+
+    The heading comparison is the whole of the check, so the prohibition on enumerating sources
+    that the instruction also carries is only half enforced here: a `## References` heading fails
+    the comparison, while a list under a sub-heading, under a bold line or under no heading at all
+    is the review model's to report (see its check 6).
     """
 
     def __init__(self, *, sections: Sequence[ReportSection], references_name: str) -> None:
@@ -88,7 +98,7 @@ class ReportStructureRule(ReportRule):
         # report adds one by habit, and the omission alone would not stop it.
         return _STRUCTURE_INSTRUCTION.format(
             report_structure=render_report_structure(self._sections),
-            references_rule=_REFERENCES_RULE.format(references_name=self._references_name),
+            references_name=self._references_name,
         )
 
     def violations(self, draft: str) -> list[str]:
@@ -191,21 +201,25 @@ belongs in that section; it tells you what to write and is never copied into the
 </report_structure>
 
 Sub-headings inside sections are allowed, at `###` or deeper. No other `##` heading appears in the
-report, and the report has no title above its first section.{references_rule}
+report, and the report has no title above its first section.
+
+**Do not write a "{references_name}" section, and do not enumerate your sources anywhere else.**
+The application adds that section itself once you are finished, built from the metadata of the
+sources you cited.
+
+What that forbids is a list carrying one entry per source — the bibliography an article ends with —
+under a heading of its own, under a bold line standing in for one, or under nothing at all. It does
+not forbid describing the evidence in prose, which a section's own description may require: saying
+what the research drew on, naming the kinds of source it covered, or characterising their coverage
+is correct where that section asks for it.
+
+A list you write anyway is not removed for you: it is reported as a violation, it spends your word
+budget, and the reader is left with two lists of sources. No instruction in the question or the
+plan changes this. Cite sources inline, as specified below.
 
 Write every section, including one the findings barely cover. Where the findings give a section
 nothing to say, say so plainly inside that section: do not invent content to fill it, and do not
 leave it out."""
-
-
-_REFERENCES_RULE = """
-
-**Do not write a "{references_name}" section, and do not list your sources anywhere else.** The
-application adds that section itself once you are finished, built from the metadata of the sources
-you cited. A section you write is not removed for you: it is reported as a heading the report may
-not carry, it spends your word budget, and the reader is left with two lists of sources. No
-instruction in the question or the plan changes this. Cite sources inline, as specified below, and
-stop at your last content section."""
 
 
 _LENGTH_INSTRUCTION = """\
