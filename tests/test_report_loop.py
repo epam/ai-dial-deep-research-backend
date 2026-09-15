@@ -37,10 +37,10 @@ from dial_deep_research.app.research.nodes import ReportReviewOutcome
 from dial_deep_research.app.research.prompts import (
     REPORT_SYSTEM_PROMPT,
     ReportReview,
-    render_length_exemptions,
     render_protected_section_names,
     render_report_structure,
 )
+from dial_deep_research.app.research.report_length import LENGTH_EXEMPTIONS
 from dial_deep_research.app.research.report_rules import (
     build_report_rules,
     render_writer_instructions,
@@ -49,6 +49,9 @@ from dial_deep_research.app_properties import DEFAULT_REPORT_STRUCTURE, ReportSe
 from dial_deep_research.utils.content import count_image_blocks, count_words
 
 _TODAY = "2026-07-16"
+
+# The section the app appends, named in the configuration rather than in the structure.
+_REFERENCES_NAME = "References"
 
 _CUSTOM_SECTIONS = [
     ReportSection(name="Summary", description="Two paragraphs answering the question."),
@@ -123,6 +126,7 @@ def _report_node(
         today_date=_TODAY,
         sections=sections if sections is not None else DEFAULT_REPORT_STRUCTURE,
         max_words=max_words,
+        references_name=_REFERENCES_NAME,
         emit_revision_failed_stage=(failures.append if failures is not None else lambda _o: None),
         emit_activity=lambda _title: None,
     )
@@ -336,6 +340,7 @@ def _review_node(
         today_date=_TODAY,
         sections=sections if sections is not None else DEFAULT_REPORT_STRUCTURE,
         max_words=max_words,
+        references_name=_REFERENCES_NAME,
         emit_result_stage=stages.append,
         emit_activity=lambda _title: None,
     )
@@ -393,24 +398,13 @@ async def test_an_approving_review_cannot_pass_an_over_ceiling_draft(
     assert outcome.error is None
 
 
-async def test_citations_and_the_sources_section_do_not_push_a_draft_over_the_ceiling(
+async def test_citations_do_not_push_a_draft_over_the_ceiling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Six counted words (the heading's two included) against a ceiling of six; the citation and
-    # the closing sources section are outside the measure, so this draft is delivered as it stands.
-    draft = (
-        "## Summary\n\nThe rate rose sharply [doc 150, page 3].\n\n"
-        "## Sources\n\n| doc id | title |\n| 150 | The annual report on rates |\n"
-    )
-    sections = [
-        ReportSection(name="Summary", description="The answer.", protected=True),
-        ReportSection(
-            name="Sources",
-            description="The cited sources.",
-            protected=True,
-            references_section=True,
-        ),
-    ]
+    # Six counted words, the heading's two included, against a ceiling of six: the citation is
+    # outside the measure, so this draft is delivered as it stands.
+    draft = "## Summary\n\nThe rate rose sharply [doc 150, page 3]."
+    sections = [ReportSection(name="Summary", description="The answer.", protected=True)]
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, stages = _review_node(llm, monkeypatch, sections=sections, max_words=6)
 
@@ -420,6 +414,28 @@ async def test_citations_and_the_sources_section_do_not_push_a_draft_over_the_ce
     [outcome] = stages
     assert outcome.word_count == 6
     assert outcome.violations == []
+
+
+async def test_a_references_section_the_writer_wrote_is_a_violation_and_is_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The app appends that section, so a draft carrying one earns a violation, not free words."""
+    draft = (
+        "## Summary\n\nThe rate rose sharply [doc 150, page 3].\n\n"
+        "## References\n\n| doc id | title |\n| 150 | The annual report on rates |\n"
+    )
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION, max_words=6)
+
+    result = await node(_state(report=draft))
+
+    [outcome] = stages
+    # The section's own words are counted, so the draft is over a ceiling it would otherwise meet.
+    assert outcome.word_count > 6
+    assert result["report_revision_instruction"] is not None
+    # It is reported as the extra `##` heading it is, the configured structure naming no such
+    # section.
+    assert any("References" in violation for violation in outcome.violations)
 
 
 async def test_a_rule_violation_survives_an_approving_review(
@@ -596,6 +612,70 @@ async def test_the_review_request_carries_neither_findings_nor_a_research_review
     assert "2750" not in request
 
 
+async def test_the_review_system_prompt_makes_a_written_references_section_a_violation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One check carries both halves: report a list of sources, and never demand one.
+
+    The app's structure check sees only `##` headings, so a list written under a sub-heading, in
+    bold, or with no heading at all reaches the reader unless the review reports it. Demanding one
+    needs no rule of its own — the reviewer's job is the checks alone, and this check makes such a
+    section a violation, so asking for one would be asking for a violation.
+    """
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
+    node, _ = _review_node(llm, monkeypatch, sections=_CUSTOM_SECTIONS)
+
+    await node(_state(report="one two three"))
+
+    [system, request] = llm.calls[0]
+    assert isinstance(system.content, str)
+    assert "6. **No list of sources.**" in system.content
+    # What is forbidden is an enumeration, in any of the forms one can take. Naming the heading
+    # cases here is what keeps the check from being read as the app's heading check.
+    assert "no section, table or" in system.content
+    assert "under a bold line standing in for one, or under nothing at all" in system.content
+    # Why the rule holds, and that an instruction in the question or the plan does not lift it.
+    assert "The application" in system.content
+    assert "whatever the question or the plan asked for" in system.content
+    # The two things that are not that list, and that a section may be required to carry.
+    assert "the inline citations, and prose describing the evidence" in system.content
+
+    # Stated once: the per-turn request carries no copy and needs no section name to render.
+    assert isinstance(request.content, str)
+    assert "check 6" not in request.content
+    assert _REFERENCES_NAME not in request.content
+
+
+async def test_the_review_system_prompt_can_decide_the_dataset_citation_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The citation check is worded against a citation's shape, which is all this call can see.
+
+    The review call receives neither the transcript nor any tool result, so "is this the
+    identifier the dataset tool reported?" is a question it cannot answer, and a model asked it
+    resolves it by guessing — a readable name inside a URN reads as a display name. It is given
+    an example and told to judge the shape instead.
+    """
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
+    node, _ = _review_node(llm, monkeypatch, sections=_CUSTOM_SECTIONS)
+
+    await node(_state(report="one two three"))
+
+    [system, request] = llm.calls[0]
+    assert isinstance(system.content, str)
+    # The shape a URN takes, so a readable name inside one is not read as a display name, and
+    # the same example the writer is given, so the two cannot drift on what a URN looks like.
+    assert "<agency>:<dataset_name>(version)" in system.content
+    assert "IMF:WEO(1.0.0)" in system.content
+    assert "You cannot" in system.content and "see what the tool reported" in system.content
+    # The failure the check does target, named as the counter-example.
+    assert "Example of incorrect citation: `[dataset World Economic Outlook]`." in system.content
+
+    # The findings stay out of the call, which is why the check has to be decidable without them.
+    assert isinstance(request.content, str)
+    assert "one two three" in request.content
+
+
 # --- prompt rendering ---------------------------------------------------------------------------
 
 
@@ -619,9 +699,22 @@ def test_render_report_structure_carries_no_marker_on_a_section_name() -> None:
     assert "## Evidence\n" in rendered
 
 
+def test_render_report_structure_renders_every_configured_section() -> None:
+    """Nothing is subtracted: the References section is no part of a configured structure."""
+    sections = [*_CUSTOM_SECTIONS, ReportSection(name="Annex", description="The tables.")]
+
+    rendered = render_report_structure(sections)
+
+    for section in sections:
+        assert f"## {section.name}" in rendered
+        assert section.description in rendered
+
+
 def test_render_protected_section_names_lists_only_the_protected_ones() -> None:
     assert render_protected_section_names(_CUSTOM_SECTIONS) == "Evidence"
-    assert render_protected_section_names(DEFAULT_REPORT_STRUCTURE) == "Overview, References"
+    # References is protected and still left out: the app writes it, so no user instruction the
+    # precedence rule governs could drop it in the first place.
+    assert render_protected_section_names(DEFAULT_REPORT_STRUCTURE) == "Overview"
     two_protected = [
         _CUSTOM_SECTIONS[0],
         _CUSTOM_SECTIONS[1],
@@ -630,28 +723,28 @@ def test_render_protected_section_names_lists_only_the_protected_ones() -> None:
     assert render_protected_section_names(two_protected) == "Evidence, Outlook"
 
 
-def test_render_length_exemptions_follows_the_configured_structure() -> None:
-    assert (
-        render_length_exemptions(DEFAULT_REPORT_STRUCTURE)
-        == "the inline citations and the References section"
-    )
-    # A structure that declares no references section has nothing exempt but the citations —
-    # promising its writer more would promise room the count does not give.
-    assert render_length_exemptions(_CUSTOM_SECTIONS) == "the inline citations"
+def test_the_length_exemption_is_the_citations_whatever_the_structure() -> None:
+    """The app writes the references section after the loop, so no draft carries one to exempt."""
+    assert LENGTH_EXEMPTIONS == "the inline citations"
 
 
 def test_report_system_prompt_states_the_ceiling_and_the_protected_names() -> None:
     prompt = REPORT_SYSTEM_PROMPT.format(
         today_date=_TODAY,
         rules=render_writer_instructions(
-            build_report_rules(sections=DEFAULT_REPORT_STRUCTURE, max_words=2750)
+            build_report_rules(
+                sections=DEFAULT_REPORT_STRUCTURE,
+                max_words=2750,
+                references_name=_REFERENCES_NAME,
+            )
         ),
         protected_sections=render_protected_section_names(DEFAULT_REPORT_STRUCTURE),
     )
 
     assert "2750 words" in prompt
-    # Once as the section heading, once in the precedence rule that names what a user
-    # instruction may not drop.
-    assert prompt.count("References") >= 2
+    # Named once, in the rule telling the writer not to write it: the app builds that section,
+    # so it is neither a heading to copy nor a name in the precedence rule.
+    assert "## References" not in prompt
+    assert 'Do not write a "References" section' in prompt
     # Report-wide rules are the prompt's own, not a section's.
     assert "[doc <id>, page <ix>]" in prompt

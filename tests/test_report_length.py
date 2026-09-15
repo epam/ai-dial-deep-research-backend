@@ -1,10 +1,9 @@
 """The report length the word ceiling bounds.
 
-What is protected here: the count measures the report's prose. Inline citations are left out
-whichever form they take. The references section is left out only when the configuration declares
-one and the draft wrote it as configured — a structure with no references section, a renamed
-heading, or a heading at the wrong level all keep every word, so a structure violation never earns
-length budget.
+What is protected here: the count measures the report's prose, leaving out the inline citations
+whichever form they take and nothing else. A references section is no part of a draft — the app
+writes it after the loop settles — so a draft that wrote one keeps every one of its words, a
+structure violation never earning length budget.
 """
 
 from __future__ import annotations
@@ -15,26 +14,7 @@ from dial_deep_research.app.research.report_length import (
     count_report_words,
     strip_inline_citations,
 )
-from dial_deep_research.app_properties import ReportSection
 from dial_deep_research.utils.content import count_words
-
-_WITH_REFERENCES = [
-    ReportSection(name="Overview", description="The short answer.", protected=True),
-    ReportSection(name="Detailed Analysis", description="The substance."),
-    ReportSection(
-        name="References",
-        description="The sources.",
-        protected=True,
-        references_section=True,
-    ),
-]
-
-_NO_REFERENCES = [
-    ReportSection(name="Summary", description="The answer.", protected=True),
-    ReportSection(name="Evidence", description="What the sources say."),
-    ReportSection(name="Outlook", description="What follows from the findings."),
-]
-
 
 # --- citations ----------------------------------------------------------------------------------
 
@@ -66,63 +46,16 @@ def test_a_citation_costs_nothing_in_the_count() -> None:
     plain = "## Overview\n\nGDP rose 2.1%.\n"
 
     assert count_words(cited) > count_words(plain)
-    assert count_report_words(cited, sections=_WITH_REFERENCES) == count_words(plain)
+    assert count_report_words(cited) == count_words(plain)
 
 
-# --- the references section -----------------------------------------------------------------
+# --- a references section the writer wrote ----------------------------------------------------
 
 
-def test_the_references_section_and_everything_under_it_is_left_out() -> None:
+def test_a_references_section_the_writer_wrote_is_counted_whole() -> None:
+    """The app writes that section, so a draft carrying one is in violation, not under budget."""
     draft = (
-        "## Overview\n\nThe answer.\n\n"
-        "## References\n\n### Documents\n\n| doc id | title |\n\n### Datasets\n\n| dataset id |\n"
+        "## Overview\n\nThe answer.\n\n" "## References\n\n### Documents\n\n| doc id | title |\n"
     )
 
-    assert count_report_words(draft, sections=_WITH_REFERENCES) == count_words(
-        "## Overview\n\nThe answer."
-    )
-
-
-@pytest.mark.parametrize(
-    "heading",
-    ["## References", "## 3. References", "## **References**", "## References:"],
-)
-def test_the_heading_is_matched_through_its_decoration(heading: str) -> None:
-    draft = f"## Overview\n\nThe answer.\n\n{heading}\n\nSources listed here.\n"
-
-    assert count_report_words(draft, sections=_WITH_REFERENCES) == count_words(
-        "## Overview\n\nThe answer."
-    )
-
-
-@pytest.mark.parametrize("heading", ["# References", "### References", "**References**"])
-def test_a_references_heading_at_the_wrong_level_is_counted(heading: str) -> None:
-    # Sections are `##` headings; anything else is a violation report-review reports, and a
-    # violation must not also buy length budget.
-    draft = f"## Overview\n\nThe answer.\n\n{heading}\n\nSources listed here.\n"
-
-    assert count_report_words(draft, sections=_WITH_REFERENCES) == count_words(draft)
-
-
-def test_a_draft_that_renamed_the_references_section_is_counted_whole() -> None:
-    draft = "## Overview\n\nThe answer.\n\n## Bibliography\n\nSources listed here.\n"
-
-    assert count_report_words(draft, sections=_WITH_REFERENCES) == count_words(draft)
-
-
-def test_a_draft_without_a_references_section_is_counted_whole() -> None:
-    draft = "## Overview\n\nThe answer.\n\n## Detailed Analysis\n\nThe substance.\n"
-
-    assert count_report_words(draft, sections=_WITH_REFERENCES) == count_words(draft)
-
-
-def test_a_structure_declaring_no_references_section_exempts_nothing() -> None:
-    # The closing section is prose here, so it counts like any other — the exemption follows the
-    # configured flag, never the position alone.
-    draft = (
-        "## Summary\n\nThe answer.\n\n"
-        "## Evidence\n\nWhat the sources say.\n\n"
-        "## Outlook\n\nGrowth is expected to continue through the next two quarters.\n"
-    )
-
-    assert count_report_words(draft, sections=_NO_REFERENCES) == count_words(draft)
+    assert count_report_words(draft) == count_words(draft)

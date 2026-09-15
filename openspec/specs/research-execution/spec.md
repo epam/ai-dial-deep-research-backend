@@ -331,9 +331,11 @@ merely look different. Every report from every instance therefore carries the sa
 and only a change to this requirement may change it.
 
 Every cited source SHALL be decoded in the report's references section, whenever the configured
-structure includes one (the default does). How that decoding is rendered is carried by that
-section's configured description, not by this requirement (see **report-composition**, which also
-states what a structure configured without such a section means).
+structure includes one (the default does). **The report node SHALL NOT write that section**: the
+app builds it after the loop settles, from the metadata the servers reported about the sources the
+delivered report actually cites (see **report-citations**). The writer is given the other sections
+only, and what a row holds comes from configuration rather than from this requirement (see
+**application-config-schema**).
 
 The delivered report SHALL be the **only** node output that becomes the user-visible assistant
 message content. A draft SHALL NOT reach the assistant content while the report review loop is
@@ -346,8 +348,9 @@ carries what the user needs to see about how the answer was produced. A blank-li
 into the assistant content earlier in the same turn.
 
 What is appended is the settled draft **after the citation step**, which removes the hyperlinks the
-report may not carry, replaces each convertible citation marker with that citation's marker tag, and
-leaves every other character alone (see the **report-citations** capability). That step is the single permitted transformation between the draft
+report may not carry, replaces each convertible citation marker with that citation's marker tag,
+appends the References section, and leaves every other character alone (see the **report-citations**
+capability). That step is the single permitted transformation between the draft
 the review settled on and the text the user reads; nothing else may alter a settled draft, and the
 annotations it emits SHALL be the only other thing the app adds to the message alongside that text.
 
@@ -364,12 +367,20 @@ or shows it. A converted citation's readable text lives in its annotation rather
 text, so a client that discards the annotations loses that citation rather than degrading to a
 visible marker. Which citations are converted at all is decided by the **report-citations**
 capability's two conditions, whose deliberate consequence is that every citation left unconverted
-stays fully readable in the text.
+stays fully readable in the text — and the References section names every cited source whether or
+not its citations converted, so an unconverted marker still resolves to a named source.
 
 #### Scenario: Report is the assistant answer
 
 - **WHEN** the report review loop settles on a draft
-- **THEN** exactly that draft's text SHALL be appended to the assistant message content as the answer — with each converted citation's marker replaced by its marker tag, every unconverted citation marker in place as written, and a references section decoding them
+- **THEN** exactly that draft's text SHALL be appended to the assistant message content as the answer — with each converted citation's marker replaced by its marker tag, every unconverted citation marker in place as written, and the app-built references section decoding them
+
+#### Scenario: The writer is not asked to write the references section
+
+- **WHEN** the report writer's prompt is rendered from the configured structure
+- **THEN** no references section SHALL appear among the sections the writer is told to write, the
+  prompt SHALL state that the application appends that section itself, and a draft that writes one
+  anyway SHALL be reported as a structure violation (see **report-composition**)
 
 #### Scenario: An unfamiliar attribution spelling still yields correct markers
 

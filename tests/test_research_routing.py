@@ -33,7 +33,6 @@ from dial_deep_research.app.research.nodes import (
     route_after_research_review,
 )
 from dial_deep_research.app.research.state import ResearchState
-from dial_deep_research.app_properties import DEFAULT_REPORT_STRUCTURE
 
 
 def _state(plans: list[list[str]], research_iteration: int) -> ResearchState:
@@ -195,7 +194,6 @@ def _report_router(
     return route_after_report(
         max_versions=max_versions,
         max_words=2750,
-        sections=DEFAULT_REPORT_STRUCTURE,
         emit_budget_exhausted=(reported.append if reported is not None else lambda _outcome: None),
     )
 

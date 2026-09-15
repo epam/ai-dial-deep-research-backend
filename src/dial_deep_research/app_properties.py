@@ -11,7 +11,7 @@ artifact of the same schema, kept in sync by `scripts/dump_app_schema.py`.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from copy import deepcopy
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -85,6 +85,20 @@ class _ConnectionBundle(BaseModel):
 # is a change to the citation format and its parser, not a configuration entry.
 MCPServerType = Literal["generic_rag", "statgpt"]
 
+# What a report cites a server's sources as: a document by its id and cited page, a dataset by its
+# URN. The distinction is the citation form rather than the server, which is why it is named here
+# once rather than re-derived wherever a cited id has to be routed back to the server that issued
+# it.
+SourceKind = Literal["document", "dataset"]
+
+# Which kind of source each supported server type serves. Written out per type rather than as a
+# default plus one exception, so adding a server type raises here instead of quietly filing its
+# sources under the other kind.
+SOURCE_KIND_BY_SERVER_TYPE: dict[MCPServerType, SourceKind] = {
+    "generic_rag": "document",
+    "statgpt": "dataset",
+}
+
 # The one placeholder a document-metadata resource template carries. The app substitutes the cited
 # ids for it literally rather than through `str.format`, which would choke on any other brace a URI
 # may hold and would accept a template carrying placeholders the app does not fill.
@@ -103,6 +117,62 @@ class DocumentMetadataSource(BaseModel):
     server_name: str
     resource_template: str
     title_key: str
+
+
+class ReferenceColumn(BaseModel):
+    """One column of a References table: the heading a reader sees, and the key it reads."""
+
+    model_config = ConfigDict(frozen=True)
+
+    heading: str = Field(
+        min_length=1,
+        description="The column's header text in the report's References table. A reader sees it,"
+        " so write it in the language this channel's readers read.",
+    )
+    key: str = Field(
+        min_length=1,
+        description="The name this server reports the value under — a key of a document's metadata"
+        " object, or a field of a dataset's catalogue record. A source that reports nothing usable"
+        " under it leaves the cell empty, except in the first column, which falls back to the"
+        " source's own identifier.",
+    )
+
+
+class ReferencesTable(BaseModel):
+    """How one server's cited sources are listed in the report's References section."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str = Field(
+        min_length=1,
+        description="The sub-heading this table is written under, for example Documents or"
+        " Datasets. A reader sees it, so write it in the language this channel's readers read.",
+    )
+    columns: tuple[ReferenceColumn, ...] = Field(
+        min_length=1,
+        description="The table's columns, in the order they are rendered. The order matters beyond"
+        " layout: the first column is the one a reader identifies a row by, so it is the one that"
+        " falls back to the source's identifier — a document id, or a dataset's URN — when its key"
+        " resolves nothing. Put the column naming the source first.",
+    )
+
+
+class ServerReferencesTable(BaseModel):
+    """One server's References table, with the kind of source that fills it.
+
+    The two travel together because the citation step needs both to build a table: the table says
+    how the rows are rendered, and the server type says which cited sources are its rows.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    server_type: MCPServerType
+    table: ReferencesTable
+
+    @property
+    def source_kind(self) -> SourceKind:
+        """Which cited sources fill this table: the ones this server's type serves."""
+        return SOURCE_KIND_BY_SERVER_TYPE[self.server_type]
 
 
 class MCPClientSettings(BaseModel):
@@ -198,6 +268,16 @@ class MCPClientSettings(BaseModel):
         " Required on a statgpt server, and only a statgpt server may set it: without it every"
         " dataset citation is delivered as a bare URN in square brackets, which names nothing the"
         " reader can open.",
+    )
+
+    references_table: ReferencesTable = Field(
+        description="How this server's cited sources are listed in the report's References section:"
+        " the sub-heading the table is written under, and its columns. The application builds that"
+        " section itself from what the servers reported about the sources the report cites, so this"
+        " is where a channel says what a row holds. Required on every server, whatever it serves:"
+        " a server without a table is a server whose cited sources cannot be listed. The section is"
+        " built for every report, and the report structure has no say in whether it is — it names"
+        " only the sections the report writer writes.",
     )
 
     @property
@@ -356,12 +436,20 @@ class MCPClientSettings(BaseModel):
 
 
 class ReportSection(BaseModel):
-    """One section of the report structure.
+    """One section of the report structure, which is one section the report writer writes.
 
-    `description` is the single home for that section's rules — what belongs in it, how to
-    render it, any table columns it carries. It is passed verbatim to the report writer and
-    to report-review, so changing a section's behavior means editing this one string.
+    `description` is the single home for that section's rules — what belongs in it, how to render
+    it, any table columns it carries. It is passed verbatim to the report writer and to
+    report-review, so changing a section's behavior means editing this one string.
+
+    The References section is no section of this list: the application builds and appends it
+    (`references_section_name` and `references_section_empty_text` are its whole configuration),
+    which is why an unknown field is refused here rather than ignored. A stored structure still
+    carrying the withdrawn `references_section` flag would otherwise keep a References entry the
+    writer is then asked to write beside the one the app appends.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str = Field(
         min_length=1,
@@ -379,27 +467,11 @@ class ReportSection(BaseModel):
         " neither dropped nor restyled by anything the user asked for, and neither can the rules in"
         " its description. At least one section must be protected.",
     )
-    references_section: bool = Field(
-        default=False,
-        description="Whether this section is the report's list of sources. Only the last section"
-        " may be one, and a structure need not have one at all. Its length follows from how much"
-        " the research cited rather than from what the report chose to say, so its words do not"
-        " count toward max_report_words; in every other way it is a section like any other.",
-    )
 
 
-# The references section's description owns the source-entry rules for every type a report may
-# cite. It lives here rather than in the report prompt because a section's rules have one home
-# (see `ReportSection.description`). The inline citation format is deliberately NOT here: it
-# applies to every section's body, so it stays a report-wide rule in the report prompt.
-_REFERENCES_DESCRIPTION = """\
-Decode every source cited in the report.
-If any document was cited, add a "Documents" table, with columns: `id`, `title`, `publication date`.
-If any dataset was cited, add a "Datasets" table, with columns: `title`.
-Each table lists only the sources of its type actually cited in the report,
-so a type with nothing cited drops its own table.
-The section itself is always written: if the research cited no source at all,
-say so plainly here rather than leaving the section out or inventing entries."""
+# What the References section shows when the report cited nothing. It is the section's whole
+# content in that case, so it is written as prose a reader reads rather than as instructions.
+_REFERENCES_EMPTY_TEXT = "This report cites no source: the research found no citable evidence."
 
 DEFAULT_REPORT_STRUCTURE: list[ReportSection] = [
     ReportSection(
@@ -427,23 +499,7 @@ DEFAULT_REPORT_STRUCTURE: list[ReportSection] = [
         description="The bottom line the analysis supports, and the limits of what the findings can"
         " answer. No new facts here.",
     ),
-    ReportSection(
-        name="References",
-        description=_REFERENCES_DESCRIPTION,
-        protected=True,
-        references_section=True,
-    ),
 ]
-
-
-def references_section(sections: Sequence[ReportSection]) -> ReportSection | None:
-    """The structure's references section, or `None` when it declares none.
-
-    Only the last section may be one (`ApplicationProperties._validate_report_structure`), so this
-    is the single place that has to know where to look for it.
-    """
-    last = sections[-1] if sections else None
-    return last if last is not None and last.references_section else None
 
 
 class Prompts(BaseModel):
@@ -487,21 +543,23 @@ class ApplicationProperties(BaseModel):
     default_report_structure: list[ReportSection] = Field(
         default=DEFAULT_REPORT_STRUCTURE,
         min_length=1,
-        description="The ordered sections a report follows, each rendered as a Markdown `##`"
-        " heading. Section names must be unique, at least one section must be protected, and only"
-        " the last section may set references_section. Report-wide rules (the word ceiling, the"
-        " ban on confidence scores and processing times, the inline citation format) are not"
+        description="The ordered sections the report writer writes, each rendered as a Markdown"
+        " `##` heading. Section names must be unique and at least one section must be protected."
+        " The References section is not one of them: the application appends it to every report,"
+        " under the heading references_section_name. Report-wide rules (the word ceiling, the ban"
+        " on confidence scores and processing times, the inline citation format) are not"
         " configured here — only the sections and what belongs in them.",
     )
     max_report_words: int = Field(
         default=2750,
         ge=1,
         description="The report's word ceiling, counted as whitespace-separated tokens of the"
-        " report's Markdown. The count leaves out the inline citations, and the references section"
-        " where the structure declares one, so it measures the report's prose rather than its"
-        " sourcing. Enforced by reviewing the finished report and revising it, never by cutting"
-        " text off: a report over the ceiling is rewritten to fit while the version budget allows,"
-        " and always ends at a complete sentence.",
+        " report's Markdown. The count leaves out the inline citations, so it measures the report's"
+        " prose rather than its sourcing. The References section is outside it because it is"
+        " outside the draft: the application appends that section after the report is settled, so"
+        " its length never consumes the writer's budget. Enforced by reviewing the finished report"
+        " and revising it, never by cutting text off: a report over the ceiling is rewritten to fit"
+        " while the version budget allows, and always ends at a complete sentence.",
     )
     max_report_versions: int = Field(
         default=3,
@@ -511,6 +569,22 @@ class ApplicationProperties(BaseModel):
         " one review call. The last permitted version is delivered without another review — its"
         " verdict could not be acted on. 1 means the first draft is delivered unreviewed, with no"
         " review at all.",
+    )
+    references_section_name: str = Field(
+        default="References",
+        min_length=1,
+        description="The heading the application writes the report's References section under. The"
+        " application builds that section itself, from what the servers reported about the sources"
+        " the report cites, so this names a section the report writer never writes. A reader sees"
+        " it, so write it in the language this channel's readers read.",
+    )
+    references_section_empty_text: str = Field(
+        default=_REFERENCES_EMPTY_TEXT,
+        min_length=1,
+        description="What the References section says when the report cited no source at all. It is"
+        " the whole of the section in that case — a report with nothing to cite says so rather than"
+        " showing a bare heading — and the only prose an app-built section holds. A reader sees it,"
+        " so write it in the language this channel's readers read.",
     )
     max_pill_title_chars: int | None = Field(
         default=20,
@@ -571,13 +645,11 @@ class ApplicationProperties(BaseModel):
 
     @model_validator(mode="after")
     def _validate_report_structure(self) -> ApplicationProperties:
-        """Unique section names, at least one protected section, and the references section last.
+        """Unique section names, and at least one protected section.
 
         Uniqueness mirrors `_validate_unique_server_names`: duplicate headings make "every
         configured section is present" ambiguous. The protected-section floor keeps configuration
-        from producing a report whose every section a user instruction may remove. A report lists
-        its sources at the end, so at most one section may be the references section and it must be
-        the last — a structure may also have none, and then nothing is exempt from the word count.
+        from producing a report whose every section a user instruction may remove.
         """
         sections = self.default_report_structure
         names = [section.name for section in sections]
@@ -588,11 +660,31 @@ class ApplicationProperties(BaseModel):
             raise ValueError(
                 "default_report_structure must contain at least one section with protected=true"
             )
-        misplaced = [section.name for section in sections[:-1] if section.references_section]
-        if misplaced:
+        return self
+
+    @model_validator(mode="after")
+    def _validate_no_section_claims_the_references_heading(self) -> ApplicationProperties:
+        """No configured section carries the heading the app writes its References section under.
+
+        The app appends that section to every report, so a section of the same name is one the
+        report writer is told to write — by the structure it must reproduce — and told not to
+        write, by the rule naming the appended section. The reader would see the heading twice.
+
+        Compared case-folded and stripped, because the collision is about the heading a reader
+        sees rather than about an exact string: `references` and `References` render the same. The
+        error names both halves of the fix, the section and the property, since either can change.
+        """
+        wanted = self.references_section_name.strip().casefold()
+        claimed = [
+            section.name
+            for section in self.default_report_structure
+            if section.name.strip().casefold() == wanted
+        ]
+        if claimed:
             raise ValueError(
-                "only the last section may set references_section=true;"
-                f" misplaced section(s): {misplaced}"
+                "no section may be named like the appended References section"
+                f" (references_section_name={self.references_section_name!r});"
+                f" rename the section or the property: {claimed}"
             )
         return self
 
@@ -609,6 +701,19 @@ class ApplicationProperties(BaseModel):
             (server.file_sharing_tool for server in self.mcp_servers if server.file_sharing_tool),
             None,
         )
+
+    @property
+    def references_tables(self) -> list[ServerReferencesTable]:
+        """Each server's References table, in the order the servers are configured.
+
+        The order is the order the tables are written in, so an operator decides it by ordering
+        the servers. Every server carries a table, so this never selects between candidates — it
+        pairs each table with the server type that says which cited sources fill it.
+        """
+        return [
+            ServerReferencesTable(server_type=server.server_type, table=server.references_table)
+            for server in self.mcp_servers
+        ]
 
     @property
     def document_metadata(self) -> DocumentMetadataSource | None:
@@ -685,35 +790,42 @@ class ApplicationProperties(BaseModel):
 
 
 def _inline_root_refs(schema: dict[str, Any]) -> None:
-    """Inline each root property's `$ref` and drop `$defs`, so every property is self-contained.
+    """Inline every `$ref` under the root properties and drop `$defs`, so each is self-contained.
 
     The DIAL editor renders each root property from its own schema and does not resolve
     `$ref`/`$defs`, but pydantic emits nested models as `$ref`s into `$defs`. So `$defs` is
-    lifted out up front and each root property's `$ref` is replaced with the model it points
-    to. Two shapes are handled (see `_inline_refs`): a nested model directly, or a list of
-    one. Anything deeper (a model nested inside another, a recursive model) is not resolved;
-    with `$defs` gone it would be a dangling `$ref`, so the final guard raises rather than
-    emit a broken schema.
+    lifted out up front and every `$ref` beneath a root property is replaced with the model it
+    points to, at whatever depth — a model inside a list item inside another model included,
+    which is the shape an MCP server entry's References table has. The final guard catches a
+    `$ref` the walk did not reach rather than emitting one that now dangles.
     """
     defs = schema.pop("$defs", {})
     for name, prop_schema in schema.get("properties", {}).items():
-        schema["properties"][name] = _inline_refs(prop_schema, defs)
+        schema["properties"][name] = _inline_refs(prop_schema, defs, ())
     if "$ref" in json.dumps(schema):
         raise ValueError("nested $refs below root properties are not supported")
 
 
-def _inline_refs(node: dict[str, Any], defs: dict[str, Any]) -> dict[str, Any]:
-    """Return `node` with a `$ref` resolved from `defs`, on the node itself or its `items`.
+def _inline_refs(node: Any, defs: dict[str, Any], expanding: tuple[str, ...]) -> Any:
+    """Return `node` with every `$ref` beneath it resolved from `defs`.
 
-    Handles only these two shapes; anything deeper is left in place for the caller's guard
-    to reject.
+    `expanding` names the models already being expanded on this branch, so a model that refers
+    to itself raises instead of expanding for ever: an inlined schema has to be a finite
+    document, and a recursive one cannot be written without `$ref`.
+
+    Each target is copied before expansion, because one model referenced from two places would
+    otherwise be inlined once and reused half-expanded.
     """
+    if isinstance(node, list):
+        return [_inline_refs(item, defs, expanding) for item in node]
+    if not isinstance(node, dict):
+        return node
     ref = node.pop("$ref", None)
     if ref is not None:
-        target = defs[ref.removeprefix("#/$defs/")]
+        name = ref.removeprefix("#/$defs/")
+        if name in expanding:
+            raise ValueError(f"a recursive model cannot be inlined: {name}")
+        target = _inline_refs(deepcopy(defs[name]), defs, (*expanding, name))
         # Keep sibling keys (e.g. a field description) alongside the inlined body.
         return {**target, **node}
-    items = node.get("items")
-    if isinstance(items, dict):
-        node["items"] = _inline_refs(items, defs)
-    return node
+    return {key: _inline_refs(value, defs, expanding) for key, value in node.items()}

@@ -105,6 +105,7 @@ def _make_report_node() -> Any:
         "2026-07-16",
         DEFAULT_REPORT_STRUCTURE,
         2750,
+        "References",
         emit_revision_failed_stage=lambda _outcome: None,
         emit_activity=lambda _title: None,
     )

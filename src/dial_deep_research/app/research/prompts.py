@@ -10,7 +10,7 @@ from collections.abc import Sequence
 
 from pydantic import BaseModel, Field
 
-from dial_deep_research.app_properties import ReportSection, references_section
+from dial_deep_research.app_properties import ReportSection
 
 from .report_length import SECTION_HEADING_PREFIX
 
@@ -202,6 +202,9 @@ def render_report_structure(sections: Sequence[ReportSection]) -> str:
 
     Each entry is rendered as the exact heading the report must carry — `## Name`, then the rules
     beneath it — so the listing is a template to copy rather than a description to translate.
+
+    Every configured section is rendered, nothing subtracted: the References section is no part of
+    the structure, the app appending it after the loop settles.
     """
     return "\n\n".join(
         f"{SECTION_HEADING_PREFIX} {section.name}\n\n{section.description}" for section in sections
@@ -212,19 +215,6 @@ def render_protected_section_names(sections: Sequence[ReportSection]) -> str:
     """Comma-separated names of the protected sections, for the precedence rule."""
     names = [section.name for section in sections if section.protected]
     return ", ".join(names)
-
-
-def render_length_exemptions(sections: Sequence[ReportSection]) -> str:
-    """What the word count leaves out, as a noun phrase for the prompts and the review stage.
-
-    Rendered from the configured structure rather than fixed, because a structure that declares no
-    references section has nothing exempt but the citations — telling its writer otherwise would
-    promise room the count does not give.
-    """
-    section = references_section(sections)
-    if section is None:
-        return "the inline citations"
-    return f"the inline citations and the {section.name} section"
 
 
 REPORT_SYSTEM_PROMPT = """\
@@ -344,21 +334,39 @@ Check exactly these, and report a violation for each rule the draft breaks:
 5. **Citation format.** Inline citations must follow the following format:
    - `[doc <id>, page <ix>]` for documents — the document id and the cited page index, both
      present, so a document citation carrying no page is a violation
-   - `[dataset <urn>]` for datasets — the dataset's URN written whole, with its punctuation and
-     its version intact, rather than the dataset's display name
+   - `[dataset <urn>]` for datasets — the identifier the dataset tool reported. You cannot
+     see what the tool reported, but dataset URNs usually have a format
+     <agency>:<dataset_name>(version), like `IMF:WEO(1.0.0)`.
+     Example of incorrect citation: `[dataset World Economic Outlook]`.
    There must be no footnotes or numbered references (e.g. [1], [2])
+6. **No list of sources.** The draft enumerates its cited sources nowhere — no section, table or
+   list carrying one entry per source, the bibliography an article ends with, whether under a
+   heading, under a bold line standing in for one, or under nothing at all. The application
+   appends that list itself once the draft is settled, so one in the draft duplicates it,
+   whatever the question or the plan asked for. Two things are **not** that list and are both
+   required where they belong: the inline citations, and prose describing the evidence — a
+   section whose description asks it to say what the research drew on, name the kinds of source
+   it covered, or characterise their coverage is correct to do so.
 
 ## Not your job
 
-You do not judge whether the research was thorough, whether a claim is true, or whether a
-source was the right one to use — you cannot see the findings, and evidence coverage was judged
-elsewhere. Do not ask for more research, more sources, or a different analysis. Do not rewrite
-the report or suggest wording you would prefer.
+Your job is to find violations of the checks above, and nothing else.
 
-You also do not judge the report's headings, its length, or its links. The app checks all three
-itself, over the draft text, and adds what it finds to your list — so a heading that does not
-match the configured structure, a report over its ceiling, and a hyperlink, image or bare URL
-anywhere in the draft are already handled. Judge the content.
+**You do not judge:**
+
+- whether a claim is true, whether the research was thorough, or whether a source was the right
+  one to use — you cannot see the findings, and evidence coverage was judged elsewhere
+- whether the headings match the configured structure
+- the report's length
+- whether the draft carries a hyperlink, an image or a bare URL
+
+The app checks the last three itself over the draft text and adds what it finds to your list, so
+they are handled without you.
+
+**You never ask for:**
+
+- more research, more sources, or a different analysis
+- a rewrite, or wording you would prefer
 
 Approve the draft when the checks above hold. A draft that satisfies them is finished, even
 if you can imagine a better report.

@@ -24,33 +24,34 @@ from dial_deep_research.app_properties import ReportSection
 _SECTIONS = [
     ReportSection(name="Overview", description="The short answer.", protected=True),
     ReportSection(name="Detailed Analysis", description="The substance."),
-    ReportSection(
-        name="References",
-        description="The sources.",
-        protected=True,
-        references_section=True,
-    ),
 ]
 
-_CONFORMING = (
-    "## Overview\n\nThe answer.\n\n"
-    "## Detailed Analysis\n\n### Trade\n\nThe substance.\n\n"
-    "## References\n\n| doc id | title |\n"
-)
+# What the app appends is named in the configuration, not in the structure.
+_REFERENCES_NAME = "References"
+
+_CONFORMING = "## Overview\n\nThe answer.\n\n## Detailed Analysis\n\n### Trade\n\nThe substance.\n"
+
+# What the app appends after the loop settles, which no draft may carry itself.
+_WRITTEN_REFERENCES = "\n## References\n\n| doc id | title |\n"
 
 
 # --- the structure rule -------------------------------------------------------------------------
 
 
 def test_a_conforming_draft_has_no_structure_violations() -> None:
-    assert ReportStructureRule(sections=_SECTIONS).violations(_CONFORMING) == []
+    assert (
+        ReportStructureRule(sections=_SECTIONS, references_name=_REFERENCES_NAME).violations(
+            _CONFORMING
+        )
+        == []
+    )
 
 
 @pytest.mark.parametrize(
     ("draft", "reason"),
     [
         pytest.param(
-            "## Overview\n\nThe answer.\n\n## References\n\n| doc id |\n",
+            "## Overview\n\nThe answer.\n",
             "a section is missing",
             id="missing",
         ),
@@ -60,24 +61,22 @@ def test_a_conforming_draft_has_no_structure_violations() -> None:
             id="renamed",
         ),
         pytest.param(
-            _CONFORMING.replace("## References", "# References"),
+            _CONFORMING.replace("## Overview", "# Overview"),
             "a section is written at another level",
             id="wrong-level",
         ),
         pytest.param(
-            _CONFORMING.replace("## References", "## **References**"),
-            "a heading carries decoration the count tolerates",
+            _CONFORMING.replace("## Overview", "## **Overview**"),
+            "a heading carries decoration the lookup tolerates",
             id="decorated",
         ),
         pytest.param(
-            _CONFORMING.replace("## References", "## 3. References"),
+            _CONFORMING.replace("## Overview", "## 1. Overview"),
             "a heading carries an ordinal",
             id="numbered",
         ),
         pytest.param(
-            "## Detailed Analysis\n\nThe substance.\n\n"
-            "## Overview\n\nThe answer.\n\n"
-            "## References\n\n| doc id |\n",
+            "## Detailed Analysis\n\nThe substance.\n\n## Overview\n\nThe answer.\n",
             "the sections are out of order",
             id="reordered",
         ),
@@ -86,12 +85,19 @@ def test_a_conforming_draft_has_no_structure_violations() -> None:
             "the draft added a section of its own",
             id="extra",
         ),
+        pytest.param(
+            _CONFORMING + _WRITTEN_REFERENCES,
+            "the draft wrote the references section the app builds",
+            id="references-written",
+        ),
         pytest.param("Just prose, no headings at all.\n", "the draft has no sections", id="none"),
     ],
 )
 def test_any_departure_from_the_configured_sections_is_reported(draft: str, reason: str) -> None:
     """One comparison covers every kind of mismatch, and the message carries both lists."""
-    [violation] = ReportStructureRule(sections=_SECTIONS).violations(draft)
+    [violation] = ReportStructureRule(
+        sections=_SECTIONS, references_name=_REFERENCES_NAME
+    ).violations(draft)
 
     assert reason  # names the case under test
     for section in _SECTIONS:
@@ -99,18 +105,31 @@ def test_any_departure_from_the_configured_sections_is_reported(draft: str, reas
 
 
 def test_the_violation_names_what_the_draft_carries() -> None:
-    draft = _CONFORMING.replace("## References", "## Bibliography")
+    draft = _CONFORMING.replace("## Detailed Analysis", "## Analysis In Detail")
 
-    [violation] = ReportStructureRule(sections=_SECTIONS).violations(draft)
+    [violation] = ReportStructureRule(
+        sections=_SECTIONS, references_name=_REFERENCES_NAME
+    ).violations(draft)
 
     expected, found = violation.split("It carries:")
-    assert "'References'" in expected
-    assert "'Bibliography'" in found
-    assert "'References'" not in found
+    assert "'Detailed Analysis'" in expected
+    assert "'Analysis In Detail'" in found
+    assert "'Detailed Analysis'" not in found
+
+
+def test_the_expected_sections_do_not_name_the_references_section() -> None:
+    """The app appends it, so the writer is neither asked for it nor judged on it."""
+    [violation] = ReportStructureRule(
+        sections=_SECTIONS, references_name=_REFERENCES_NAME
+    ).violations("Just prose.\n")
+
+    assert "'References'" not in violation
 
 
 def test_a_draft_with_no_sections_says_so() -> None:
-    [violation] = ReportStructureRule(sections=_SECTIONS).violations("Just prose.\n")
+    [violation] = ReportStructureRule(
+        sections=_SECTIONS, references_name=_REFERENCES_NAME
+    ).violations("Just prose.\n")
 
     assert violation.endswith("It carries: [].")
 
@@ -118,40 +137,47 @@ def test_a_draft_with_no_sections_says_so() -> None:
 def test_sub_headings_inside_a_section_are_not_violations() -> None:
     draft = _CONFORMING.replace("### Trade", "### Trade\n\nText.\n\n#### Exports")
 
-    assert ReportStructureRule(sections=_SECTIONS).violations(draft) == []
+    assert (
+        ReportStructureRule(sections=_SECTIONS, references_name=_REFERENCES_NAME).violations(draft)
+        == []
+    )
 
 
 # --- the length rule ----------------------------------------------------------------------------
 
 
 def test_a_draft_within_the_ceiling_has_no_length_violation() -> None:
-    assert ReportLengthRule(sections=_SECTIONS, max_words=100).violations(_CONFORMING) == []
+    assert ReportLengthRule(max_words=100).violations(_CONFORMING) == []
 
 
 def test_a_draft_at_the_ceiling_is_within_it() -> None:
     draft = "## Overview\n\none two"  # four counted words
 
-    assert ReportLengthRule(sections=_SECTIONS, max_words=4).violations(draft) == []
+    assert ReportLengthRule(max_words=4).violations(draft) == []
 
 
 def test_an_over_long_draft_is_reported_with_both_numbers() -> None:
     draft = "## Overview\n\none two three"
 
-    [violation] = ReportLengthRule(sections=_SECTIONS, max_words=4).violations(draft)
+    [violation] = ReportLengthRule(max_words=4).violations(draft)
 
     assert "5 words" in violation
     assert "4-word ceiling" in violation
-    assert "the inline citations and the References section" in violation
+    assert "the inline citations" in violation
 
 
 def test_the_length_rule_measures_the_report_count_not_the_raw_text() -> None:
-    # The citation and the references section are outside the measure, so this draft fits a
-    # ceiling its raw word count would break.
-    draft = (
-        "## Overview\n\nThe rate rose [doc 150, page 3].\n\n## References\n\n| doc id | title |\n"
-    )
+    # The citation is outside the measure, so this draft fits a ceiling its raw count would break.
+    draft = "## Overview\n\nThe rate rose [doc 150, page 3]."
 
-    assert ReportLengthRule(sections=_SECTIONS, max_words=6).violations(draft) == []
+    assert ReportLengthRule(max_words=5).violations(draft) == []
+
+
+def test_a_references_section_the_writer_wrote_counts_toward_the_ceiling() -> None:
+    """A structure violation must not also earn the draft length budget."""
+    draft = "## Overview\n\nThe rate rose.\n\n## References\n\n| doc id | title |\n"
+
+    assert ReportLengthRule(max_words=5).violations(draft) != []
 
 
 # --- the hyperlink rule -------------------------------------------------------------------------
@@ -223,7 +249,7 @@ def test_the_rule_shares_its_detection_with_the_delivery_step() -> None:
 
 def test_the_writer_instructions_carry_every_rule_in_order() -> None:
     instructions = render_writer_instructions(
-        build_report_rules(sections=_SECTIONS, max_words=2750)
+        build_report_rules(sections=_SECTIONS, max_words=2750, references_name=_REFERENCES_NAME)
     )
 
     assert (
@@ -236,4 +262,7 @@ def test_the_writer_instructions_carry_every_rule_in_order() -> None:
     for section in _SECTIONS:
         assert section.description in instructions
     assert "2750 words" in instructions
-    assert "the inline citations and the References section" in instructions
+    assert "the inline citations" in instructions
+    # The references section is named only to forbid writing it, never as a heading to copy.
+    assert "## References" not in instructions
+    assert 'Do not write a "References" section' in instructions
