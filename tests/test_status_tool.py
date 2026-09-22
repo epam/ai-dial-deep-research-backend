@@ -25,6 +25,7 @@ from dial_deep_research.app.research.tools import (
     UPDATE_STATUS_TOOL_NAME,
     build_update_status_tool,
 )
+from dial_deep_research.app.tool_failures import RetryVerdict
 
 
 def _invoke(tool: BaseTool, *, status: str, siblings: list[dict[str, Any]]) -> str:
@@ -107,6 +108,9 @@ def test_the_correction_repeats_the_wording_the_prompt_showed() -> None:
         client_name="ACME",
         rule_once_per_turn=RULE_ONCE_PER_TURN,
         rule_never_alone=RULE_NEVER_ALONE,
+        verdict_retry_now=RetryVerdict.RETRY_NOW,
+        verdict_retry_later=RetryVerdict.RETRY_LATER,
+        verdict_will_not_help=RetryVerdict.WILL_NOT_HELP,
     )
     description = build_update_status_tool().description
 

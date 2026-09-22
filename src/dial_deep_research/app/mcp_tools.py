@@ -29,6 +29,19 @@ from dial_deep_research.utils.json_schema_fixes import hoist_defs_to_root
 
 logger = logging.getLogger(__name__)
 
+# Bounds on one attempt of an MCP request, set here rather than inherited from the adapter's
+# defaults because the tool-call retry multiplies them.
+#
+# Connecting and writing: a reachable server answers at once, so only an unreachable one waits
+# this long — 5 s rather than the adapter's 30 s.
+#
+# Reading the answer: the bound is the longest silence between two chunks of the response. It is
+# kept at the adapter's 300 s because exceeding it does not fail the call: `mcp` 1.x logs the read
+# timeout at DEBUG and leaves the call waiting for a response that never comes. A lower bound
+# would only turn slow calls that succeed today into calls that never return.
+MCP_CONNECT_TIMEOUT_SECONDS = 5.0
+MCP_READ_TIMEOUT_SECONDS = 300.0
+
 
 class LoadedMcpTools(NamedTuple):
     """One turn's MCP tools, split by who may call them, and the client they came from.
@@ -83,22 +96,10 @@ def build_mcp_client(
             "transport": "streamable_http",
             "url": url,
             "headers": headers,
+            "timeout": MCP_CONNECT_TIMEOUT_SECONDS,
+            "sse_read_timeout": MCP_READ_TIMEOUT_SECONDS,
         }
     return MultiServerMCPClient(connections=connections)
-
-
-def enable_tool_error_handling(tools: list[BaseTool]) -> list[BaseTool]:
-    """Convert each tool's `ToolException` into an error `ToolMessage` instead of raising.
-
-    Without this a `ToolException` (raised by langchain-mcp-adapters on an MCP error
-    response, including the server's own pydantic rejections) bubbles past the tool node
-    and fails the whole turn. `handle_tool_error=True` makes the tool return the error
-    text as its result with `status="error"`; the agent then receives it as a
-    `ToolMessage` and can retry with corrected args.
-    """
-    for t in tools:
-        t.handle_tool_error = True
-    return tools
 
 
 def _dump_tool_schemas_to_json(tools: list[BaseTool], dp: Path) -> None:
@@ -114,7 +115,7 @@ def _dump_tool_schemas_to_json(tools: list[BaseTool], dp: Path) -> None:
 async def load_mcp_tools(
     mcp_servers: list[MCPClientSettings], bearer_token: str | None = None
 ) -> LoadedMcpTools:
-    """Fetch the MCP tools, hoist their schemas, and wire error handling.
+    """Fetch the MCP tools, hoist their schemas, and turn off error conversion where needed.
 
     Tools are fetched per server so each server's `tools_to_include` filter applies (an empty
     filter includes all of that server's tools).
@@ -197,13 +198,15 @@ async def load_mcp_tools(
         tool_schemas_base_dp = Path("data") / "tool_schemas" / datetime.now().isoformat()
         _dump_tool_schemas_to_json(agent_tools, tool_schemas_base_dp / "raw")
 
-    # The schema fix and the error handling are both about being called by a model, so both
-    # stop at the agent's tools. Hoisting exists so LangChain can dereference a schema it binds
-    # to a model; the app calls the file-sharing tool with a dict input, which
-    # `BaseTool._parse_input` passes through unvalidated when `args_schema` is a JSON-schema
-    # dict, as an MCP tool's always is.
+    # The schema fix is about being called by a model, so it stops at the agent's tools. Hoisting
+    # exists so LangChain can dereference a schema it binds to a model; the app calls the
+    # file-sharing tool with a dict input, which `BaseTool._parse_input` passes through
+    # unvalidated when `args_schema` is a JSON-schema dict, as an MCP tool's always is.
     hoist_defs_to_root(agent_tools)
-    enable_tool_error_handling(agent_tools)
+    # The agent's tools keep the error handler langchain-mcp-adapters installs: it turns a result
+    # the server marks as an error into an error `ToolMessage` carrying every content block the
+    # server sent, images included. A failure that is not such a result raises, and the agent's
+    # `ToolFailureMiddleware` converts it.
     if file_sharing_tool is not None:
         # Cleared explicitly rather than left alone: langchain-mcp-adapters installs an error
         # handler on every tool it builds, which turns an MCP error into ordinary result

@@ -64,6 +64,11 @@ class ResearchReview(BaseModel):
 # reader and is written here. "Keep the user informed" deliberately gives no example of a sequence
 # of steps: the model must follow the plan it is given, and an illustration would be read as a
 # research method to imitate.
+#
+# The three verdict labels are interpolated because a failed tool's result states its verdict with
+# the same label (`app/tool_failures.py`), and the prompt tells the model what each one means. The
+# repeat allowance is stated as a number so every run gets the same one; it is the agent's own and
+# says nothing of the in-process retries behind each call.
 RESEARCH_AGENT_SYSTEM_PROMPT = """\
 You are a research assistant. Today is {today_date}.
 
@@ -135,6 +140,30 @@ budget overflows, the newest image results are dropped and replaced with a tool 
 the numbers and the remaining image allowance. Such an error means the budget is exhausted,
 not that the tool failed transiently.
 
+## When a tool call fails
+
+A tool call can fail. Its result then says which tool failed and how, and ends with a verdict
+line, `Verdict: <verdict>`. Act on the verdict:
+
+- **{verdict_retry_now}**: call the same tool again if you still need the evidence.
+- **{verdict_retry_later}**: carry on with the other evidence this iteration still needs, and come
+  back to the tool afterwards if you still need it. If there is nothing else left to gather, call
+  it again directly.
+- **{verdict_will_not_help}**: do not call that tool again for the same evidence. Get it from
+  another tool, or continue without it.
+
+A failed result with no verdict line is one of two things. A result starting "Tool result
+dropped" is the image-budget error described above: handle it as that item says, and do not call
+the tool again for the same image. Any other is the tool's own error message, often about the
+arguments you sent: correct what it names and call the tool again.
+
+Whatever the result says, call a failed tool **at most two more times** for the same evidence.
+Once those two repeat calls are spent, stop calling that tool for that evidence: get it from
+another tool, or continue without it.
+
+A failed tool does not end the iteration. Carry on with the rest of the plan and end the iteration
+with finish_iteration as usual.
+
 ## Quality bar before calling finish_iteration
 
 - Have you read the relevant pages with `get_page`, not just grounded on `rag_search`?
@@ -143,7 +172,9 @@ not that the tool failed transiently.
 - Is every specific number, percentage, date, or named entity confirmed on the page itself?
 - Has every item of this iteration's plan been covered with evidence?
 
-If any of these fails, keep researching. Only call finish_iteration once they hold.
+If any of these fails, keep researching. Only call finish_iteration once they hold. Evidence that
+only a failed tool could provide, once its repeat calls are spent, does not hold the iteration
+open: the next review sees that it is missing.
 """
 
 
@@ -159,7 +190,10 @@ Identify **genuine gaps** only:
 - a plan item with no supporting evidence, or evidence too thin to stand on;
 - a claim grounded on a search summary rather than the source page itself;
 - a specific number, date, or entity that was asserted but not confirmed on a page;
-- a planned comparison or dimension that was only partially carried out.
+- a planned comparison or dimension that was only partially carried out;
+- a plan item left uncovered because a tool failed. A result saying that a tool failed is not
+  evidence, and research-agent did not skip the item: the tool could not answer. Treat it as a gap
+  like any other, and include the work in `next_steps` so a later iteration attempts it again.
 
 Output the concrete steps still needed as `next_steps`. If every plan item is covered by
 solid, source-grounded evidence, return an **empty** `next_steps` — research is complete.
@@ -267,6 +301,11 @@ cited, either remove it or flag it explicitly as your own synthesis/inference.
 - Confidence scores or ratings, certainty or reliability labels, complexity or difficulty
 ratings, processing or elapsed times, iteration counts, token counts. Not as fields, not in
 prose, not in a table cell.
+- Anything about the tools the research used: no tool names, no tool failures or error messages,
+no count of attempts. When evidence the question needs is missing from the findings, for example
+because a source could not be reached, you may say that the evidence is unavailable and what
+therefore cannot be concluded. State it as a property of the evidence, never as an event of the
+research.
 - What IS required is honest qualification of the evidence in prose: say when a figure rests on
 a single source, when sources disagree, and when a statement is your own inference. That is
 content about the findings, not a rating of the research.
@@ -326,8 +365,10 @@ Check exactly these, and report a violation for each rule the draft breaks:
    matter what the research question or plan asked for.
 3. **Never-include list.** No confidence scores or ratings, certainty or reliability labels,
    complexity ratings, processing or elapsed times, iteration or token counts — as fields, in
-   prose, or in table cells. Honest qualification of evidence in prose is correct and is not a
-   violation.
+   prose, or in table cells. No named tool, no statement that a tool failed or what its error
+   was, and no count of attempts. Honest qualification of evidence in prose is correct and is not
+   a violation, and that includes saying that some evidence is unavailable and what cannot be
+   concluded without it.
 4. **Valid Markdown.** The draft is well-formed Markdown throughout: headings, lists, tables and
    emphasis all render, with no broken markup. The inline citations are the single exception —
    they are not Markdown links, and check 5 governs them instead.

@@ -8,6 +8,7 @@ import logging
 import re
 import time
 
+import anyio
 import httpx
 import openai
 import pytest
@@ -18,6 +19,8 @@ from dial_deep_research.app.error_resolution import (
     ApplicationNotConfiguredError,
     ResearchAlreadyHandedOffError,
     _extract_error_details,
+    exception_leaves,
+    is_immediately_retryable,
     raise_dial_error,
     resolve_exception,
 )
@@ -212,6 +215,139 @@ def test_retriable_statuses_stay_retryable_but_are_downgraded_by_the_handler(sta
 
 
 # --- The failure records (logging-policy: single ERROR + skeleton completion event) --------------
+
+
+def _http_status_error(status: int) -> httpx.HTTPStatusError:
+    response = httpx.Response(status, request=_REQUEST)
+    return httpx.HTTPStatusError(
+        f"Server error for url '{_REQUEST.url}'", request=_REQUEST, response=response
+    )
+
+
+async def _raised_by_a_task_group(error: Exception) -> Exception:
+    """The exception a real anyio task group raises when its one task fails with `error`."""
+
+    async def fail() -> None:
+        raise error
+
+    try:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(fail)
+    except Exception as wrapped:
+        return wrapped
+    raise AssertionError("the task group did not raise")
+
+
+# --- Wrapped failures ---------------------------------------------------------------------------
+
+
+async def test_a_task_group_wrapped_502_resolves_to_the_retryable_service_message() -> None:
+    wrapped = await _raised_by_a_task_group(_http_status_error(502))
+    assert isinstance(wrapped, ExceptionGroup)
+
+    resolved = resolve_exception(wrapped)
+
+    assert resolved.message == resolve_exception(_http_status_error(502)).message
+    assert "internal error" in resolved.message
+    assert resolved.retryable is True
+    assert resolved.details.status_code == 502
+
+
+def test_a_wrapped_transport_failure_is_matched_by_its_own_type() -> None:
+    wrapped = ExceptionGroup("tg", [httpx.ConnectTimeout("slow", request=_REQUEST)])
+    resolved = resolve_exception(wrapped)
+    assert "timed out" in resolved.message
+    assert resolved.retryable is True
+
+
+def test_a_wrapped_midstream_llm_failure_reaches_the_stream_failure_rule() -> None:
+    wrapped = ExceptionGroup("tg", [_openai_midstream_error(None)])
+    resolved = resolve_exception(wrapped)
+    assert "failed while responding" in resolved.message
+    assert resolved.retryable is True
+
+
+def test_nested_groups_resolve_to_the_innermost_failure() -> None:
+    wrapped = ExceptionGroup("outer", [ExceptionGroup("inner", [_http_status_error(403)])])
+    resolved = resolve_exception(wrapped)
+    assert "permission" in resolved.message
+    assert resolved.retryable is False
+
+
+def test_a_group_of_several_is_resolved_by_its_first_failure() -> None:
+    wrapped = ExceptionGroup("tg", [_http_status_error(403), _http_status_error(502)])
+    resolved = resolve_exception(wrapped)
+    assert resolved.details.status_code == 403
+    assert resolved.retryable is False
+
+
+def test_exception_leaves_flattens_nested_groups_in_order() -> None:
+    first, second, third = ValueError("a"), KeyError("b"), TypeError("c")
+    wrapped = ExceptionGroup("outer", [first, ExceptionGroup("inner", [second, third])])
+    assert exception_leaves(wrapped) == [first, second, third]
+
+
+def test_exception_leaves_returns_a_plain_failure_unchanged() -> None:
+    error = ValueError("a")
+    assert exception_leaves(error) == [error]
+
+
+# --- Immediate-retry predicate ------------------------------------------------------------------
+
+
+async def test_a_task_group_wrapped_502_is_immediately_retryable() -> None:
+    assert is_immediately_retryable(await _raised_by_a_task_group(_http_status_error(502))) is True
+
+
+def test_a_503_is_immediately_retryable() -> None:
+    assert is_immediately_retryable(_http_status_error(503)) is True
+
+
+def test_transport_failures_are_immediately_retryable() -> None:
+    assert is_immediately_retryable(httpx.ConnectError("refused", request=_REQUEST)) is True
+    assert is_immediately_retryable(httpx.ConnectTimeout("slow", request=_REQUEST)) is True
+    assert is_immediately_retryable(httpx.ReadError("reset", request=_REQUEST)) is True
+    assert is_immediately_retryable(httpx.RemoteProtocolError("closed", request=_REQUEST)) is True
+
+
+def test_permanent_transport_errors_are_not_immediately_retryable() -> None:
+    assert is_immediately_retryable(httpx.UnsupportedProtocol("scheme", request=_REQUEST)) is False
+    assert is_immediately_retryable(httpx.LocalProtocolError("header", request=_REQUEST)) is False
+    assert is_immediately_retryable(httpx.ProxyError("tunnel", request=_REQUEST)) is False
+
+
+def test_a_read_timeout_is_not_immediately_retryable() -> None:
+    """Nothing arrived for the whole read bound: a repeat would wait it out again."""
+    assert is_immediately_retryable(httpx.ReadTimeout("silent", request=_REQUEST)) is False
+    wrapped = ExceptionGroup("tg", [httpx.ReadTimeout("silent", request=_REQUEST)])
+    assert is_immediately_retryable(wrapped) is False
+
+
+def test_a_429_is_not_immediately_retryable_though_it_resolves_retryable() -> None:
+    """The two questions differ: "retry now" is no, "try again later" is yes."""
+    assert is_immediately_retryable(_http_status_error(429)) is False
+    assert resolve_exception(_http_status_error(429)).retryable is True
+
+
+def test_500_and_504_are_not_immediately_retryable() -> None:
+    assert is_immediately_retryable(_http_status_error(500)) is False
+    assert is_immediately_retryable(_http_status_error(504)) is False
+
+
+def test_a_rejected_request_is_not_immediately_retryable() -> None:
+    assert is_immediately_retryable(_http_status_error(403)) is False
+
+
+def test_a_non_http_failure_is_not_immediately_retryable() -> None:
+    assert is_immediately_retryable(KeyError("x")) is False
+
+
+def test_a_group_is_immediately_retryable_only_when_every_failure_is() -> None:
+    connect_error = httpx.ConnectError("refused", request=_REQUEST)
+    mixed = ExceptionGroup("tg", [connect_error, _http_status_error(403)])
+    uniform = ExceptionGroup("tg", [connect_error, _http_status_error(502)])
+    assert is_immediately_retryable(mixed) is False
+    assert is_immediately_retryable(uniform) is True
 
 
 def test_raise_dial_error_closes_skeleton_with_matching_reference(

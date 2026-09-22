@@ -10,6 +10,11 @@ normalizes them all into an `ErrorDetails` view and resolves a `ResolvedError` b
 precedence: display_message -> code map -> status/type map -> mid-stream stream-failure rule ->
 internal map -> generic fallback.
 
+A failure wrapped in an `ExceptionGroup` — the MCP client runs each request inside an anyio task
+group — is classified by the failures it holds, never by the wrapper, which matches no supported
+shape and whose message names no cause. The same unwrap serves the tool-level retry predicate
+`is_immediately_retryable`.
+
 It never leaks raw internal detail to the user: only an upstream `display_message` (user-safe by
 DIAL contract) or curated constants reach `ResolvedError.message`. The handler in
 `app/completion.py` delivers the result through the DIAL error protocol.
@@ -186,6 +191,66 @@ class ResolvedError(BaseModel):
 
 # A resolved (cause message, retryable) pair, before the retry sentence is composed in.
 _Resolution = tuple[str, bool]
+
+# Statuses where a gateway could not reach the service behind it, so an immediate repeat can
+# succeed. 500 and 504 are left out: a repeat seconds later meets the same server-side exception
+# or the same slow operation. 429 is left out: a rate limit outlasts the in-process retries.
+_IMMEDIATE_RETRY_STATUS_CODES = frozenset({502, 503})
+
+
+def exception_leaves(e: Exception) -> list[Exception]:
+    """The failures an `ExceptionGroup` holds, nested groups flattened; `[e]` for any other.
+
+    A group holding a `BaseException` such as `CancelledError` is a `BaseExceptionGroup`, not an
+    `Exception`, so it never reaches here: cancellation propagates past every `except Exception`.
+    """
+    if isinstance(e, ExceptionGroup):
+        return [leaf for inner in e.exceptions for leaf in exception_leaves(inner)]
+    return [e]
+
+
+# Transport errors a fresh connection cannot fix: a URL scheme httpx does not support, a request
+# httpx itself refused to send, and a proxy that refused the tunnel. Every attempt fails the same
+# way at once.
+_PERMANENT_TRANSPORT_ERRORS = (
+    httpx.UnsupportedProtocol,
+    httpx.LocalProtocolError,
+    httpx.ProxyError,
+)
+
+
+def is_transient_transport_error(e: Exception) -> bool:
+    """A connection that failed or timed out while connecting, was reset, or died mid-response.
+
+    A read timeout is excluded: nothing arrived for the whole read bound. A server built on the
+    `mcp` SDK pings its SSE stream every 15 s while a tool runs, so from such a server it marks a
+    stuck path rather than a slow tool; a server or proxy that stays silent until the result is
+    ready makes it a tool slower than the bound. Either way a repeat waits out the whole bound
+    again.
+    """
+    if isinstance(e, (httpx.ReadTimeout, *_PERMANENT_TRANSPORT_ERRORS)):
+        return False
+    return isinstance(e, httpx.TransportError)
+
+
+def _is_immediately_retryable_leaf(e: Exception) -> bool:
+    if is_transient_transport_error(e):
+        return True
+    return (
+        isinstance(e, httpx.HTTPStatusError)
+        and e.response.status_code in _IMMEDIATE_RETRY_STATUS_CODES
+    )
+
+
+def is_immediately_retryable(e: Exception) -> bool:
+    """Whether repeating the failed call now, after a short backoff, can succeed.
+
+    True for a transient transport failure and for HTTP 502 and 503, and for a group only when
+    every failure it holds is one of those: a retry re-runs the whole call, so one permanent
+    cause makes it pointless. This is a different question from `ResolvedError.retryable` ("would
+    trying again later help?"), which is true for 429.
+    """
+    return all(_is_immediately_retryable_leaf(leaf) for leaf in exception_leaves(e))
 
 
 def _unwrap_error_body(body: Any) -> dict[str, Any]:
@@ -399,7 +464,12 @@ def resolve_exception(e: Exception) -> ResolvedError:
     Precedence: display_message -> code map -> status/type map -> stream-failure rule ->
     internal map -> fallback. Never leaks raw internal detail: only ``display_message`` (user-safe
     by contract) and curated canned messages reach the user.
+
+    A group is resolved as its first failure, by every rule below: the rules test the failure's
+    own type as well as its status. The leaves of one group describe the same dead connection
+    from different tasks, so the first tells the same story as any other.
     """
+    e = exception_leaves(e)[0]
     details = _extract_error_details(e)
 
     # 1. Upstream-authored, user-safe text wins. Used as-is (never retry-suffixed), since appending

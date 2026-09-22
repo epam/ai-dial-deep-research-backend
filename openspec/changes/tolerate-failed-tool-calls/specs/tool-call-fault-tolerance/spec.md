@@ -61,9 +61,15 @@ keep a much longer bound, because a tool doing real work legitimately takes tens
 answer and cutting it off would fail calls that were going to succeed.
 
 A failure SHALL be retried when it is a transport-level failure — a connection that could not be
-established, timed out, was reset, or died mid-response — or when it carries HTTP status 502 or
-503, where a gateway could not reach the service behind it. Every other failure SHALL be relayed
-without a retry, including any other HTTP status and any error the tool server itself reports.
+established, timed out while connecting, was reset, or died mid-response — or when it carries HTTP
+status 502 or 503, where a gateway could not reach the service behind it. Every other failure SHALL
+be relayed without a retry, including any other HTTP status and any error the tool server itself
+reports.
+
+A read timeout — nothing received from the server for the whole of the read bound — SHALL NOT be
+retried, and SHALL be relayed with the verdict that retrying will not help. A working tool server
+keeps its response alive while the tool runs, so a read timeout marks a path that is stuck rather
+than a tool that is slow, and every repeat would wait out the whole bound again.
 
 A failure excluded from the in-process retry because an *immediate* repeat cannot help it — a
 server error such as 500 or 504 — SHALL nonetheless be relayed with the retry-later verdict rather
@@ -98,6 +104,11 @@ the retry pointless.
 
 - **WHEN** a tool call fails with an HTTP status that indicates the request itself was rejected, such as 403
 - **THEN** the app SHALL call the tool once, SHALL NOT retry it, and SHALL relay the failure immediately
+
+#### Scenario: A read timeout is relayed without a retry
+
+- **WHEN** a tool call fails because nothing arrived from the server for the whole read bound
+- **THEN** the app SHALL call the tool once, SHALL NOT retry it, and SHALL relay the failure with the verdict that retrying will not help
 
 #### Scenario: A mixed failure is not retried
 
@@ -163,10 +174,12 @@ wrapper. Wrappers nested inside wrappers SHALL be resolved all the way down. Thi
 turn-level classification of **Failures delivered as DIAL protocol errors** in the
 **dial-agent-with-mcp** capability as well as to the tool-level decisions above.
 
-Where a wrapper holds more than one failure, the **first** leaf SHALL supply the status, the
-failure kind and the message, for both the relayed result and the turn-level classification. The
-leaves of one wrapper describe the same dead connection from different tasks, so no leaf tells a
-better story than another and a fixed rule beats an arbitrary one.
+Where a wrapper holds more than one failure, the **first** leaf SHALL supply the status and the
+failure kind of the relayed result, and the message and retryable classification at the turn
+level. The leaves of one wrapper describe the same dead connection from different tasks, so no
+leaf tells a better story than another and a fixed rule beats an arbitrary one. The decisions about
+retrying are the exception: the in-process retry and the relayed verdict SHALL weigh every leaf,
+because one permanent cause makes any retry pointless.
 
 #### Scenario: A wrapped transport failure is classified by its real cause
 
@@ -207,9 +220,14 @@ The verdict SHALL be one of three, because the right next action differs in each
 
 | Verdict | When | What the agent does |
 | --- | --- | --- |
-| Retrying may help | The in-process retries were spent on a transport failure or a 502/503 | Call the tool again if the evidence is still wanted |
+| Retrying may help | The in-process retries were spent on a transport failure other than a read timeout, or on a 502/503 | Call the tool again if the evidence is still wanted |
 | Retry later | The failure may clear, but not within seconds — the tool is rate limited, or returned a server error the in-process retries do not cover | Gather other evidence first, then come back if still needed; call it again directly when nothing else is outstanding |
-| Retrying will not help | Any other failure — a rejected request, a permanent error | Use another source or continue without the evidence |
+| Retrying will not help | Any other failure — a rejected request, a read timeout, a permanent error | Use another source or continue without the evidence |
+
+When a failure carries several causes, the verdict SHALL weigh every one of them, as the retry
+does: retrying may help only when every cause is one the in-process retries cover, and retry later
+only when every cause is one that may clear with time — a transport failure other than a read
+timeout, a rate limit, or a server error. Any other mix means retrying will not help.
 
 A two-way verdict is not enough: collapsing "retry later" into "will not help" abandons evidence a
 short rate limit would have released, and collapsing it into "may help" sends the agent straight

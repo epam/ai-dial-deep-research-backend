@@ -101,11 +101,14 @@ The callable form of `on_failure` does not fix it alone: `OnFailure = Literal["e
 | Callable[[Exception], str]` (`middleware/_retry.py:22`), so the callable never receives the tool
 name, and `langchain_openai` strips `ToolMessage.name` before the request anyway. Overriding
 `_handle_failure` is the one place `tool_name`, `exc` and `attempts_made` are in scope together
-(`tool_retry.py:257-259`), so it composes the message **and** hosts the log record the spec
-requires — `tool_retry.py` contains no logging at all, and no middleware in this project
-implements `wrap_tool_call` today. A subclass inherits the backoff, the budget and the
-`GraphBubbleUp` exclusion, so this does not reopen the rejection of a hand-written middleware
-below.
+(`tool_retry.py:257-259`), so it composes the message and logs the relayed failure. It cannot log a
+retry that succeeds, because such a retry never reaches it. So the subclass also overrides
+`wrap_tool_call` and `awrap_tool_call` to wrap the handler before handing it to the parent. The
+parent calls that handler once per attempt, so an attempt that starts after a failure is a retry,
+and the wrapper logs it there with the failure that caused it. `tool_retry.py` contains no logging
+at all, and no other middleware in this project implements `wrap_tool_call`. A subclass inherits
+the backoff, the budget and the `GraphBubbleUp` exclusion, so this does not reopen the rejection
+of a hand-written middleware below.
 
 **`ToolErrorMiddleware` is the public successor, once the upgrade lands.** Its handler is
 `on_error(exc, request) -> str | list[ContentBlock] | None`, so it receives the `ToolCallRequest`
@@ -143,43 +146,63 @@ longer, and an untuned default is one fewer number to justify and keep current.
   LangChain docs show for a catch-all converter, but it would reimplement the backoff, the budget
   and the `GraphBubbleUp` exclusion that the prebuilt already has and tests.
 
-### 1b. The transport's own timeouts are set, because the budget multiplies them
+### 1b. The connect timeout is set, because the budget multiplies it
 
-`build_mcp_client` (`app/mcp_tools.py:82-86`) passes only `transport`, `url` and `headers`, so the
-adapter's defaults apply: `DEFAULT_STREAMABLE_HTTP_TIMEOUT = 30 s` and
+`build_mcp_client` (`app/mcp_tools.py`) passed only `transport`, `url` and `headers`, so the
+adapter's defaults applied: `DEFAULT_STREAMABLE_HTTP_TIMEOUT = 30 s` and
 `DEFAULT_STREAMABLE_HTTP_SSE_READ_TIMEOUT = 300 s` (`langchain_mcp_adapters/sessions.py:56-57`),
 combined as `httpx.Timeout(timeout, read=sse_read_timeout)` (`sessions.py:354`). Nothing in
-`settings.py` or `app_properties.py` overrides them.
+`settings.py` or `app_properties.py` overrides them. `StreamableHttpConnection` accepts both as
+optional keys, so each connection now sets both.
 
-The first draft of this design costed the retries by their backoff alone, which is right only for
-failures that are instant. A connection reset is; a timeout is not, and the waiting then sits
-inside each attempt:
+The two bounds measure different things. `timeout` governs connecting and writing, where a
+reachable server answers at once. `sse_read_timeout` is the longest silence httpx accepts between
+two reads — before the response headers, or between any two chunks of the body after them. It is
+not a limit on how long the call takes.
 
-| Failure | One attempt | Three attempts | With the agent's allowance |
-| --- | --- | --- | --- |
-| Connection reset (the incident) | ~0 s | ~3 s | ~9 s |
-| Connect timeout (issue #53's case) | 30 s | ~93 s | ~280 s |
-| Accepts, then never answers | 300 s | ~15 min | far worse |
+**Connect: 5 s.** A connect timeout is issue #53's case and stays retried, so the bound is paid up
+to three times: ~93 s across three attempts at the default, ~18 s at 5 s. A working tool never
+needs more than a few seconds to be connected to.
 
-The whole incident lasted 367 s, so leaving the defaults would let this change add as much time as
-the failed turn took — on the exact failure issue #53 was filed for.
+**Read: 300 s, the adapter's default, set explicitly.** The first draft lowered it to 180 s, which
+would have been a regression, because of how `mcp` 1.28.1 handles a read timeout once the response
+has started. Read from the installed source and reproduced over a real socket:
 
-`StreamableHttpConnection` accepts `timeout` and `sse_read_timeout` as optional keys
-(`sessions.py`), so the fix is two keys in the connection dict: **`timeout` 5 s** and
-**`sse_read_timeout` 180 s**. The split matters: `timeout` governs connecting and writing, where a
-reachable server answers immediately, while `sse_read_timeout` governs waiting for the answer,
-where a real tool legitimately takes tens of seconds — the incident's `query_datasets` calls took
-14.5 s, 16.8 s and 19.0 s of reading. Lowering the connect bound therefore costs nothing a working
-tool needs, and brings an unreachable tool from ~93 s to ~18 s across three attempts.
+- `_handle_sse_response` (`mcp/client/streamable_http.py:429`) catches the `ReadTimeout`, logs it
+  at DEBUG and drops it. It resumes only when the server sent an SSE event id, which a stateless
+  server does not.
+- `ClientSession.send_request` (`mcp/shared/session.py:284-292`) waits for the response with no
+  limit unless `read_timeout_seconds` is set, and nothing sets it.
+- So the call never returns: no result, no exception, and the middleware never sees it. Probed: a
+  tool silent for 6 s under a 1 s bound was still waiting 12 s later.
 
-- *Rejected: excluding timeout failures from the retry set instead.* No configuration to choose,
-  but it removes the retry from the connect timeout, which is the case the change was filed for.
-- *Rejected: leaving the defaults and documenting the worst case.* Ships a budget whose stated cost
-  is wrong by more than an order of magnitude for the timeout class.
-- **Residual, accepted:** a server that accepts and then goes silent still costs 180 s per attempt,
-  so ~9 minutes across three and longer once the agent retries. Cutting the read bound further
-  would start failing slow tools that were going to succeed. If that case is ever observed, the
-  narrower fix is to exclude read timeouts specifically from the retry set.
+A lower bound therefore does not turn a long silence into a failure; it turns it into a call that
+never returns. `mcp` 2.2.0 fixes this — `_resolve_abandoned_request` fails a request whose stream
+ended without a way to resume — while 1.30.0, the latest 1.x release, does not. 2.x moves to
+`httpx2`, which ties it to the upgrade in Non-Goals.
+
+**A working tool is not silent.** The `mcp` server transport sends its headers as soon as it takes
+the request, and pings the SSE stream every 15 s while the tool runs — the default of
+`sse_starlette`, which it uses. Probed: a 20 s tool succeeded under a 16 s read bound, because the
+ping at 15 s counted as a read. A multi-minute dataset query therefore stays far from either bound.
+**Unverified:** whether DIAL Core forwards those pings in deployment mode. If it buffers the
+stream instead, a tool that runs longer than 300 s surfaces as a read timeout before the headers.
+
+**What a read timeout means, then.** Nothing arrived for 300 s, so the path is stuck, not slow:
+
+| Where it sticks | What the tool call sees | Cost |
+| --- | --- | --- |
+| Before the response headers | `ExceptionGroup[ReadTimeout]` after 300 s (probed at 1 s) | 300 s, relayed without a retry — decision 3 |
+| After the headers: pings stop, the connection stays open | Nothing; the call waits forever | Unbounded — the residual below |
+
+- *Rejected: `sse_read_timeout` 180 s,* the first draft. Per the above it bounds nothing more, and
+  it makes calls to a server that does not ping, silent for 180–300 s, hang where they succeed
+  today.
+- *Rejected: a session `read_timeout_seconds` now.* It would make the stuck-after-headers case fail
+  as an `McpError` (code 408), but it limits the whole call rather than the silence, so it needs a
+  value above the longest real tool call and a verdict of its own. Deferred.
+- **Residual, accepted:** a stream that stops after its headers without closing hangs the call, and
+  the iteration with it. That is equally true before this change. See Deferred.
 
 ### 2. `retry_on` as a callable, not a tuple
 
@@ -196,8 +219,12 @@ again later help?"*, which is `True` for 429 — `_resolve_service_status` maps 
 `(_MSG_SERVICE_RATE_LIMITED, True)`. The middleware needs *"would trying again right now, with no
 delay, help?"*, which for 429 is `False`.
 
-The predicate: `httpx.TransportError` (covering timeouts, network errors and protocol errors, per
-the verified hierarchy) plus HTTP 502 and 503, evaluated on the unwrapped leaves.
+The predicate: `httpx.TransportError` — connect, write and pool timeouts, network errors and
+remote protocol errors, per the verified hierarchy — plus HTTP 502 and 503, evaluated on the
+unwrapped leaves. Four transport errors are excluded and relayed as not worth retrying:
+`httpx.ReadTimeout` (below), and three that fail the same way on every attempt —
+`UnsupportedProtocol` (a URL scheme httpx does not support), `LocalProtocolError` (a request
+httpx refused to send) and `ProxyError` (a proxy that refused the tunnel).
 
 - *Rejected: including 500 and 504.* An immediate repeat hits the same server-side exception or the
   same slow operation.
@@ -205,6 +232,11 @@ the verified hierarchy) plus HTTP 502 and 503, evaluated on the unwrapped leaves
   outlast a `Retry-After` measured in seconds to minutes, and each attempt against a limiter that
   is already refusing can consume quota or extend its window. The agent retries it instead, from
   a distance the middleware cannot reach — see decision 6.
+- *Rejected: retrying a read timeout.* It reaches the tool only when nothing arrived for the whole
+  300 s read bound (decision 1b), so each retry costs another 300 s: 15 minutes per agent-level
+  call, 45 with research-agent's allowance. It is relayed with the will-not-help verdict — the
+  user's choice over retry-later, which would still let research-agent spend two more waits of up
+  to 300 s each.
 - **Evidence note:** 502 is evidence-backed (the incident's next connection succeeded 16 ms later)
   and connect timeout is issue #53's observed case. 503, and the exclusion of 500 and 504, are
   reasoning rather than observation. Worth revisiting if the logs ever show one.
@@ -232,6 +264,12 @@ single one — otherwise the multi-member case falls straight back to today's br
   source is one tool call's own transport tasks, whose leaves describe the same dead connection.
   The first leaf tells the same story, and the selection rule would have forced splitting
   `resolve_exception` in two.
+
+**The verdict weighs every leaf, for the same reason.** Retrying may help only when every leaf is
+one the in-process retry covers. Retry later applies only when every leaf may clear with time — a
+transport failure other than a read timeout, a 429, or a 5xx. Anything else means retrying will not
+help. The failure kind and the HTTP status in the relayed message come from the first leaf, like
+the turn-level message.
 
 **Cancellation needs no special case.** Probed: a group holding any `BaseException` — and
 `asyncio.CancelledError` is one — is a `BaseExceptionGroup`, for which `isinstance(group, Exception)`
@@ -330,6 +368,8 @@ an error `ToolMessage` with what content, or a raised turn.
   a retry that **succeeds**, asserting the log record exists even though the turn looks normal; and
   an assertion that the relayed message contains no endpoint, which is the requirement the rejected
   `on_failure="continue"` violated.
+- **One case added during implementation:** a read timeout, called once and relayed as not worth
+  retrying (decision 3).
 - **Cases deliberately dropped:** an unknown tool name, and arguments violating the schema — the
   model can only pick from advertised tools with schema-conforming arguments, so neither is
   reachable through the agent. Image and audio error payloads — for text-only errors the two
@@ -418,6 +458,10 @@ Recorded here because it is real and this change does not do it:
   caps at two repeats, so the merged specs would have asserted both. Its requirement is carried in
   full in this change's `research-execution` delta, with that scenario rewritten and a second one
   added for failures that never reach the server.
+- **A call whose response stream stops after its headers hangs** (decision 1b), as it does before
+  this change. The fix is either the `mcp` 2.x upgrade — 2.2.0 fails such a request, and it brings
+  `httpx2`, so it belongs with the upgrade in Non-Goals — or a session `read_timeout_seconds` set
+  above the longest real tool call, with a verdict chosen for it.
 
 ## Risks / Trade-offs
 
@@ -444,7 +488,9 @@ Recorded here because it is real and this change does not do it:
   bump could change or remove it. Mitigations: the harness fails loudly if the relayed message or
   the retry count changes shape, and decision 1 names `ToolErrorMiddleware` as the public
   replacement to adopt once the upgrade lands. Accepted for now because the alternative is
-  upgrading before the harness exists.
+  upgrading before the harness exists. The retry log records rest on one more internal behaviour:
+  the parent calling the handler it is given once per attempt. The harness case for a retry that
+  succeeds fails if that changes.
 - **A retried tool call is not idempotent in principle.** Accepted: the MCP tools in scope are
   reads, and the failures retried are ones where the request provably did not reach the server or
   was refused by a gateway before it did.

@@ -20,9 +20,10 @@ now with a second, independently triggered instance.
 - Two in-process retries precede that, for the narrow class of failures a fresh attempt fixes,
   on a growing backoff of about a second and then two. A retry costs one more invocation of the
   tool and no tokens; handing the same decision to the model costs a full agent round-trip, which
-  in the recorded incident was 52,455 input tokens and 4.7 seconds. The transport's own timeouts
-  are set at the same time, since the budget multiplies them and the defaults are chosen for a
-  single attempt.
+  in the recorded incident was 52,455 input tokens and 4.7 seconds. The transport's connect
+  timeout drops from 30 to 5 seconds at the same time, since the budget multiplies it. A read
+  timeout is not retried: it means nothing arrived for five minutes, so the path is stuck rather
+  than slow.
 - Rate limiting is deliberately **not** retried in process — the retries span about three seconds
   against a `Retry-After` of seconds to minutes, and each attempt on a refusing limiter can burn
   quota. It reaches the agent instead, marked as worth returning to later, so the agent gathers
@@ -84,17 +85,18 @@ now with a second, independently triggered instance.
 Code:
 
 - `src/dial_deep_research/app/mcp_tools.py` — remove `enable_tool_error_handling` and its call
-  site, the explicit clearing of the handler on the application-called tool staying; and set the
-  transport's own `timeout` and `sse_read_timeout` on each connection in `build_mcp_client`,
-  which today inherits the adapter's 30 s and 300 s defaults.
+  site, the explicit clearing of the handler on the application-called tool staying; and set
+  `timeout` to 5 s and `sse_read_timeout` explicitly to the adapter's 300 s on each connection in
+  `build_mcp_client`.
 - `src/dial_deep_research/app/error_resolution.py` — unwrap before normalization.
 - `src/dial_deep_research/app/research/nodes.py` — the research-agent middleware list.
 - `src/dial_deep_research/app/playground/agent.py` — the playground middleware list.
 - `src/dial_deep_research/app/research/prompts.py` — four prompts: research-agent,
   research-review, the report node, and `REPORT_REVIEW_SYSTEM_PROMPT`, whose closed checklist is
   what would otherwise leave the report's new boundary unenforced.
-- A new module for the `ToolRetryMiddleware` subclass that composes the relayed message and emits
-  the retry and failure log records — the prebuilt's `on_failure` hook cannot do either.
+- `src/dial_deep_research/app/tool_failures.py`, a new module for the `ToolRetryMiddleware`
+  subclass that composes the relayed message and emits the retry and failure log records — the
+  prebuilt's `on_failure` hook cannot do either.
 - The retry predicate and the unwrap helper; `error_resolution.py` owns classification already and
   is the design's choice for both.
 

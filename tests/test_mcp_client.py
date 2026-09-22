@@ -132,10 +132,29 @@ def test_multiple_servers_build_independent_connections(monkeypatch: MonkeyPatch
     assert client.connections["datasets"]["headers"] == {"api-key": "k"}
 
 
+def test_every_connection_sets_its_own_timeouts(monkeypatch: MonkeyPatch) -> None:
+    """The tool-call retry multiplies these, so neither mode inherits the adapter's defaults."""
+    monkeypatch.setattr(tools_mod.settings, "dial_url", HttpUrl("http://core:8080"))
+
+    client = build_mcp_client(
+        [_deployment_server(server_name="rag"), _direct_server(server_name="datasets")]
+    )
+
+    for server_name in ("rag", "datasets"):
+        assert client.connections[server_name]["timeout"] == 5
+        assert client.connections[server_name]["sse_read_timeout"] == 300
+
+
+def _adapter_error_handler(error: Exception) -> str:
+    """Stands in for the handler langchain-mcp-adapters installs on every tool it builds."""
+    return str(error)
+
+
 def _fake_tool(name: str) -> Any:
-    # load_mcp_tools only reads `.name` (sort key), `.args_schema` (hoist step, skipped for
-    # non-dict), and sets `.handle_tool_error`; a namespace satisfies all three.
-    return SimpleNamespace(name=name, args_schema=None, handle_tool_error=False)
+    # load_mcp_tools reads `.name` (sort key) and `.args_schema` (hoist step, skipped for
+    # non-dict), and clears `.handle_tool_error` on the file-sharing tool; a namespace satisfies
+    # all three.
+    return SimpleNamespace(name=name, args_schema=None, handle_tool_error=_adapter_error_handler)
 
 
 def _patch_get_tools(monkeypatch: MonkeyPatch, tools_by_server: dict[str, list[Any]]) -> None:
@@ -233,7 +252,7 @@ async def test_a_filter_omitting_the_file_sharing_tool_still_finds_it_for_the_ap
     assert loaded.file_sharing_tool.name == "share_documents"
 
 
-async def test_error_handling_is_off_on_the_file_sharing_tool_and_on_for_the_agents(
+async def test_error_handling_is_off_on_the_file_sharing_tool_and_the_adapters_on_the_agents(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """The adapter installs an error handler on every tool; the app needs the failure itself."""
@@ -243,7 +262,7 @@ async def test_error_handling_is_off_on_the_file_sharing_tool_and_on_for_the_age
 
     assert loaded.file_sharing_tool is not None
     assert loaded.file_sharing_tool.handle_tool_error is False
-    assert [t.handle_tool_error for t in loaded.agent_tools] == [True]
+    assert [t.handle_tool_error for t in loaded.agent_tools] == [_adapter_error_handler]
 
 
 async def test_a_configured_tool_the_server_does_not_advertise_is_reported_as_absent(
@@ -323,7 +342,7 @@ async def test_the_dataset_metadata_tool_keeps_the_agents_error_handling(
     loaded = await load_mcp_tools([_dataset_metadata_server()])
 
     assert loaded.dataset_metadata_tool is not None
-    assert loaded.dataset_metadata_tool.handle_tool_error is True
+    assert loaded.dataset_metadata_tool.handle_tool_error is _adapter_error_handler
 
 
 async def test_a_configured_dataset_tool_the_server_does_not_advertise_is_reported_as_absent(
