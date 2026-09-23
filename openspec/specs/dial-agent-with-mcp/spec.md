@@ -608,8 +608,14 @@ whether an exception reaches the top-level handler or a known turn-aborting cond
 `code`, error `type`, internal message, and user-safe `display_message`) extracted best-effort
 from the supported exception shapes (`openai` LLM errors, `aidial_sdk.exceptions.HTTPException`,
 raw `httpx` errors); normalization SHALL be total — a malformed or absent error body yields an
-empty view, never a second exception. The app SHALL then choose the user-facing message by a fixed
-precedence, most-specific first:
+empty view, never a second exception. A failure a concurrency runtime has wrapped SHALL be resolved
+to the failure the wrapper holds before **any** of this resolution runs, per **A failure wrapped
+by a concurrency runtime is unwrapped before classification** in the **tool-call-fault-tolerance**
+capability. The unwrapped failure SHALL be what every step below sees, not only the extraction of
+the common view: the precedence rules that follow test the failure's own type as well as the
+extracted status, so unwrapping for extraction alone would still leave them matching a wrapper and
+still reach the generic fallback as if the cause were unknown. The app SHALL then choose the
+user-facing message by a fixed precedence, most-specific first:
 
 1. the upstream's own `display_message`, used verbatim (rendered as plain text and length-capped),
    with nothing appended;
@@ -664,10 +670,11 @@ top-level handler and resolve through the status/type map to a service message, 
 reported as "not configured".
 
 **Absorbed failures are unaffected.** Failures that are deliberately swallowed and never abort the
-turn SHALL NOT trigger this path: per-tool errors caught by `handle_tool_error` (surfaced as a stage
-marked ❌), a failed report-review call and a failed report revision once a draft exists (both
-absorbed by the report loop, which delivers a draft instead), Opik-tracing failures, and
-image-rehydration failures. These continue to let the
+turn SHALL NOT trigger this path: a failing tool call, which the **tool-call-fault-tolerance**
+capability retries where that helps and otherwise delivers to the agent as an error result
+(surfaced as a stage marked ❌), a failed report-review call and a failed report revision once a
+draft exists (both absorbed by the report loop, which delivers a draft instead), Opik-tracing
+failures, and image-rehydration failures. These continue to let the
 turn complete normally.
 
 #### Scenario: Upstream failure carrying a display message
@@ -690,6 +697,13 @@ turn complete normally.
 - **THEN** the resolved user-facing text SHALL be the service network-error message with the "try
   again later" sentence appended plus the error reference, classified retryable — never the
   generic non-retryable HTTP message
+
+#### Scenario: A wrapped failure resolves to its real cause
+- **WHEN** a turn-aborting failure reaches the top-level handler wrapped in a concurrency runtime's
+  container — for example an HTTP 502 raised inside a task group
+- **THEN** the app SHALL resolve it to the message and retryable classification of the 502 (the
+  retryable service internal-error message), and SHALL NOT resolve it to the generic non-retryable
+  fallback on the grounds that the wrapper matches no supported exception shape
 
 #### Scenario: Context-length and content-filter causes get actionable text
 - **WHEN** the model rejects the request with `code: "context_length_exceeded"` or
