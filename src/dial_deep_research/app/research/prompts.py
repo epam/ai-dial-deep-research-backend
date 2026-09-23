@@ -153,9 +153,8 @@ line, `Verdict: <verdict>`. Act on the verdict:
   another tool, or continue without it.
 
 A failed result with no verdict line is one of two things. A result starting "Tool result
-dropped" is the image-budget error described above: handle it as that item says, and do not call
-the tool again for the same image. Any other is the tool's own error message, often about the
-arguments you sent: correct what it names and call the tool again.
+dropped" is the image-budget error described above. Any other is the tool's own error message,
+often about the arguments you sent: correct what it names and call the tool again.
 
 Whatever the result says, call a failed tool **at most two more times** for the same evidence.
 Once those two repeat calls are spent, stop calling that tool for that evidence: get it from
