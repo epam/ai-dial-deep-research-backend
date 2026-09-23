@@ -1,8 +1,7 @@
 ## Context
 
-See `proposal.md` — Why, for the motivation and the recorded incident. This section carries only
-the mechanics that constrain the approach, all of them read from the installed source rather than
-inferred.
+See `proposal.md` — Why, for the motivation. This section carries only the mechanics that
+constrain the approach, all of them read from the installed source rather than inferred.
 
 **Why a tool failure escapes today.** `BaseTool.arun` (`langchain_core` 1.4.9,
 `tools/base.py:1211-1226`) has three `except` branches. `ValidationError` and `ToolException`
@@ -20,8 +19,8 @@ catches the re-raise.
 **Why sibling results are lost.** `ToolNode._afunc` fans out with `asyncio.gather` and no
 `return_exceptions` (`tool_node.py:858`). Probed: `gather` propagates the **chronologically**
 first failure — not the first in argument order — and does not cancel its siblings, which run to
-completion with their results discarded. That matches the incident exactly, where two sibling
-`query_datasets` calls finished on the server 15 and 17 seconds after the turn had died.
+completion with their results discarded. That is the observed symptom: sibling calls run to
+completion on the server after the turn has already died.
 
 **Why the failure arrives wrapped.** The MCP streamable-HTTP client runs its request inside an
 anyio task group (`mcp/client/streamable_http.py:647`), which raises one container per failed
@@ -87,12 +86,12 @@ research-agent and playground graphs — three attempts per agent-level call, on
 default backoff of roughly 1 s before the first retry and 2 s before the second (±25% jitter, per
 `calculate_delay` in `middleware/_retry.py`).
 
-**Not `on_failure="continue"`, which was the first draft and is unusable.** Its default formatter
-is `f"Tool '{tool_name}' failed after {n} {attempt_word} with {exc_type}: {exc_msg}. Please try
-again."` where `exc_msg = str(exc)` (`middleware/tool_retry.py:249-255`). For the recorded incident
-that string is the internal cluster endpoint and the deployment id — exactly what decision 6 and
-the relay requirement forbid. The leak would not stop at the model either: the runner passes the
-`ToolMessage` content into the stage body (`app/research/runner.py:820-826`) and
+**Not `on_failure="continue"`, which was the first draft and is unusable.** Its default formatter is
+`f"Tool '{tool_name}' failed after {n} {attempt_word} with {exc_type}: {exc_msg}. Please try
+again."` where `exc_msg = str(exc)` (`middleware/tool_retry.py:249-255`). For a 502 raised through
+DIAL Core that string is the internal cluster endpoint and the deployment id — exactly what
+decision 6 and the relay requirement forbid. The leak would not stop at the model either: the
+runner passes the `ToolMessage` content into the stage body (`app/research/runner.py:820-826`) and
 `_render_output_section` falls back to `str(content)` (`utils/dial_stages.py:277-283`), so the
 endpoint would render in the chat UI under an **Error** heading. The same formatter also appends
 "Please try again." unconditionally, contradicting the will-not-help verdict.
@@ -132,9 +131,9 @@ seconds for a tool that is simply down is absorbed inside a research step that a
 longer, and an untuned default is one fewer number to justify and keep current.
 
 - *Rejected: no in-process retry, the agent decides everything.* The agent cannot wait — it has no
-  sleep — so its only "retry" is an immediate one, and that costs a full model round-trip: 52,455
-  input tokens and 4.7 seconds in the recorded incident, plus a step against the graph budget. The
-  middleware does the same thing for one HTTP request.
+  sleep — so its only "retry" is an immediate one, and that costs a full model round-trip: tens
+  of thousands of input tokens and several seconds on a turn several iterations deep, plus a step
+  against the graph budget. The middleware does the same thing for one HTTP request.
 - *Rejected: `ToolRetryMiddleware(on_failure="error")` plus `ToolErrorMiddleware`,* as issue #53
   proposes. `ToolErrorMiddleware` needs `langchain>=1.3.14` and we run 1.3.12, and the
   `on_failure="continue"` path already returns the error `ToolMessage` for both the
@@ -237,9 +236,9 @@ httpx refused to send) and `ProxyError` (a proxy that refused the tunnel).
   call, 45 with research-agent's allowance. It is relayed with the will-not-help verdict — the
   user's choice over retry-later, which would still let research-agent spend two more waits of up
   to 300 s each.
-- **Evidence note:** 502 is evidence-backed (the incident's next connection succeeded 16 ms later)
-  and connect timeout is issue #53's observed case. 503, and the exclusion of 500 and 504, are
-  reasoning rather than observation. Worth revisiting if the logs ever show one.
+- **Evidence note:** 502 is evidence-backed (observed: the next connection after a reset succeeded
+  milliseconds later) and connect timeout is issue #53's observed case. 503, and the exclusion of
+  500 and 504, are reasoning rather than observation. Worth revisiting if the logs ever show one.
 
 ### 4. The unwrap helper lives in `error_resolution.py`
 
@@ -282,7 +281,7 @@ change does not "fix" it.
 Tool name, exception class name, HTTP status where there is one, and an explicit verdict on
 whether retrying now helps.
 
-- *Rejected: relaying `str(exc)`.* The incident's real message is
+- *Rejected: relaying `str(exc)`.* An httpx 502 raised through DIAL Core reads
   `Server error '502 Bad Gateway' for url 'http://<internal-service>/v1/deployments/<id>/mcp'` — an
   internal cluster endpoint and a deployment identifier, going into a conversation that is both
   model-visible and persisted. It also would not work: for the `ExceptionGroup` the string is
@@ -318,11 +317,11 @@ The two budgets multiply, and the prompt must not imply otherwise. Each call res
 already carries the middleware's three requests, so for a **retryable** failure that never
 recovers the totals are `(1 + agent retries) × 3`:
 
-| Agent budget | Requests to the server | Backoff time | Extra model round-trips | Extra input tokens at the incident's measured 52k per call |
+| Agent budget | Requests to the server | Backoff time | Extra model round-trips | Extra input tokens at an assumed 50k per call |
 | --- | --- | --- | --- | --- |
-| 1 | 6 | ~6 s | 1 | ~52,000 |
-| 2 (chosen) | 9 | ~9 s | 2 | ~104,000 |
-| 3 | 12 | ~12 s | 3 | ~156,000 |
+| 1 | 6 | ~6 s | 1 | ~50,000 |
+| 2 (chosen) | 9 | ~9 s | 2 | ~100,000 |
+| 3 | 12 | ~12 s | 3 | ~150,000 |
 
 Nine requests for one dead gateway looks large and is cheap: they carry no tokens, and the wall
 clock is split between the backoff and the two model round-trips. The agent's retries earn their
@@ -371,10 +370,10 @@ an error `ToolMessage` with what content, or a raised turn.
 - **Cases**, narrowed by the user: an `isError=True` text result; a transport failure; an
   `ExceptionGroup`-wrapped 502 retried exactly twice; a 429 **not** retried in process; a
   server-side exception. Three more that the requirements make load-bearing: a parallel batch where
-  one call fails and the siblings' results still reach the agent (the incident's headline symptom);
-  a retry that **succeeds**, asserting the log record exists even though the turn looks normal; and
-  an assertion that the relayed message contains no endpoint, which is the requirement the rejected
-  `on_failure="continue"` violated.
+  one call fails and the siblings' results still reach the agent (the headline symptom of this
+  failure); a retry that **succeeds**, asserting the log record exists even though the turn looks
+  normal; and an assertion that the relayed message contains no endpoint, which is the requirement
+  the rejected `on_failure="continue"` violated.
 - **One case added during implementation:** a read timeout, called once and relayed as not worth
   retrying (decision 3).
 - **Cases deliberately dropped:** an unknown tool name, and arguments violating the schema — the

@@ -1,11 +1,11 @@
 ## Why
 
 One failing MCP tool call ends the whole research turn, discarding every completed iteration and
-every sibling tool result. On 2026-09-21 a single TCP connection reset between DIAL Core and an
-MCP server produced one HTTP 502, which ended a turn after 367 seconds and four completed research
-iterations; the two sibling tool calls were never cancelled and finished on the server with nobody
-left to receive them; and the user got a bare failure message in place of a report, for a blip
-that the next connection, 16 milliseconds later, did not hit.
+every sibling tool result. A single TCP connection reset between DIAL Core and an MCP server is
+enough: it produces one HTTP 502, which ends a turn several minutes and several completed
+iterations in. The sibling tool calls are never cancelled and finish on the server with nobody left
+to receive them, and the user gets a bare failure message in place of a report, for a blip that
+the next connection, milliseconds later, does not hit.
 
 The agent has no way to react to a failed tool because the failure never reaches it. Every
 transport failure escapes as an exception instead of arriving as a tool result, so the model can
@@ -20,10 +20,10 @@ now with a second, independently triggered instance.
 - Two in-process retries precede that, for the narrow class of failures a fresh attempt fixes,
   on a growing backoff of about a second and then two. A retry costs one more invocation of the
   tool and no tokens; handing the same decision to the model costs a full agent round-trip, which
-  in the recorded incident was 52,455 input tokens and 4.7 seconds. The transport's connect
-  timeout drops from 30 to 5 seconds at the same time, since the budget multiplies it. A read
-  timeout is not retried: it means nothing arrived for five minutes, so the path is stuck rather
-  than slow.
+  on a turn several iterations deep is tens of thousands of input tokens and several seconds. The
+  transport's connect timeout drops from 30 to 5 seconds at the same time, since the budget
+  multiplies it. A read timeout is not retried: it means nothing arrived for five minutes, so the
+  path is stuck rather than slow.
 - Rate limiting is deliberately **not** retried in process — the retries span about three seconds
   against a `Retry-After` of seconds to minutes, and each attempt on a refusing limiter can burn
   quota. It reaches the agent instead, marked as worth returning to later, so the agent gathers
@@ -33,14 +33,11 @@ now with a second, independently triggered instance.
 - Failures wrapped by a concurrency runtime's exception group are unwrapped before anything
   classifies them. The MCP client runs its request inside a task group, so what escapes today is a
   wrapper that matches no exception type and whose message names no cause. The same unwrap
-  corrects turn-level classification, which recorded the incident's 502 as non-retryable and
-  resolved it to the generic unknown-failure message rather than the retryable service one. That
+  corrects turn-level classification, which records a wrapped 502 as non-retryable and resolves
+  it to the generic unknown-failure message rather than the retryable service one. That
   misclassification is carried in the turn's single error log record and in the `code` and `type`
-  propagated to whatever called the app. The reader is shown a failure either way: where this app
-  runs behind another that calls it as a tool, that caller appends its own fixed text to the
-  choice, identical for every Deep Research failure. So the reader sees a message but never one
-  that varies with the classification, which is why a month of wrong classifications went
-  unnoticed.
+  propagated to whatever called the app. A caller that wraps this app's errors in fixed text of
+  its own hides the classification from the reader, so a wrong classification is easy to miss.
 - The error message relayed to the agent is constructed rather than copied: the tool name, the
   exception class, the HTTP status where there is one, and a verdict on retrying — one of three,
   since retrying now, retrying after other work, and not retrying at all call for different next
@@ -70,8 +67,8 @@ now with a second, independently triggered instance.
 
 - `dial-agent-with-mcp`: the **Failures delivered as DIAL protocol errors** requirement enumerates
   the exception shapes its normalization supports. A failure arriving inside a task-group wrapper
-  matches none of them and resolves to the generic non-retryable fallback, which is what produced
-  the wrong classification in the incident. Normalization must reach the wrapped failure.
+  matches none of them and resolves to the generic non-retryable fallback, which is a wrong
+  classification for a wrapped 502. Normalization must reach the wrapped failure.
 - `research-execution`: the researcher's and the reviewer's behaviour when a tool call fails is
   currently unspecified. The researcher gets one action per verdict — retry now, do other work and
   come back, or use another source — under a stated retry allowance that counts across the whole
