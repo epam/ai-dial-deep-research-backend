@@ -104,8 +104,8 @@ _API_VERSION = "2025-04-01-preview"
 
 
 class LLMModelConfig(BaseModel):
-    deployment: LLMModelsEnum = Field(default=LLMModelsEnum.GPT_5_4_2026_03_05)
-    reasoning_effort: ReasoningEffortEnum | None = Field(default=None)
+    deployment: LLMModelsEnum = Field(default=LLMModelsEnum.GPT_5_6_TERRA)
+    reasoning_effort: ReasoningEffortEnum | None = Field(default=ReasoningEffortEnum.NONE)
     verbosity: VerbosityEnum | None = Field(default=None)
 
 
