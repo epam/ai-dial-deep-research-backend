@@ -35,6 +35,7 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
 from dial_deep_research.app.middleware import ImageBudgetMiddleware
+from dial_deep_research.app.tool_failures import RetryVerdict, ToolFailureMiddleware
 from dial_deep_research.app_properties import ReportSection
 from dial_deep_research.settings import settings
 from dial_deep_research.utils.agent_logging import agent_logging_middleware
@@ -102,6 +103,9 @@ def build_research_agent(tools: list[BaseTool], today_date: str, client_name: st
             # rules itself.
             rule_once_per_turn=RULE_ONCE_PER_TURN,
             rule_never_alone=RULE_NEVER_ALONE,
+            verdict_retry_now=RetryVerdict.RETRY_NOW,
+            verdict_retry_later=RetryVerdict.RETRY_LATER,
+            verdict_will_not_help=RetryVerdict.WILL_NOT_HELP,
         ),
         middleware=[
             *agent_logging_middleware("research-agent"),
@@ -109,6 +113,7 @@ def build_research_agent(tools: list[BaseTool], today_date: str, client_name: st
             ForceToolChoiceMiddleware(),
             ImageBudgetMiddleware(limit=settings.max_context_images),
             IterationCounterMiddleware(),
+            ToolFailureMiddleware(),
         ],
     )
 

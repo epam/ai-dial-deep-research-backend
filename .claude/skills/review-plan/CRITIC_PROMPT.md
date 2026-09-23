@@ -99,6 +99,16 @@ Structural validation has already run, so ignore formatting and check semantics:
 - `MODIFIED` requirement blocks reproduce the full original requirement from
   `openspec/specs/<capability>/spec.md`, not a truncated version.
 - The proposal's Impact list matches the files the design actually touches.
+- **No requirement in the change contradicts another requirement in the same
+  change.** Check the new capabilities' requirements against each other and
+  against the deltas, not only against what already exists. Drafting is
+  iterative: a revision that changes a budget, a threshold, a set of accepted
+  values or the name of a state usually edits some of the requirements that
+  state it and leaves the rest asserting the superseded rule. Each one then
+  reads fine alone.
+- **Every figure repeated across artifacts agrees** — counts, budgets, limits,
+  timings, cost estimates. A number restated in the proposal, the design and a
+  spec is three places to update and the likeliest thing to be left stale.
 - No requirement contradicts an existing requirement in `openspec/specs/`.
 
 ## Output format

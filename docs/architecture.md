@@ -129,7 +129,7 @@ flowchart TD
     subgraph research_agent_sub["research-agent node — one iteration, a create_agent loop"]
         model["Model call<br/>tool_choice = any → it must call a tool"]
         model --> which{"which tool<br/>did it call?"}
-        which -->|"an MCP tool"| mcp["The tool runs; its result is<br/>appended to the transcript"]
+        which -->|"an MCP tool"| mcp["The tool runs; its result, or an<br/>error result with a retry verdict,<br/>is appended to the transcript"]
         mcp --> model
         which -->|"update_status, alongside<br/>the step's first real tool call"| status["The runner replaces the open<br/>activity stage with this title;<br/>no result stage, no research done"]
         status --> model
@@ -376,8 +376,29 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   24 at the default caps; the same formula gives 20 for a version budget of one, where the single
   report call is never reviewed. A research-agent that never calls `finish_iteration` exhausts the budget
   and the turn fails through the DIAL error protocol rather than returning a half-finished answer. A
-  tool *error* does not end an iteration — it comes back as an error `ToolMessage` research-agent
-  may retry from.
+  failed tool call ends neither the iteration nor the turn; see the next item.
+- **Tool failures** (the
+  [tool-call-fault-tolerance](../openspec/specs/tool-call-fault-tolerance/spec.md) spec): a failed
+  tool call reaches research-agent as an error `ToolMessage`. `ToolFailureMiddleware`
+  (`app/tool_failures.py`, also on the playground agent) handles each call below the tool node's
+  fan-out, so the other calls of the same step keep their results. It retries a transient
+  transport failure — a connection that failed or timed out while connecting, was reset, or died
+  mid-response — or an HTTP 502 or 503, twice, about one and then two seconds apart. A read timeout
+  means nothing arrived for the whole 300-second read bound, which from a server built on the `mcp`
+  SDK, pinging its stream every 15 seconds while a tool runs, marks a stuck path; it is relayed at
+  once as not worth retrying. Every other failure, and one
+  whose retries are spent, it relays as a message the app composes — the tool, the failure kind,
+  the HTTP status, and one of three verdicts: retrying may help, retry later, retrying will not
+  help — never the failure's own text, which names internal endpoints. Research-agent acts on the
+  verdict within an allowance of two repeat calls to the failed tool across the whole research.
+  Research-review does not plan the missing evidence again, and the report states that it could not
+  be retrieved when the answer depends on it. The failure is classified by what the `ExceptionGroup`
+  raised by the MCP client holds, not by the group. A result the MCP server itself marks as an error
+  does not raise: the adapter converts it, and it arrives with the server's own content and no
+  verdict. A retried call still renders as one stage and one tool result; a WARNING record is its
+  only trace. A tool whose response stream falls silent after its headers for longer than that bound
+  is not failed at all: `mcp` 1.x logs the read timeout at DEBUG and leaves the call waiting, so
+  the iteration waits with it.
 - **Image budget** (the [image-budget](../openspec/specs/image-budget/spec.md) spec): image-carrying
   tool results over the budget are substituted before each model call, so no request exceeds the
   provider's per-request image limit.
