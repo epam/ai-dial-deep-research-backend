@@ -114,6 +114,11 @@ def _summarize(e: Exception) -> _FailureSummary:
 
 
 def _render_failure_message(*, tool_name: str, summary: _FailureSummary) -> str:
+    """The error result the agent receives: the tool, the failure kind, the status, a verdict.
+
+    Composed only from those parts, never from the failure's own text, which can carry an
+    internal endpoint or a deployment identifier.
+    """
     if summary.verdict is RetryVerdict.RETRY_NOW:
         advice = _RETRY_NOW_ADVICE
     elif summary.verdict is RetryVerdict.RETRY_LATER:
@@ -126,15 +131,6 @@ def _render_failure_message(*, tool_name: str, summary: _FailureSummary) -> str:
         else summary.kind
     )
     return f"Tool `{tool_name}` failed: {cause}.\nVerdict: {summary.verdict}. {advice}"
-
-
-def compose_failure_message(*, tool_name: str, error: Exception) -> str:
-    """The error result the agent receives: the tool, the failure kind, the status, a verdict.
-
-    Composed only from those parts, never from the failure's own text, which can carry an
-    internal endpoint or a deployment identifier.
-    """
-    return _render_failure_message(tool_name=tool_name, summary=_summarize(error))
 
 
 class ToolFailureMiddleware(ToolRetryMiddleware):
@@ -162,7 +158,7 @@ class ToolFailureMiddleware(ToolRetryMiddleware):
         summary = _summarize(exc)
         logger.warning(
             "Tool call failed and was relayed to the agent: tool=%s failure=%s status=%s "
-            "attempts=%d verdict=%s",
+            "attempts_made=%d verdict=%s",
             tool_name,
             summary.kind,
             summary.status,
@@ -176,23 +172,9 @@ class ToolFailureMiddleware(ToolRetryMiddleware):
             status="error",
         )
 
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
-    ) -> ToolMessage | Command[Any]:
-        tracker = _AttemptTracker(tool_name=_tool_name(request))
-
-        def attempt(req: ToolCallRequest) -> ToolMessage | Command[Any]:
-            tracker.start()
-            try:
-                return handler(req)
-            except Exception as exc:
-                tracker.failed(exc)
-                raise
-
-        return super().wrap_tool_call(request, attempt)
-
+    # Only the async hook is overridden, because every agent this middleware serves runs
+    # asynchronously. A synchronous run falls back to the prebuilt's `wrap_tool_call`, which still
+    # retries and relays through `_handle_failure` but writes no retry record.
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,

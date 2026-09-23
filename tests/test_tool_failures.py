@@ -1,24 +1,25 @@
-"""Unit tests for `ToolFailureMiddleware` and the relayed message it composes.
+"""Unit tests for `ToolFailureMiddleware`, the verdicts it gives and the message it relays.
 
 The retry loop is driven with a scripted handler, so these tests pin the attempt counts, the three
 verdicts and the log records without an agent or an MCP server. `test_tool_failure_harness.py`
 covers the same behaviour end to end.
 """
 
+import inspect
 import logging
+import re
 from collections.abc import Iterator
 from typing import Any
 
 import httpx
 import pytest
-from langchain.agents.middleware import tool_retry
+from langchain.agents.middleware import ToolRetryMiddleware, tool_retry
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
 
 from dial_deep_research.app.tool_failures import (
     RetryVerdict,
     ToolFailureMiddleware,
-    compose_failure_message,
     retry_verdict,
 )
 
@@ -38,7 +39,7 @@ def _connect_error() -> httpx.ConnectError:
     return httpx.ConnectError(f"connection refused by {_INTERNAL_URL}", request=_REQUEST)
 
 
-# --- Verdicts -----------------------------------------------------------------------------------
+# --- Verdicts -------------------------------------------------------------------------------------
 
 
 def test_a_transport_failure_may_help_to_retry() -> None:
@@ -89,86 +90,7 @@ def test_one_permanent_cause_in_a_group_decides_the_verdict() -> None:
     assert retry_verdict(mixed) is RetryVerdict.WILL_NOT_HELP
 
 
-# --- The composed message -----------------------------------------------------------------------
-
-
-def test_the_message_names_the_tool_the_failure_and_the_status() -> None:
-    text = compose_failure_message(tool_name="rag_search", error=_http_status_error(502))
-    assert "`rag_search`" in text
-    assert "HTTPStatusError" in text
-    assert "HTTP status 502" in text
-    assert "retrying may help" in text
-
-
-def test_a_wrapped_failure_is_named_by_what_the_group_holds() -> None:
-    text = compose_failure_message(
-        tool_name="rag_search", error=ExceptionGroup("tg", [_http_status_error(502)])
-    )
-    assert "HTTPStatusError (HTTP status 502)" in text
-    assert "ExceptionGroup" not in text
-    assert "TaskGroup" not in text
-
-
-def test_a_rate_limit_says_to_come_back_and_allows_a_direct_repeat() -> None:
-    text = compose_failure_message(
-        tool_name="query_datasets", error=_http_status_error(429, headers={"Retry-After": "37"})
-    )
-    assert "retry later" in text
-    assert "rate limited" in text
-    assert "Gather other evidence first" in text
-    assert "you may call it again now" in text
-    assert "37" not in text
-
-
-def test_a_server_error_says_to_come_back_without_claiming_a_rate_limit() -> None:
-    text = compose_failure_message(tool_name="query_datasets", error=_http_status_error(504))
-    assert "retry later" in text
-    assert "rate limited" not in text
-    assert "you may call it again now" in text
-
-
-def test_a_group_holding_a_rate_limit_gets_the_rate_limit_advice() -> None:
-    """The advice follows every cause, not the first one, which here carries no status."""
-    mixed = ExceptionGroup("tg", [_connect_error(), _http_status_error(429)])
-    text = compose_failure_message(tool_name="query_datasets", error=mixed)
-    assert "retry later" in text
-    assert "rate limited" in text
-    assert "server failed" not in text
-
-
-def test_a_rejected_request_says_not_to_repeat_the_call() -> None:
-    text = compose_failure_message(tool_name="query_datasets", error=_http_status_error(403))
-    assert "retrying will not help" in text
-    assert "Do not call this tool again" in text
-
-
-def test_a_failure_without_a_status_carries_none() -> None:
-    text = compose_failure_message(tool_name="rag_search", error=_connect_error())
-    assert "ConnectError" in text
-    assert "HTTP status" not in text
-
-
-@pytest.mark.parametrize(
-    "error",
-    [
-        _http_status_error(502),
-        _http_status_error(429),
-        _http_status_error(403),
-        _connect_error(),
-        ExceptionGroup("tg", [_http_status_error(502)]),
-        RuntimeError(f"unexpected failure calling {_INTERNAL_URL}"),
-    ],
-)
-def test_no_composed_message_carries_an_endpoint(error: Exception) -> None:
-    text = compose_failure_message(tool_name="rag_search", error=error)
-    assert "://" not in text
-    assert "internal-core" not in text
-    assert "cluster.local" not in text
-    assert "acme-rag-mcp" not in text
-    assert "/v1/deployments" not in text
-
-
-# --- The retry loop -----------------------------------------------------------------------------
+# --- Driving the middleware -----------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
@@ -204,6 +126,95 @@ async def _run(failures: list[Exception]) -> tuple[Any, int]:
     handler = _ScriptedHandler(failures)
     result = await ToolFailureMiddleware().awrap_tool_call(_request(), handler)
     return result, handler.attempts
+
+
+# --- The relayed message --------------------------------------------------------------------------
+
+
+async def _relayed(error: Exception, *, tool_name: str = "rag_search") -> str:
+    """The text the agent receives when every attempt fails with `error`."""
+    handler = _ScriptedHandler([error] * 3)
+    result = await ToolFailureMiddleware().awrap_tool_call(_request(tool_name=tool_name), handler)
+    assert isinstance(result, ToolMessage)
+    assert isinstance(result.content, str)
+    return result.content
+
+
+async def test_the_message_names_the_tool_the_failure_and_the_status() -> None:
+    text = await _relayed(_http_status_error(502))
+    assert "`rag_search`" in text
+    assert "HTTPStatusError" in text
+    assert "HTTP status 502" in text
+    assert "retrying may help" in text
+
+
+async def test_a_wrapped_failure_is_named_by_what_the_group_holds() -> None:
+    text = await _relayed(ExceptionGroup("tg", [_http_status_error(502)]))
+    assert "HTTPStatusError (HTTP status 502)" in text
+    assert "ExceptionGroup" not in text
+    assert "TaskGroup" not in text
+
+
+async def test_a_rate_limit_says_to_come_back_and_allows_a_direct_repeat() -> None:
+    text = await _relayed(
+        _http_status_error(429, headers={"Retry-After": "37"}), tool_name="query_datasets"
+    )
+    assert "retry later" in text
+    assert "rate limited" in text
+    assert "Gather other evidence first" in text
+    assert "you may call it again now" in text
+    assert "37" not in text
+
+
+async def test_a_server_error_says_to_come_back_without_claiming_a_rate_limit() -> None:
+    text = await _relayed(_http_status_error(504), tool_name="query_datasets")
+    assert "retry later" in text
+    assert "rate limited" not in text
+    assert "you may call it again now" in text
+
+
+async def test_a_group_holding_a_rate_limit_gets_the_rate_limit_advice() -> None:
+    """The advice follows every cause, not the first one, which here carries no status."""
+    mixed = ExceptionGroup("tg", [_connect_error(), _http_status_error(429)])
+    text = await _relayed(mixed, tool_name="query_datasets")
+    assert "retry later" in text
+    assert "rate limited" in text
+    assert "server failed" not in text
+
+
+async def test_a_rejected_request_says_not_to_repeat_the_call() -> None:
+    text = await _relayed(_http_status_error(403), tool_name="query_datasets")
+    assert "retrying will not help" in text
+    assert "Do not call this tool again" in text
+
+
+async def test_a_failure_without_a_status_carries_none() -> None:
+    text = await _relayed(_connect_error())
+    assert "ConnectError" in text
+    assert "HTTP status" not in text
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _http_status_error(502),
+        _http_status_error(429),
+        _http_status_error(403),
+        _connect_error(),
+        ExceptionGroup("tg", [_http_status_error(502)]),
+        RuntimeError(f"unexpected failure calling {_INTERNAL_URL}"),
+    ],
+)
+async def test_no_relayed_message_carries_an_endpoint(error: Exception) -> None:
+    text = await _relayed(error)
+    assert "://" not in text
+    assert "internal-core" not in text
+    assert "cluster.local" not in text
+    assert "acme-rag-mcp" not in text
+    assert "/v1/deployments" not in text
+
+
+# --- The retry loop -------------------------------------------------------------------------------
 
 
 async def test_a_502_is_attempted_three_times_then_relayed() -> None:
@@ -271,7 +282,7 @@ async def test_a_relayed_failure_logs_every_retry_and_the_relay(
     assert messages[1].endswith("failure=ConnectError status=None attempt=3")
     assert messages[2] == (
         "Tool call failed and was relayed to the agent: tool=rag_search failure=ConnectError "
-        "status=None attempts=3 verdict=RETRY_NOW"
+        "status=None attempts_made=3 verdict=RETRY_NOW"
     )
 
 
@@ -295,6 +306,57 @@ async def test_a_read_timeout_is_attempted_once_and_relayed() -> None:
     assert attempts == 1
     assert "ReadTimeout" in result.content
     assert "retrying will not help" in result.content
+
+
+# --- Agreement with the prebuilt's retry loop -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("failures", "expected_attempts", "relayed"),
+    [
+        ([_http_status_error(502)], 2, False),
+        ([_http_status_error(502)] * 3, 3, True),
+        ([_http_status_error(429)], 1, True),
+        ([_http_status_error(403)], 1, True),
+        ([_connect_error()] * 2, 3, False),
+    ],
+)
+async def test_the_log_records_agree_with_the_attempts_the_prebuilt_made(
+    caplog: pytest.LogCaptureFixture,
+    failures: list[Exception],
+    expected_attempts: int,
+    relayed: bool,
+) -> None:
+    """The retry records count the prebuilt's attempts, and the relay record carries its count.
+
+    The prebuilt runs the retry loop and the subclass only observes it, so the attempts the
+    handler saw, the attempt numbers the retry records carry, and the relay record's
+    `attempts_made` must all agree. A change in how the prebuilt calls the handler fails here.
+    """
+    caplog.set_level(logging.WARNING, logger="dial_deep_research.app.tool_failures")
+
+    _, attempts = await _run(failures)
+
+    messages = [r.getMessage() for r in caplog.records]
+    retry_records = [m for m in messages if m.startswith("Retrying tool call:")]
+    relay_records = [m for m in messages if m.startswith("Tool call failed and was relayed")]
+    assert attempts == expected_attempts
+    # Each retry record names the attempt it starts: the second, then the third.
+    retry_numbers = [int(re.findall(r"attempt=(\d+)", m)[-1]) for m in retry_records]
+    assert retry_numbers == list(range(2, attempts + 1))
+    if relayed:
+        assert len(relay_records) == 1
+        match = re.search(r"attempts_made=(\d+)", relay_records[0])
+        assert match is not None
+        assert int(match.group(1)) == attempts
+    else:
+        assert relay_records == []
+
+
+def test_the_prebuilt_still_offers_the_failure_hook_the_subclass_overrides() -> None:
+    """`_handle_failure` is private API of `ToolRetryMiddleware`; an upgrade may change it."""
+    parameters = list(inspect.signature(ToolRetryMiddleware._handle_failure).parameters)
+    assert parameters == ["self", "tool_name", "tool_call_id", "exc", "attempts_made"]
 
 
 def test_the_sync_path_retries_and_relays_too() -> None:

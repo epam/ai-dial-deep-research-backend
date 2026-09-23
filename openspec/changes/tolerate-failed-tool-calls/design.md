@@ -102,9 +102,12 @@ name, and `langchain_openai` strips `ToolMessage.name` before the request anyway
 `_handle_failure` is the one place `tool_name`, `exc` and `attempts_made` are in scope together
 (`tool_retry.py:257-259`), so it composes the message and logs the relayed failure. It cannot log a
 retry that succeeds, because such a retry never reaches it. So the subclass also overrides
-`wrap_tool_call` and `awrap_tool_call` to wrap the handler before handing it to the parent. The
-parent calls that handler once per attempt, so an attempt that starts after a failure is a retry,
-and the wrapper logs it there with the failure that caused it. `tool_retry.py` contains no logging
+`awrap_tool_call` to wrap the handler before handing it to the parent. The parent calls that
+handler once per attempt, so an attempt that starts after a failure is a retry, and the wrapper
+logs it there with the failure that caused it. Only the async hook is overridden, because every
+agent this middleware serves runs asynchronously; a synchronous run falls back to the parent's
+`wrap_tool_call`, which still retries and relays through `_handle_failure` but writes no retry
+record. `tool_retry.py` contains no logging
 at all, and no other middleware in this project implements `wrap_tool_call`. A subclass inherits
 the backoff, the budget and the `GraphBubbleUp` exclusion, so this does not reopen the rejection
 of a hand-written middleware below.
