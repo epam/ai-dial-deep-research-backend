@@ -50,8 +50,9 @@ now with a second, independently triggered instance.
   an MCP `isError` result into an error result and preserves its content blocks; the override
   replaces that with text only, silently dropping image or file content from a failed tool.
 - Four prompts are told how to behave when a tool failed, each differently: the researcher can
-  retry, the reviewer plans the next iteration, the report writer states the resulting gap in the
-  evidence, and the report reviewer gains the rule that keeps that gap from naming the tool.
+  retry, the reviewer treats the missing evidence as unavailable rather than planning it again,
+  the report writer must state that important evidence could not be retrieved, and the report
+  reviewer gains the rule that keeps that statement from naming the tool.
 - An integration test harness exercises the real path end to end against an in-process MCP server,
   because none of this behaviour is covered today and its failure mode is silence rather than a
   crash: a wrongly shaped retry predicate removes the retry without failing anything.
@@ -73,12 +74,13 @@ now with a second, independently triggered instance.
   the wrong classification in the incident. Normalization must reach the wrapped failure.
 - `research-execution`: the researcher's and the reviewer's behaviour when a tool call fails is
   currently unspecified. The researcher gets one action per verdict — retry now, do other work and
-  come back, or use another source — under a stated retry allowance; the reviewer treats evidence
-  missing because a tool failed as a gap it may plan work against.
+  come back, or use another source — under a stated retry allowance that counts across the whole
+  research; the reviewer treats evidence missing because a tool failed as unavailable, not as
+  work to plan again.
 - `report-composition`: the **Reports carry no meta-annotations about the research process**
   requirement bans stating the tool calls a run took, while the report must still be able to say
-  that something could not be established. The boundary needs stating: an unavailable source is
-  reported as a gap in the evidence, never as a tool failure or a count of attempts.
+  that something could not be established. The boundary needs stating: important evidence that
+  could not be retrieved must be reported as such, never as a tool failure or a count of attempts.
 
 ## Impact
 

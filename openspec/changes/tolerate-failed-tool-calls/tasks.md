@@ -31,11 +31,12 @@ all depend on these.
 
 ## 5. Prompts
 
-- [x] 5.1 Research-agent: a tool may fail, the result carries a verdict, one action per verdict, and an allowance of at most two repeat calls to the same failed tool, stated as a number
+- [x] 5.1 Research-agent: a tool may fail, the result carries a verdict, one action per verdict, and an allowance of at most two repeat calls to the same failed tool, stated as a number and counted across the whole research
 - [x] 5.2 Research-agent: the allowance is its own and is not the total number of attempts, so it must not reason about the in-process retries behind it
-- [x] 5.3 Research-review: a plan item may be uncovered because a tool failed rather than because research-agent skipped it, and that gap may be planned against in the next iteration
-- [x] 5.4 Report node: state an unreachable source as missing evidence and what cannot be concluded, never naming the tool, the failure or the attempt count
+- [x] 5.3 Research-review: a result saying a tool failed is not evidence, and the evidence it would have given is unavailable — not planned again and not counted as coverage; a result the image budget dropped is not a tool failure, and whether to plan its work again follows the rest of the findings and the slots the drop message reports
+- [x] 5.4 Report node: when evidence the answer or a plan item depends on could not be retrieved, state that and what cannot be concluded, never naming the tool, the error or the attempt count
 - [x] 5.5 `REPORT_REVIEW_SYSTEM_PROMPT`: add the same rule to its never-include list. Its checklist is closed — "Check exactly these" — so the boundary in 5.4 is unenforced without this
+- [x] 5.6 Research-agent: a no-verdict error that names no argument mistake is treated as not worth retrying, an image-budget drop is not a failed call, and a plan item whose only tool may no longer be called counts as done
 
 ## 6. Integration harness
 

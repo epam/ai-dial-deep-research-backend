@@ -297,16 +297,22 @@ prompt's "you may retry" would send it back at a 429.
 
 Findings are the accumulated tool results, not a file research-agent writes, so the three nodes
 need three different instructions: research-agent may retry and otherwise routes around;
-research-review treats a tool-caused gap as plannable work; the report node states the evidence
-gap.
+research-review treats the evidence as unavailable and does not plan it again; the report node
+states that it could not be retrieved when the answer depends on it.
 
 - *Rejected: one shared instruction.* Asking research-agent to record findings, or the report node
   to retry, would be instructions neither can act on.
+- *Rejected: research-review plans the missing evidence again,* the first draft. Research-agent
+  keeps its history across iterations, so a new plan item asking for evidence it has already
+  retried contradicts its allowance, and a model follows the explicit plan item. Each re-plan then
+  renews the allowance: up to 15 agent-level calls to one failed tool, and 45 invocations for a
+  failure retried in process, at the default cap of five iterations, where the allowance intends
+  three and nine.
 
 **The retry allowance is a number, not a judgement call.** Research-agent is told it may make at
-most two repeat calls to a failed tool. Leaving it unstated was considered and rejected: a model
-handed "retry if it seems worthwhile" retries a different number of times on every run, which is
-both untestable and unbounded in cost.
+most two repeat calls to a failed tool, counted across the whole research. Leaving it unstated
+was considered and rejected: a model handed "retry if it seems worthwhile" retries a different
+number of times on every run, which is both untestable and unbounded in cost.
 
 The two budgets multiply, and the prompt must not imply otherwise. Each call research-agent makes
 already carries the middleware's three requests, so for a **retryable** failure that never
@@ -333,9 +339,10 @@ call marked not worth retrying costs one request, since research-agent is told n
 all; there the allowance is a ceiling on a model that ignores the verdict, not an expected path.
 - **Constraint discovered during research:** the report node's instruction collides with
   **Reports carry no meta-annotations about the research process**, whose third scenario bans
-  stating the tool calls a run took. The wording must stay on the evidence ("this could not be
-  established") and never reach the run ("the tool failed twice"). The `report-composition` delta
-  pins that boundary.
+  stating the tool calls a run took. The wording must stay on the evidence ("the 2024 figure could
+  not be retrieved") and never reach the run ("the tool failed twice"). The `report-composition`
+  delta pins that boundary, and makes stating important missing evidence required rather than
+  permitted, so a reader is not left to take an incomplete report as complete.
 - **A fourth prompt, not three.** `REPORT_REVIEW_SYSTEM_PROMPT` (`app/research/prompts.py:317-352`)
   is a closed checklist — "Check exactly these", and "Your job is to find violations of the checks
   above, and nothing else" — and its never-include list covers confidence, complexity, times,
@@ -479,7 +486,9 @@ Recorded here because it is real and this change does not do it:
 - **The report leaks process detail** while trying to state a gap. Mitigation: the
   `report-composition` delta, plus adding the case to `REPORT_REVIEW_SYSTEM_PROMPT`'s never-include
   list. The review loop does **not** already cover it — its checklist is closed and names only
-  confidence, complexity, times and counts.
+  confidence, complexity, times and counts. The opposite failure, a report that leaves important
+  missing evidence unstated, has no mitigation beyond the report prompt: report-review does not
+  receive the findings, so it cannot tell that evidence is missing.
 - **503, 500 and 504 are classified on reasoning, not evidence** (decision 3). Mitigation: they are
   a small set, the cost of being wrong is one wasted request or one missed retry, and the logs will
   show which statuses actually occur.

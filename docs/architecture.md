@@ -390,8 +390,9 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   whose retries are spent, it relays as a message the app composes — the tool, the failure kind,
   the HTTP status, and one of three verdicts: retrying may help, retry later, retrying will not
   help — never the failure's own text, which names internal endpoints. Research-agent acts on the
-  verdict within an allowance of two repeat calls to the failed tool, and research-review may plan
-  a later iteration against the gap it left. The failure is classified by what the `ExceptionGroup`
+  verdict within an allowance of two repeat calls to the failed tool across the whole research.
+  Research-review does not plan the missing evidence again, and the report states that it could not
+  be retrieved when the answer depends on it. The failure is classified by what the `ExceptionGroup`
   raised by the MCP client holds, not by the group. A result the MCP server itself marks as an error
   does not raise: the adapter converts it, and it arrives with the server's own content and no
   verdict. A retried call still renders as one stage and one tool result; a WARNING record is its
