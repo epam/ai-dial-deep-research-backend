@@ -2,7 +2,8 @@
 
 The demo cites what the caller attached rather than files of its own. An attachment already
 lives in the caller's storage, so its URL is one the caller can open and nothing has to be
-copied anywhere: the annotation points straight at it.
+copied anywhere: the annotation points straight at it. Its labels carry the attachment's title,
+the name the chat shows for the file, so the pills read as a real report's do.
 
 Every reason an attachment cannot be used fails the turn with a message saying what to attach.
 An incomplete demonstration would be read as the citation mechanism misbehaving, so the demo
@@ -16,6 +17,7 @@ from io import BytesIO
 
 import httpx
 from aidial_sdk.chat_completion import Attachment, Request
+from pydantic import BaseModel
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
 
@@ -47,8 +49,19 @@ def _how_to_call_the_demo(problem: str) -> str:
     )
 
 
-async def resolve_documents(*, request: Request, client: httpx.AsyncClient) -> dict[int, str]:
-    """The URL of each document the report cites an attachment for, by document id.
+class AttachedDocument(BaseModel):
+    """One attachment standing in for a document the report cites."""
+
+    url: str
+    # The attachment's own title. `None` when it is unset or blank, and the citation is then
+    # labelled from its marker.
+    title: str | None
+
+
+async def resolve_documents(
+    *, request: Request, client: httpx.AsyncClient
+) -> dict[int, AttachedDocument]:
+    """The attachment behind each document the report cites one for, by document id.
 
     Raises:
         AnnotationsDemoUnavailableError: if the last message carries fewer usable PDFs than the
@@ -64,13 +77,14 @@ async def resolve_documents(*, request: Request, client: httpx.AsyncClient) -> d
             )
         )
 
-    urls: dict[int, str] = {}
+    documents: dict[int, AttachedDocument] = {}
     for document_id, attachment in zip(ATTACHED_DOCUMENT_IDS, attachments, strict=False):
         url = attachment.url
         assert url is not None  # _pdf_attachments keeps only attachments carrying a URL
-        await _check_depth(attachment=attachment, url=url, client=client, headers=headers)
-        urls[document_id] = url
-    return urls
+        documents[document_id] = await _read_attachment(
+            attachment=attachment, url=url, client=client, headers=headers
+        )
+    return documents
 
 
 def _pdf_attachments(request: Request) -> list[Attachment]:
@@ -90,10 +104,14 @@ def _pdf_attachments(request: Request) -> list[Attachment]:
     ]
 
 
-async def _check_depth(
+async def _read_attachment(
     *, attachment: Attachment, url: str, client: httpx.AsyncClient, headers: dict[str, str]
-) -> None:
-    """Fail the turn unless the attached PDF holds every page the report cites."""
+) -> AttachedDocument:
+    """The attached PDF, once it is known to hold every page the report cites.
+
+    Raises:
+        AnnotationsDemoUnavailableError: if the PDF cannot be read or is too shallow.
+    """
     name = attachment.title or url.rsplit("/", 1)[-1]
     content = await _download(url=url, client=client, headers=headers)
     try:
@@ -109,6 +127,7 @@ async def _check_depth(
                 f"{MIN_PAGES}."
             )
         )
+    return AttachedDocument(url=url, title=(attachment.title or "").strip() or None)
 
 
 async def _download(*, url: str, client: httpx.AsyncClient, headers: dict[str, str]) -> bytes:
