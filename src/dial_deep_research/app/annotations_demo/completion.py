@@ -8,8 +8,9 @@ waiting for a research turn and without a live retrieval server.
 Everything decidable from the text — the marker parsing, the run folding, the hyperlink removal,
 the tag replacement, the payload and its emission — is the shared citation code
 (`app/research/citations.py` and `utils/dial_annotations.py`). The one deliberate difference is
-where the file URLs come from: the demo cites the PDFs the caller attached, while a research turn
-will ask the configured file-sharing tool for them (see `attachments.py`).
+where the file URLs and titles come from: the demo cites the PDFs the caller attached, while a
+research turn asks the configured file-sharing tool and metadata resource for them (see
+`attachments.py`).
 
 Registered only when `ENABLE_ANNOTATIONS_DEMO` is set.
 """
@@ -57,9 +58,21 @@ class AnnotationsDemoCompletion(ChatCompletion):
         document_ids = cited_document_ids(without_links.text)
 
         async with httpx.AsyncClient() as client:
-            document_urls = await resolve_documents(request=request, client=client)
+            documents = await resolve_documents(request=request, client=client)
+        document_urls = {document_id: document.url for document_id, document in documents.items()}
+        document_titles = {
+            document_id: document.title
+            for document_id, document in documents.items()
+            if document.title
+        }
 
-        converted = convert_citations(without_links.text, document_urls=document_urls)
+        converted = convert_citations(
+            without_links.text,
+            document_urls=document_urls,
+            document_titles=document_titles,
+            # The demo shows every title whole, on the pill as on the popup card.
+            pill_title_max_chars=None,
+        )
         choice.append_content(converted.text)
         send_annotations(choice=choice, annotations=converted.annotations)
 
@@ -67,10 +80,8 @@ class AnnotationsDemoCompletion(ChatCompletion):
             _log,
             documents_requested=len(document_ids),
             documents_resolved=len(document_urls),
-            # The demo resolves no titles, so its pills read the marker text — the fallback
-            # label, which is a real outcome of the mechanism rather than a case of its own.
-            documents_titled=0,
-            # It cites no dataset either: it cites the caller's own attachments and holds no
+            documents_titled=len(document_titles),
+            # The demo cites no dataset: it cites the caller's own attachments and holds no
             # portal URL, so the only dataset citation it could show is one that fails to
             # convert, which the unresolved-document case already demonstrates.
             datasets_requested=0,
