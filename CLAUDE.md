@@ -59,6 +59,11 @@ Two modes:
 - `overwrite` — clear the file and start fresh with just this query
 - `continue` — load prior messages from the file, append this query, send, append the reply back
 
+Every turn's full response is also stored in `<stem>.raw.json` next to the messages file, one
+entry per turn: the query, the whole response in the blocking shape (including fields outside the
+message such as `statistics.usage_per_model`), and an `error` that is set when the turn failed. A
+failed turn is recorded there with whatever arrived before the failure.
+
 ```bash
 # fresh conversation
 poetry run python scripts/send_conversation.py "what tools are available?" -f conv.json -m overwrite -d deep-research-acme

@@ -25,11 +25,36 @@ Modes:
   continue   Load prior messages from the file (error if missing/empty),
              append this query, send, and append the reply back to the file.
 
-The file is written only after a successful response, so a failed `continue`
-never corrupts existing history. (`overwrite` clears up front by design.)
+Beside the messages file, every turn's full response is stored in a raw file next to it,
+e.g. `conv.json` -> `conv.raw.json`, one entry per turn in the order sent:
+
+    [
+      {"turn": 1, "query": "...", "started_at": "...", "ended_at": "...",
+       "response": {"choices": [...], "statistics": {...}, ...}, "error": null},
+      ...
+    ]
+
+`started_at` and `ended_at` are UTC timestamps in ISO 8601, taken just before the request is sent
+and just after the last chunk arrives or the turn fails, so their difference is the turn's wall
+time as the client saw it.
+
+`response` is the whole chat-completion response in the blocking shape, every field
+kept. A streamed response is merged the way the SDK merges one into its blocking form, so
+nothing it carried is lost. Fields outside the message, such as
+`statistics.usage_per_model`, live only here, because the messages file cannot hold them:
+its messages are resent verbatim. `turn` is the count of user messages sent so far.
+
+A failed turn is recorded too: `error` says what failed, and `response` holds whatever
+arrived before the failure, or `null` if nothing did. The messages file is written only
+after a successful response, so a failed `continue` never corrupts existing history, and a
+retried turn therefore appears in the raw file once per attempt, under the same `turn`.
+(`overwrite` clears both files up front by design.)
 
 The target deployment is the application instance registered in DIAL Core, passed via
-`--deployment`.
+`--deployment`. The DIAL Core URL is `DIAL_URL`, read from the environment or from the env file:
+`--env-file`, or `.env` in the working directory by default. Which env file is read decides which
+DIAL environment the conversation goes to, so a caller that must reach a specific one passes
+`--env-file` explicitly. The script exits before sending anything when `DIAL_URL` is not set.
 
 Requests stream (`stream: true`), like DIAL Chat. This matters for long turns: the app
 emits keep-alive heartbeats only on the streaming path, and without them DIAL Core sees an
@@ -50,6 +75,7 @@ import json
 import os
 import sys
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import dotenv
@@ -105,6 +131,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="send stream=false (one blocking JSON reply); see the module docstring",
     )
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        help="env file to read DIAL_URL and DIAL_API_KEY from (default: .env in the working directory)",
+    )
     return parser.parse_args()
 
 
@@ -127,6 +158,53 @@ def load_continue_history(path: Path) -> list[dict]:
 def write_messages(path: Path, messages: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(messages, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def raw_path_for(path: Path) -> Path:
+    """The file holding every turn's full response, next to the messages file."""
+    return path.with_name(f"{path.stem}.raw.json")
+
+
+def utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds")
+
+
+def append_raw_turn(
+    path: Path,
+    *,
+    turn: int,
+    query: str,
+    started_at: str,
+    ended_at: str,
+    response: dict | None,
+    error: str | None,
+) -> Path:
+    """Append one turn's entry to the raw file, creating the file if it is missing."""
+    raw_path = raw_path_for(path)
+    entries: list[dict] = []
+    if raw_path.exists() and (text := raw_path.read_text(encoding="utf-8").strip()):
+        entries = json.loads(text)
+    entries.append(
+        {
+            "turn": turn,
+            "query": query,
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "response": response,
+            "error": error,
+        }
+    )
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return raw_path
+
+
+class TurnFailedError(Exception):
+    """A turn that produced no usable reply. `chunks` holds whatever arrived before it."""
+
+    def __init__(self, message: str, chunks: list[dict] | None = None) -> None:
+        super().__init__(message)
+        self.chunks = chunks or []
 
 
 def conversation_id_for(path: Path) -> str:
@@ -156,31 +234,47 @@ def iter_sse_chunks(response: httpx.Response) -> Iterator[dict]:
         try:
             yield json.loads(payload)
         except json.JSONDecodeError:
-            raise SystemExit(f"non-JSON chunk in stream:\n{payload}") from None
+            raise TurnFailedError(f"non-JSON chunk in stream:\n{payload}") from None
 
 
-def reply_from_chunks(chunks: list[dict], url: str) -> dict:
-    """Merge chunks into one reply, mirroring how the SDK builds a blocking response.
+def merge_response(chunks: list[dict]) -> dict:
+    """Merge chunks into one response in the blocking shape, as the SDK builds one.
 
-    Starting from `{}` (so no caller chunk is mutated), then `cleanup_indices` over the
-    accumulated delta — the two steps `aidial_sdk.utils.streaming.merge_chunks` performs.
-    The cleanup is not optional: merging leaves the OpenAI-style `index` key on indexed list
-    elements such as `custom_content.stages`, and this script resends the reply verbatim on
-    the next turn, where those keys would be re-slotted and stripped again (see CLAUDE.md).
+    Starting from `{}` (so no caller chunk is mutated), then `cleanup_indices` over each
+    choice's accumulated delta, which becomes its `message` — the steps
+    `aidial_sdk.utils.streaming.merge_chunks` performs. The cleanup is not optional: merging
+    leaves the OpenAI-style `index` key on indexed list elements such as
+    `custom_content.stages`, and this script resends the message verbatim on the next turn,
+    where those keys would be re-slotted and stripped again (see CLAUDE.md).
+
+    Every field outside the choices, such as `statistics`, is kept as merged, except
+    top-level strings. The SDK merge concatenates strings, which is right for content deltas
+    but not for `id` and `object`, which every chunk repeats in full; for those the last value
+    wins. A blocking response arrives already in this shape and passes through unchanged.
+    Chunks cut short by a failure merge too, so a failed turn keeps what it received.
     """
-    merged = merge({}, *chunks)
+    scalars: dict[str, str] = {}
+    deltas: list[dict] = []
+    for chunk in chunks:
+        scalars.update({key: value for key, value in chunk.items() if isinstance(value, str)})
+        deltas.append({key: value for key, value in chunk.items() if not isinstance(value, str)})
+    merged = merge({}, *deltas)
+    merged.update(scalars)
+    for choice in merged.get("choices") or []:
+        if isinstance(choice, dict) and (delta := choice.pop("delta", None)) is not None:
+            choice["message"] = cleanup_indices(delta)
+    return merged
+
+
+def reply_of(response: dict) -> dict:
+    """Return `choices[0].message` of a merged response, or fail the turn."""
     try:
-        choice = merged["choices"][0]
+        message = response["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):
-        raise SystemExit(
-            f"unexpected response shape from {url}:\n{json.dumps(merged, indent=2)}"
-        ) from None
-    if (delta := choice.get("delta")) is not None:
-        return cleanup_indices(delta)
-    # A blocking reply arrives already assembled and cleaned up by the app.
-    if (message := choice.get("message")) is not None:
-        return message
-    raise SystemExit(f"no message in response from {url}:\n{json.dumps(merged, indent=2)}")
+        message = None
+    if not isinstance(message, dict):
+        raise TurnFailedError(f"no message in response:\n{json.dumps(response, indent=2)}")
+    return message
 
 
 def send(
@@ -189,8 +283,12 @@ def send(
     conversation_id: str,
     deployment: str,
     stream: bool,
-) -> dict:
-    """POST the chat-completion request and return `choices[0].message` verbatim.
+) -> list[dict]:
+    """POST the chat-completion request and return the chunks received.
+
+    The chunks are every payload exactly as received — one per SSE `data:` line when
+    streaming, the single JSON body when blocking. Any failure raises `TurnFailedError`
+    carrying the chunks that arrived before it.
 
     The DIAL URL comes from the app settings singleton (.env); the client `Api-Key` comes
     from the `DIAL_API_KEY` env var (default: the local-stack dev key `dial_api_key`). The
@@ -218,42 +316,48 @@ def send(
         file=sys.stderr,
     )
 
+    chunks: list[dict] = []
+
     def fail_on_error(payload: object) -> None:
         # `object`, not `dict`: a blocking reply is whatever `resp.json()` produced, so the
         # isinstance check is load-bearing rather than decorative.
         if isinstance(payload, dict) and payload.get("error"):
-            raise SystemExit(
-                f"API error:\n{json.dumps(payload['error'], indent=2, ensure_ascii=False)}"
+            raise TurnFailedError(
+                f"API error:\n{json.dumps(payload['error'], indent=2, ensure_ascii=False)}",
+                chunks,
             )
 
     if not stream:
         try:
             resp = httpx.post(url, json=body, headers=headers, timeout=timeout)
         except httpx.RequestError as exc:
-            raise SystemExit(f"request failed ({url}): {exc}") from None
+            raise TurnFailedError(f"request failed ({url}): {exc}") from None
         if resp.status_code != 200:
-            raise SystemExit(f"HTTP {resp.status_code} from {url}:\n{resp.text}")
+            raise TurnFailedError(f"HTTP {resp.status_code} from {url}:\n{resp.text}")
         try:
             data = resp.json()
         except json.JSONDecodeError:
-            raise SystemExit(f"non-JSON response from {url}:\n{resp.text}") from None
+            raise TurnFailedError(f"non-JSON response from {url}:\n{resp.text}") from None
+        chunks.append(data)
         fail_on_error(data)
-        return reply_from_chunks([data], url)
+        return chunks
 
-    chunks: list[dict] = []
     try:
         with httpx.stream("POST", url, json=body, headers=headers, timeout=timeout) as resp:
             if resp.status_code != 200:
                 resp.read()
-                raise SystemExit(f"HTTP {resp.status_code} from {url}:\n{resp.text}")
+                raise TurnFailedError(f"HTTP {resp.status_code} from {url}:\n{resp.text}")
             for chunk in iter_sse_chunks(resp):
-                fail_on_error(chunk)
                 chunks.append(chunk)
+                fail_on_error(chunk)
     except httpx.RequestError as exc:
-        raise SystemExit(f"request failed ({url}): {exc}") from None
+        raise TurnFailedError(f"request failed ({url}): {exc}", chunks) from None
+    except TurnFailedError as exc:
+        exc.chunks = chunks
+        raise
     if not chunks:
-        raise SystemExit(f"stream from {url} carried no chunks")
-    return reply_from_chunks(chunks, url)
+        raise TurnFailedError(f"stream from {url} carried no chunks")
+    return chunks
 
 
 def report_extras(message: dict) -> None:
@@ -272,7 +376,12 @@ def report_extras(message: dict) -> None:
 
 def main() -> None:
     args = parse_args()
-    dotenv.load_dotenv(os.path.join(os.getcwd(), ".env"))
+    env_file = args.env_file or Path(os.getcwd()) / ".env"
+    if args.env_file and not env_file.is_file():
+        raise SystemExit(f"env file not found: {env_file}")
+    dotenv.load_dotenv(env_file)
+    if not os.getenv("DIAL_URL"):
+        raise SystemExit(f"DIAL_URL is not set: put it in {env_file} or in the environment")
 
     deployment = args.deployment
     if not deployment:
@@ -281,6 +390,7 @@ def main() -> None:
     if args.mode == "overwrite":
         if args.file.exists():
             args.file.write_text("", encoding="utf-8")  # clear up front, by design
+        raw_path_for(args.file).unlink(missing_ok=True)
         messages: list[dict] = [{"role": "user", "content": args.query}]
     else:  # continue
         messages = load_continue_history(args.file)
@@ -288,15 +398,48 @@ def main() -> None:
 
     conversation_id = conversation_id_for(args.file)
 
-    reply = send(
-        timeout=args.timeout,
-        messages=messages,
-        conversation_id=conversation_id,
-        deployment=deployment,
-        stream=not args.no_stream,
-    )
+    turn = sum(1 for message in messages if message.get("role") == "user")
+    chunks: list[dict] = []
+    started_at = utc_now()
+    try:
+        chunks = send(
+            timeout=args.timeout,
+            messages=messages,
+            conversation_id=conversation_id,
+            deployment=deployment,
+            stream=not args.no_stream,
+        )
+        response = merge_response(chunks)
+        reply = reply_of(response)
+    except TurnFailedError as exc:
+        ended_at = utc_now()
+        received = exc.chunks or chunks
+        partial = merge_response(received) if received else None
+        raw_path = append_raw_turn(
+            args.file,
+            turn=turn,
+            query=args.query,
+            started_at=started_at,
+            ended_at=ended_at,
+            response=partial,
+            error=str(exc),
+        )
+        print(f"failed turn recorded: {raw_path}", file=sys.stderr)
+        raise SystemExit(str(exc)) from None
+
+    ended_at = utc_now()
     messages.append(reply)
     write_messages(args.file, messages)
+    raw_path = append_raw_turn(
+        args.file,
+        turn=turn,
+        query=args.query,
+        started_at=started_at,
+        ended_at=ended_at,
+        response=response,
+        error=None,
+    )
+    print(f"raw response: {raw_path}", file=sys.stderr)
 
     print(reply.get("content", ""))
     report_extras(reply)
