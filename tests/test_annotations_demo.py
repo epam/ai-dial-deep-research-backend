@@ -184,17 +184,56 @@ async def test_the_reply_points_nowhere_outside_the_attachments(
     assert "a link this report may not carry" in choice.content
 
 
+def _titled_attachments() -> tuple[Attachment, Attachment]:
+    return (
+        _attachment(_FIRST_URL, title="Market Outlook 2025.pdf"),
+        _attachment(_SECOND_URL, title="World Economic Outlook.pdf"),
+    )
+
+
 async def test_the_two_attachments_become_the_two_cited_documents(
     downloads: dict[str, bytes],
 ) -> None:
     import httpx
 
     async with httpx.AsyncClient() as client:
-        urls = await attach.resolve_documents(
-            request=_request(_attachment(_FIRST_URL), _attachment(_SECOND_URL)), client=client
+        documents = await attach.resolve_documents(
+            request=_request(*_titled_attachments()), client=client
         )
 
-    assert urls == dict(zip(ATTACHED_DOCUMENT_IDS, [_FIRST_URL, _SECOND_URL], strict=True))
+    assert documents == {
+        1: attach.AttachedDocument(url=_FIRST_URL, title="Market Outlook 2025.pdf"),
+        2: attach.AttachedDocument(url=_SECOND_URL, title="World Economic Outlook.pdf"),
+    }
+
+
+async def test_the_labels_carry_the_whole_attachment_title(
+    downloads: dict[str, bytes],
+) -> None:
+    choice = ChoiceSpy()
+
+    await _reply(choice, *_titled_attachments())
+
+    card_titles = {annotation["body"]["title"] for annotation in _annotations(choice)}
+    pill_titles = {
+        annotation["body"]["source"]["attachment"]["title"] for annotation in _annotations(choice)
+    }
+    assert "Market Outlook 2025.pdf, page 2" in card_titles
+    assert "World Economic Outlook.pdf, page 3" in card_titles
+    assert pill_titles == card_titles
+    assert not any(title.startswith("doc ") for title in card_titles | pill_titles)
+
+
+async def test_an_attachment_without_a_title_reads_as_its_marker(
+    downloads: dict[str, bytes],
+) -> None:
+    choice = ChoiceSpy()
+
+    await _reply(choice, _attachment(_FIRST_URL, title="  "), _titled_attachments()[1])
+
+    card_titles = {annotation["body"]["title"] for annotation in _annotations(choice)}
+    assert "doc 1, page 1" in card_titles
+    assert "World Economic Outlook.pdf, page 1" in card_titles
 
 
 def test_the_demo_reuses_the_shared_conversion_rather_than_its_own() -> None:

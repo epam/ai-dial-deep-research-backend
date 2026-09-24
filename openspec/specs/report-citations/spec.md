@@ -1185,12 +1185,22 @@ SHALL live where both callers reach it, so no change can make the demo and the d
 disagree about the mechanism. A behaviour that holds in the demo therefore holds in a real report,
 which is what makes the demo evidence rather than an illustration.
 
-The one permitted difference is **where the file URLs come from**. A research turn resolves them
-through the configured file-sharing tool; the demo cites the PDFs the caller attached to the last
-message and feeds their URLs into the shared code. A demo has to be self-contained and to produce
-the same reply on every environment, which a dependency on a live retrieval server and its document
-ids would prevent. An attachment already lives in the caller's own storage, so the demo SHALL copy
-nothing anywhere: the annotation points at the attachment's own URL, which the caller can open.
+The permitted differences are **where the file URLs and the document titles come from**. A research
+turn resolves URLs through the configured file-sharing tool and titles through the document-metadata
+resource; the demo cites the PDFs the caller attached to the last message and feeds their URLs and
+titles into the shared code. A demo has to be self-contained and to produce the same reply on every
+environment, which a dependency on a live retrieval server and its document ids would prevent. An
+attachment already lives in the caller's own storage, so the demo SHALL copy nothing anywhere: the
+annotation points at the attachment's own URL, which the caller can open.
+
+**Each document's title SHALL be the attachment's own title** — the name the chat shows for the
+attached file — so the demo's labels read as a real report's do: `<title>, page <ix>`. The title
+stored in the PDF's own metadata SHALL NOT be used, because it is often missing or holds a value the
+authoring tool generated, while the attachment title is the name the caller already sees. An
+attachment with no title, or a blank one, SHALL leave its citations labelled from the marker, as a
+research turn labels a document no title resolved for. The demo SHALL NOT shorten a title on the
+pill: the pill and the popup card SHALL both carry it whole, as they do in a channel that turns the
+pill-title budget off, so a reader can tell from the pill alone which attached file it opens.
 
 The demo SHALL take one attachment per document it cites an attachment for, in the order they
 arrive, and which attachment becomes which document SHALL NOT change what any case demonstrates. It
@@ -1255,6 +1265,20 @@ call, and what to look for in the reply.
 - **WHEN** a caller attaches two PDFs, sends any message, and clicks a pill in the reply
 - **THEN** the cited file SHALL open at the cited page, because the annotation points at the
   caller's own attachment rather than at a file in another bucket
+
+#### Scenario: The demo's labels carry the attachment titles
+
+- **WHEN** a caller attaches two PDFs whose attachment titles are `Market Outlook 2025.pdf` and
+  `World Economic Outlook.pdf`, and sends any message
+- **THEN** every popup entry and every pill for those documents SHALL read the whole attachment
+  title followed by the cited page, such as `Market Outlook 2025.pdf, page 2`, whatever title the
+  PDFs' own metadata carries
+
+#### Scenario: An attachment without a title is labelled from its marker
+
+- **WHEN** one of the two attachments carries no title
+- **THEN** that document's citations SHALL still become pills, labelled `doc <id>, page <ix>`, and
+  the other document's citations SHALL carry its attachment title
 
 #### Scenario: Every mechanism behaviour is visible in one reply
 

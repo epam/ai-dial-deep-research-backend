@@ -338,6 +338,8 @@ What to look for in that reply:
 - one pill for the run of three adjacent citations, its popup carrying two sources — the source
   cited twice inside the run is listed once;
 - separate pills for the same document cited in two places, each opening its own page;
+- every label names the attached PDF by the name the chat shows for it, followed by the cited
+  page, whole on the pill as on the popup card;
 - clicking a pill opens the attached PDF at the cited page;
 - no raw `<cit …>` tag and no placeholder text anywhere in the text.
 
