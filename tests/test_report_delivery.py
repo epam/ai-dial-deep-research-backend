@@ -21,9 +21,11 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import ValuesStreamPart
 
+from dial_deep_research.app.research import references as references_module
 from dial_deep_research.app.research import runner as runner_module
 from dial_deep_research.app.research.runner import CITATIONS_ACTIVITY, ResearchRunner
 from dial_deep_research.app_properties import (
+    ApplicationProperties,
     DocumentMetadataSource,
     ReferenceColumn,
     ReferencesTable,
@@ -975,6 +977,14 @@ async def test_the_step_announces_itself_while_it_resolves_datasets() -> None:
 _DATE_KEY = "publication_date"
 
 
+def _annotations(choice: ChoiceSpy) -> list[dict[str, Any]]:
+    return choice.chunks[0]["choices"][0]["delta"]["custom_content"]["annotations"]
+
+
+def _section_of(choice: ChoiceSpy) -> str:
+    return choice.content[choice.content.rindex("## References") :]
+
+
 async def test_the_section_is_appended_after_the_conversion() -> None:
     """The pills are in the text, and the section the app built follows them."""
     runner, choice = _make_runner()
@@ -991,7 +1001,13 @@ async def test_the_section_is_appended_after_the_conversion() -> None:
     assert '<cit data-id="' in choice.content
     assert choice.content.index("<cit") < choice.content.index("## References")
     assert "### Documents" in choice.content
-    assert f"| {_TITLE} | 2025-03-01 |" in choice.content
+    # The document resolved a PDF URL, so its row is a pill labelled with the title.
+    [inline, row] = _annotations(choice)
+    assert f'| <cit data-id="{row["target"]["selector"]["id"]}"></cit> | 2025-03-01 |' in (
+        _section_of(choice)
+    )
+    assert row["body"]["title"] == _TITLE
+    assert inline["body"]["title"] == f"{_TITLE}, page 3"
 
 
 async def test_every_cited_source_is_listed_even_without_a_pill() -> None:
@@ -1008,9 +1024,9 @@ async def test_every_cited_source_is_listed_even_without_a_pill() -> None:
     )
 
     assert "[doc 9, page 1]" in choice.content
-    assert f"| {_TITLE} |" in choice.content
-    # The unresolved document is listed from its identifier rather than dropped.
-    assert "| doc 9 |" in choice.content
+    assert [a["body"]["title"] for a in _annotations(choice)] == [f"{_TITLE}, page 3", _TITLE]
+    # The document with no URL is listed from its identifier, as text, rather than dropped.
+    assert "| doc 9 |" in _section_of(choice)
 
 
 async def test_a_dataset_with_no_portal_page_is_still_listed() -> None:
@@ -1068,7 +1084,7 @@ async def test_a_section_the_writer_wrote_keeps_every_section_after_it() -> None
     # The app's section is the last thing in the text, and it is the one built from the metadata.
     assert choice.content.count("## References") == 2
     assert choice.content.rindex("## References") > choice.content.index("## Conclusion")
-    assert f"| {_TITLE} |" in choice.content
+    assert _annotations(choice)[-1]["body"]["title"] == _TITLE
 
 
 async def test_a_source_cited_only_in_the_drafts_own_section_still_gets_a_row() -> None:
@@ -1084,8 +1100,97 @@ async def test_a_source_cited_only_in_the_drafts_own_section_still_gets_a_row() 
         references_tables=(_DOCUMENTS_TABLE,),
     )
 
-    assert f"| {_TITLE} |" in choice.content
-    assert "| Other |" in choice.content
+    # Document 9 resolved no URL, so its row is text; document 442's row is a pill.
+    assert "| Other |" in _section_of(choice)
+    assert _annotations(choice)[-1]["body"]["title"] == _TITLE
+
+
+async def test_row_pills_follow_the_inline_pills_and_open_the_first_page(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Row annotations continue the array's indices, and the (8c) count stays the inline one."""
+    runner, choice = _make_runner()
+    _settle(
+        runner,
+        f"One. [doc 442, page 7]\n\nTwo. [doc 442, page 2]\n\nThree. [dataset {_URN}]",
+    )
+
+    with caplog.at_level(logging.INFO):
+        await _deliver(
+            runner,
+            tool=_sharing_tool(urls={"442": _URL}),
+            metadata_source=_METADATA_SOURCE,
+            mcp_client=_MetadataClient(metadata={442: {_TITLE_KEY: _TITLE}}),
+            dataset_tool=_catalogue_tool(datasets=[_RECORD]),
+            configured_dataset_tool_name=_DATASET_TOOL_NAME,
+            references_tables=(_DOCUMENTS_TABLE, _DATASETS_TABLE),
+        )
+
+    annotations = _annotations(choice)
+    assert [a["index"] for a in annotations] == [0, 1, 2, 3, 4]
+    document_row, dataset_row = annotations[3], annotations[4]
+    assert document_row["body"]["title"] == _TITLE
+    # Cited at pages 7 and 2, the row still opens the document where it begins.
+    assert document_row["body"]["selector"]["page"] == 1
+    assert dataset_row["body"]["title"] == _DATASET_NAME
+    assert dataset_row["body"]["source"]["attachment"]["url"] == _PORTAL_URL
+    tag_ids = [a["target"]["selector"]["id"] for a in annotations]
+    assert len(set(tag_ids)) == len(tag_ids)
+    event = next(r.message for r in caplog.records if "Report citations resolved" in r.message)
+    assert "annotations=3 " in event
+
+
+async def test_a_build_failing_after_some_rows_became_pills_adds_no_row_annotation(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Row annotations reach the delivery only with the section they belong to."""
+    real_build_row_annotation = references_module.build_row_annotation
+    built: list[Any] = []
+
+    def second_row_explodes(**kwargs: Any) -> Any:
+        if built:
+            raise RuntimeError("the second row cannot be built")
+        built.append(real_build_row_annotation(**kwargs))
+        return built[-1]
+
+    monkeypatch.setattr(references_module, "build_row_annotation", second_row_explodes)
+    runner, choice = _make_runner()
+    _settle(runner, "One. [doc 442, page 3]\n\nTwo. [doc 9, page 1]")
+
+    with caplog.at_level(logging.WARNING):
+        await _deliver(
+            runner,
+            tool=_sharing_tool(urls={"442": _URL, "9": _URL}),
+            references_tables=(_DOCUMENTS_TABLE,),
+        )
+
+    assert len(built) == 1
+    assert "## References" not in choice.content
+    assert [a["body"]["title"] for a in _annotations(choice)] == [
+        "doc 442, page 3",
+        "doc 9, page 1",
+    ]
+    assert "kind=references_build_failed" in caplog.text
+
+
+async def test_a_pill_under_the_default_budget_carries_the_whole_title() -> None:
+    """A channel naming no budget gets every pill whole, inline and in a References row."""
+    long_title = "Market Outlook 2025: Trade, Growth and the Road Ahead"
+    runner, choice = _make_runner()
+    _settle(runner, "Defaults rise. [doc 442, page 3]")
+
+    await _deliver(
+        runner,
+        tool=_sharing_tool(urls={"442": _URL}),
+        metadata_source=_METADATA_SOURCE,
+        mcp_client=_MetadataClient(metadata={442: {_TITLE_KEY: long_title}}),
+        pill_title_max_chars=ApplicationProperties.model_fields["max_pill_title_chars"].default,
+        references_tables=(_DOCUMENTS_TABLE,),
+    )
+
+    inline, row = _annotations(choice)
+    assert inline["body"]["source"]["attachment"]["title"] == f"{long_title}, page 3"
+    assert row["body"]["source"]["attachment"]["title"] == long_title
 
 
 async def test_a_failed_section_build_keeps_the_pills(
@@ -1110,6 +1215,8 @@ async def test_a_failed_section_build_keeps_the_pills(
     assert '<cit data-id="' in choice.content
     assert "## References" not in choice.content
     assert "kind=references_build_failed" in caplog.text
+    # The inline pill survives; no row annotation is emitted for a section that was not built.
+    assert [a["body"]["title"] for a in _annotations(choice)] == ["doc 442, page 3"]
 
 
 async def test_a_built_section_is_recorded_nowhere_of_its_own(

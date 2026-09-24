@@ -90,6 +90,7 @@ from .nodes import (
     ResearchReviewOutcome,
 )
 from .references import (
+    ReferencesSection,
     ReferencesTableContent,
     build_references_section,
     dataset_rows,
@@ -150,7 +151,11 @@ class _ReportDelivery(BaseModel):
     """
 
     text: str
+    # Every annotation the delivery carries: the inline citations' first, then the References
+    # rows'. `citations_annotated` counts the first part alone, which is what the (8c) event
+    # reports.
     annotations: list[Annotation] = Field(default_factory=list)
+    citations_annotated: int = 0
     documents_requested: int = 0
     documents_resolved: int = 0
     documents_titled: int = 0
@@ -168,24 +173,30 @@ def _with_references_section(
     tables: Sequence[ServerReferencesTable],
     document_ids: Sequence[int],
     document_metadata: Mapping[int, Mapping[str, Any]],
+    document_urls: Mapping[int, str],
     dataset_ids: Sequence[str],
     dataset_sources: Mapping[str, DatasetSource],
-) -> str:
-    """The converted text with the built References section appended to it.
+    first_index: int,
+    pill_title_max_chars: int | None,
+) -> ReferencesSection:
+    """The converted text with the built References section appended to it, and the annotations
+    of the section's openable rows.
 
     The rows are the sources the delivered report cites, in the order it first cites them, each
     carrying what its server reported about it — so a source whose metadata did not resolve is
-    listed from its identifier rather than left out.
+    listed from its identifier rather than left out. A row whose source the reader can open is a
+    pill, numbered from `first_index` so it follows the inline citations' annotations.
 
     Nothing is taken out of the text: a draft that wrote a references section of its own keeps it,
     having already been reported for the extra heading while the loop had a version left.
     """
     rows_by_kind = {
-        "document": document_rows(document_ids, metadata=document_metadata),
-        "dataset": dataset_rows(
-            dataset_ids,
-            records={urn: source.raw_fields for urn, source in dataset_sources.items()},
+        "document": document_rows(
+            document_ids,
+            metadata=document_metadata,
+            document_urls=document_urls,
         ),
+        "dataset": dataset_rows(dataset_ids, sources=dataset_sources),
     }
     contents = [
         ReferencesTableContent(
@@ -195,8 +206,14 @@ def _with_references_section(
         )
         for entry in tables
     ]
-    built = build_references_section(heading=heading, empty_text=empty_text, tables=contents)
-    return f"{text}\n\n{built}"
+    built = build_references_section(
+        heading=heading,
+        empty_text=empty_text,
+        tables=contents,
+        first_index=first_index,
+        pill_title_max_chars=pill_title_max_chars,
+    )
+    return ReferencesSection(text=f"{text}\n\n{built.text}", annotations=built.annotations)
 
 
 def _count_markers(text: str) -> int:
@@ -361,7 +378,7 @@ class ResearchRunner:
             documents_titled=delivery.documents_titled,
             datasets_requested=delivery.datasets_requested,
             datasets_resolved=delivery.datasets_resolved,
-            annotations=len(delivery.annotations),
+            annotations=delivery.citations_annotated,
             markers_left=delivery.markers_left,
             hyperlinks_removed=delivery.hyperlinks_removed,
             duration_seconds=time.monotonic() - started_at,
@@ -389,7 +406,7 @@ class ResearchRunner:
         independently, and each failure keeps what the passes before it finished: a failed link
         pass delivers the draft exactly as the review settled it, a failed conversion delivers the
         link-free text with every citation marker in place, and a failed section build delivers
-        the converted text with every pill it earned and no section.
+        the converted text with every pill it earned, and no section and no row pill.
         """
         try:
             removal = remove_hyperlinks(draft)
@@ -468,22 +485,28 @@ class ResearchRunner:
 
         delivery.text = converted.text
         delivery.annotations = converted.annotations
+        delivery.citations_annotated = len(converted.annotations)
         delivery.markers_left = converted.markers_left
 
         try:
-            delivery.text = _with_references_section(
+            section = _with_references_section(
                 delivery.text,
                 heading=references_heading,
                 empty_text=references_empty_text,
                 tables=references_tables,
                 document_ids=document_ids,
                 document_metadata=document_metadata,
+                document_urls=document_urls,
                 dataset_ids=dataset_ids,
                 dataset_sources=dataset_sources,
+                first_index=len(delivery.annotations),
+                pill_title_max_chars=pill_title_max_chars,
             )
+            delivery.text = section.text
+            delivery.annotations = [*delivery.annotations, *section.annotations]
         except Exception as error:
-            # Last of the three passes, so its failure costs the section alone: every pill the
-            # conversion earned is already in the text above.
+            # Last of the three passes, so its failure costs the section and its row pills alone:
+            # every pill the conversion earned is already in the text above.
             self._warn_citation_failure(kind=_KIND_REFERENCES_BUILD_FAILED, error=error)
         return delivery
 

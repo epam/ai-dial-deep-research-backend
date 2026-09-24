@@ -746,7 +746,10 @@ different ids and render as two pills. The tag SHALL be emitted empty — it anc
 position and does not enclose the cited sentence.
 
 **In `custom_content.annotations`**, one entry per converted citation — so a run of three sources
-behind one tag contributes three entries that share that tag's id — carrying:
+behind one tag contributes three entries that share that tag's id — carrying the fields below. The
+References section adds one entry per row it makes openable, after these; that entry's labels and
+page are owned by the References requirement, and every other field is the one below. Each entry
+carries:
 
 - **`index`** — the entry's 0-based position in the array, unique across it. The array is an indexed
   list: the DIAL SDK treats a list whose elements carry an `index` as a streaming delta and merges
@@ -819,8 +822,8 @@ behind one tag contributes three entries that share that tag's id — carrying:
   **`<shortened urn> dataset`**, and never loses the word that says what the leading string names.
 
   Appending after the shortening is what makes the two cases the same shape. A URN has no bounded
-  length — `IMF:DIRECTION_OF_TRADE_STATISTICS(1.0.0)` is forty characters against a default budget
-  of twenty — so a fallback label must be shortened or it overflows, and shortening it without
+  length — `IMF:DIRECTION_OF_TRADE_STATISTICS(1.0.0)` is forty characters against a budget of
+  twenty — so a fallback label must be shortened or it overflows, and shortening it without
   re-appending the word would leave a truncated string with nothing saying what it is. Applying the
   same rule to the resolved case costs one word of width and buys a pill whose structure does not
   betray whether the lookup succeeded.
@@ -831,9 +834,10 @@ behind one tag contributes three entries that share that tag's id — carrying:
   No label SHALL carry a URL. A dataset's address reaches the reader only as the link the pill
   follows.
 
-  The app shortens because the client does not: a pill is a narrow inline element carrying the
-  client's own count marker when it stands for a run, and a label that overflows is not trimmed for
-  it. The popup card has the room, which is why `body.title` keeps the title whole — a reader who
+  The app shortens, where a channel sets a budget, because the client does not: a pill is a narrow
+  inline element carrying the client's own count marker when it stands for a run, and a label that
+  overflows is not trimmed for it. A channel that sets no budget gets every label whole, which is
+  the default. The popup card has the room, which is why `body.title` keeps the title whole — a reader who
   needs the full name opens the pill. The app SHALL derive no label from the URL and SHALL decode no
   part of one: the file name inside a shared URL is a storage path segment rather than a title, the
   trailing segment of a portal URL is a slug rather than a name, and the contracted metadata surfaces
@@ -1083,17 +1087,58 @@ a row SHALL mark it as degraded, for the reason no pill label does: which lookup
 application's problem, and a reader shown it is only invited to trust one real source less than
 another.
 
-**No row is interactive in this iteration.** No cell SHALL carry a hyperlink, a marker tag, or any
-other markup that opens something. A document's shared URL is storage-relative, so an ordinary
-Markdown link to it opens nothing; making a row openable therefore means an annotation of its own,
-which renders the row as a pill with a citation card. The no-hyperlink rule
-(**report-composition**) governs what the report writer writes, and the app writes no openable
-markup of its own, so the rule needs no exemption for an app-written section.
+**A row whose source can be opened carries a pill in its first cell.** A row SHALL be openable on
+exactly the condition an inline citation of its source is converted: a document row when the
+file-sharing tool returned a PDF URL for that document, and a dataset row when the dataset-metadata
+tool reported a URL a browser can open for that dataset. The first cell of an openable row SHALL
+carry one empty marker tag, `<cit data-id="…"></cit>`, **in place of** the text it would otherwise
+carry, and one annotation of its own SHALL claim that tag, so the client renders the source's name as
+a pill inside the cell. The tag's id SHALL be unique across the message, like every other tag's, and
+exactly one annotation SHALL claim it. Every other cell of the row SHALL be filled as for any row. A
+row whose source is not openable SHALL keep its first cell as text, with no tag, and no annotation
+SHALL be emitted for it.
+
+A row is opened through an annotation rather than a link because a document's shared URL is
+storage-relative, so an ordinary Markdown link to it opens nothing. The annotation is the one
+mechanism that opens both kinds of source, and a row reusing it opens exactly what an inline pill of
+the same source opens.
+
+**A row's annotation is an inline citation's annotation with its own labels and page.** It SHALL
+carry the attachment type, the URL and, for a dataset, the `body.quote` that a converted citation of
+the same source carries (the requirement "A converted citation is a marker tag in the text and an
+annotation that names it"), and SHALL differ from it in two things:
+
+- **The label is the row's name alone.** `body.title` SHALL carry the text the first cell would have
+  carried: the value under the first column's key, rendered by the cell rules above, or the source's
+  identifier where that key resolves nothing. The `|` escape SHALL NOT be applied, because the label
+  is not table text and a reader would see the backslash; a line break still becomes a space. The
+  label SHALL carry **no trailing part** — no `, page <ix>` and no ` dataset` — because the row
+  already sits under a sub-heading naming its kind of source, and a References row names the
+  source, never the cited location. `body.source.attachment.title` SHALL carry the same text,
+  shortened to the channel's pill budget exactly as an inline pill's leading part is, or whole where
+  the channel names no budget (**application-config-schema** owns the field). A document row labelled
+  `doc <id>` SHALL NOT be shortened, for the reason an unresolved inline document label is not: it is
+  short by construction, and a cut could eat the id.
+- **A document row opens its document at page 1.** Its `pdf_bbox` selector SHALL carry page 1,
+  whichever pages the report cites. A row names the whole document rather than a location in it, so
+  it opens where the document begins; the selector is still sent, because the document viewer needs
+  a page to open at. A dataset row carries no selector, like a dataset citation.
+
+**Row annotations share the array with the inline ones.** They SHALL be emitted in the same
+`custom_content.annotations` array as the conversion's annotations, **after** all of them, in the
+order the rows are written, with `index` values continuing the array's sequence. The array is still
+emitted once, after the content.
+
+A marker tag is not a hyperlink, so an openable row does not breach the no-hyperlink guarantee
+(**report-composition**): no cell SHALL carry a Markdown link, an HTML anchor, a URL, or any markup
+other than the marker tag. The no-hyperlink rule governs what the report writer writes, and the app
+writes no link of its own, so the rule needs no exemption for an app-written section.
 
 **Where it is appended.** The built section SHALL be appended to the text the citation conversion
 produced — after the link-removal pass and after the conversion — and SHALL therefore reach both the
 assistant message content and the persisted report message. It SHALL NOT be searched for citation
-markers or for hyperlinks: the app wrote it, and nothing in it is either.
+markers or for hyperlinks: the app wrote it, and it carries neither — its only markup is the marker
+tags of its openable rows, which the build writes together with their annotations.
 
 **A section the draft wrote anyway is left where it is.** The app SHALL NOT remove text from a
 draft to make room for the built section. A draft that writes its own references section carries an
@@ -1119,9 +1164,10 @@ a row lists is one the delivered report cites.
 #### Scenario: A source whose metadata did not resolve keeps its row
 
 - **WHEN** the metadata answer omits one cited document, and the catalogue omits one cited dataset
-- **THEN** each SHALL still have a row, its first cell reading `doc <id>` and the dataset's reading
+- **THEN** each SHALL still have a row, the document's named `doc <id>` and the dataset's named by
   the URN the marker carried, its other cells empty, and nothing in either row SHALL mark it as
-  incomplete
+  incomplete. The name SHALL be the first cell's text where the row is not openable, and its pill's
+  label where it is
 
 #### Scenario: A server with nothing cited contributes no table
 
@@ -1152,24 +1198,73 @@ a row lists is one the delivered report cites.
 
 #### Scenario: A value that only looks filled leaves its cell empty
 
-- **WHEN** a cited document's first-column key holds a string of spaces, and its other column
-  holds a value padded with spaces
+- **WHEN** a cited document that resolved no URL has a first-column key holding a string of spaces,
+  and its other column holds a value padded with spaces
 - **THEN** the first cell SHALL carry the source's identifier rather than the spaces, and the other
   cell SHALL carry its value with the padding gone
 
 #### Scenario: A value that would break the table is escaped
 
-- **WHEN** a cited document's title contains a `|` and its publication date field holds a value
-  spanning two lines
+- **WHEN** a cited document that resolved no URL has a title containing a `|` and a publication date
+  field holding a value spanning two lines
 - **THEN** the `|` SHALL be escaped and the line break SHALL be rendered as a space, so the table
   keeps its columns
 
-#### Scenario: The built section carries no link
+#### Scenario: A document row with a PDF URL opens at page 1
+
+- **WHEN** a delivered report cites document 12 first at page 13 and later at page 4, the
+  file-sharing tool returned a PDF URL for it, and the documents table's first column reads the
+  title `Market Outlook 2025`
+- **THEN** that row's first cell SHALL carry one marker tag and no other text, and exactly one
+  annotation SHALL claim the tag, with type `application/pdf`, that URL, a `pdf_bbox` selector on
+  page 1, no `body.quote`, and both `body.title` and `body.source.attachment.title` reading
+  `Market Outlook 2025` with no page
+
+#### Scenario: A dataset row with a portal URL opens its page
+
+- **WHEN** a delivered report cites `IMF:WEO(1.0.0)`, and the dataset-metadata tool reported the name
+  `World Economic Outlook` and the URL `https://portal.example.org/datasets/imf-weo`
+- **THEN** that row's first cell SHALL carry one marker tag, and its annotation SHALL carry type
+  `text/html`, that URL unchanged, the `body.quote` a citation of that dataset carries, no selector,
+  and both labels reading `World Economic Outlook` with no ` dataset`
+
+#### Scenario: A row whose source cannot be opened stays text
+
+- **WHEN** a delivered report cites a document the file-sharing tool returned no URL for, and a
+  dataset whose catalogue record carries no URL
+- **THEN** both rows SHALL carry their first cell as text, neither SHALL carry a marker tag, and no
+  annotation SHALL be emitted for either row
+
+#### Scenario: A row named by its identifier is labelled with it
+
+- **WHEN** a cited document resolved a PDF URL and no metadata, and the channel sets a pill budget
+  of 10
+- **THEN** its row's pill and card SHALL both read `doc <id>`, unshortened
+
+#### Scenario: The pill budget shortens a row's pill and not its card
+
+- **WHEN** the channel sets a pill budget and an openable row's name is longer than it
+- **THEN** `body.source.attachment.title` SHALL carry the name shortened to that budget with an
+  ellipsis, and `body.title` SHALL carry it whole
+
+#### Scenario: A row's label is not escaped for the table
+
+- **WHEN** an openable document row's title contains a `|` and a line break
+- **THEN** both labels SHALL carry the `|` without a backslash and the line break as a space, and the
+  cell SHALL carry the marker tag alone, so the table keeps its columns
+
+#### Scenario: Row annotations follow the inline ones
+
+- **WHEN** the conversion emitted five annotations, and the section makes two rows openable
+- **THEN** the array SHALL carry the two row annotations at indices 5 and 6, in the order their rows
+  are written, and each row's tag id SHALL differ from every inline tag id
+
+#### Scenario: The built section carries no hyperlink
 
 - **WHEN** the section is built for a report citing a document whose URL resolved and a dataset whose
   catalogue record carries an absolute portal URL
-- **THEN** neither row SHALL carry a Markdown link, a marker tag, or any other openable markup, and
-  the delivered text SHALL still satisfy the no-hyperlink guarantee
+- **THEN** neither row SHALL carry a Markdown link, an HTML anchor, a URL, or any markup other than
+  its marker tag, and the delivered text SHALL still satisfy the no-hyperlink guarantee
 
 ### Requirement: A flag-gated demo completion exercises the citation mechanism
 
@@ -1384,11 +1479,14 @@ alterations fail independently, and each keeps whatever the earlier ones finishe
 - The **conversion** raising — marker parsing, block classification, tag replacement, payload
   building — SHALL deliver the text the link pass produced, so the hyperlink guarantee still holds,
   with no tag, no annotation and no References section.
-- The **References build** raising SHALL deliver the converted text with every pill it earned and no
-  References section, since the section is the only thing that pass produces. It SHALL NOT cost a
-  citation its pill, the conversion having already finished.
+- The **References build** raising SHALL deliver the converted text with every pill it earned, no
+  References section and no row annotation, since the section and its row annotations are the only
+  things that pass produces. It SHALL NOT cost a citation its pill, the conversion having already
+  finished.
 - The **emission** failing after the text was appended leaves that text's tags unclaimed, and the
-  client shows an unclaimed tag to the reader as text. The step SHALL NOT re-send the
+  client shows an unclaimed tag to the reader as text. An openable References row then shows its
+  tag and no name, because the tag stands in place of the name; the cost is accepted, since the
+  same failure already costs every inline pill. The step SHALL NOT re-send the
   array and SHALL NOT edit the appended content, which DIAL's append-only content makes impossible.
 
 Each of these SHALL be logged once as a WARNING naming the failure kind, and none SHALL fail the
@@ -1449,8 +1547,8 @@ turn.
 
 - **WHEN** the conversion completed and the References build then raises
 - **THEN** the converted text SHALL be delivered with every marker tag and every annotation it
-  earned, no References section SHALL be appended, the turn SHALL complete successfully, and one
-  WARNING SHALL name the failure
+  earned, no References section and no row annotation SHALL be emitted, the turn SHALL complete
+  successfully, and one WARNING SHALL name the failure
 
 #### Scenario: A failed emission leaves its tags unclaimed
 

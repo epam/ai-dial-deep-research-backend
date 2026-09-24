@@ -965,9 +965,9 @@ def test_properties_expose_no_title_source_when_no_document_server_is_configured
     assert ApplicationProperties.model_validate(data).document_metadata is None
 
 
-def test_the_pill_title_budget_has_a_default() -> None:
+def test_a_channel_naming_no_pill_title_budget_gets_whole_titles() -> None:
     properties = ApplicationProperties.model_validate(VALID_PROPERTIES)
-    assert properties.max_pill_title_chars == 20
+    assert properties.max_pill_title_chars is None
 
 
 def test_a_channel_may_narrow_the_pill_title_budget() -> None:

@@ -372,8 +372,11 @@ or shows it. A converted citation's readable text lives in its annotation rather
 text, so a client that discards the annotations loses that citation rather than degrading to a
 visible marker. Which citations are converted at all is decided by the **report-citations**
 capability's two conditions, whose deliberate consequence is that every citation left unconverted
-stays fully readable in the text — and the References section names every cited source whether or
-not its citations converted, so an unconverted marker still resolves to a named source.
+stays fully readable in the text — and the References section lists every cited source whether or
+not its citations converted, naming in text every source whose citations did not, so an unconverted
+marker still resolves to a named source. A source whose citations converted is named in its
+References row by a pill, on the same condition, so a client that discards the annotations loses
+that row's name exactly as it loses the source's inline citations.
 
 #### Scenario: Report is the assistant answer
 
