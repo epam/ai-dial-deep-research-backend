@@ -13,7 +13,10 @@ The delivered text is produced by three alterations, in this order:
    they report, then `convert_citations` — which replaces each convertible marker with a marker
    tag and returns the annotations that claim those tags.
 3. the References section, built by `references.py` from the same resolved metadata and appended
-   to the converted text. This module knows nothing about it beyond the order.
+   to the converted text. That module takes three things from this one for a row that opens its
+   source: whether the source can be opened (`convertible_document`, `convertible_dataset` — the
+   conditions inline citations convert on), the tag its first cell carries (`marker_tag`), and
+   the annotation claiming that tag (`build_row_annotation`).
 
 A citation's labels are a leading part naming the source and a fixed trailing part saying what
 kind of source it is: `<publication title>, page <ix>` for a document, `<dataset name> dataset`
@@ -214,8 +217,12 @@ class Annotation(BaseModel):
     body: AnnotationBody
 
 
-class _ConvertibleDocumentCitation(BaseModel):
-    """A document citation its condition holds for: the document and page it names, and the URL."""
+class ConvertibleDocumentCitation(BaseModel):
+    """A document the reader can open: the document, the page it opens at, and the URL.
+
+    For an inline citation the page is the one its marker names; for a References row it is the
+    document's first page, since a row names the whole document.
+    """
 
     document_id: int
     page: int
@@ -228,7 +235,7 @@ class _ConvertibleDocumentCitation(BaseModel):
         return ("document", str(self.document_id), str(self.page))
 
 
-class _ConvertibleDatasetCitation(BaseModel):
+class ConvertibleDatasetCitation(BaseModel):
     """A dataset citation its condition holds for: the URN it names, and what the catalogue said.
 
     `url` is carried beside the record rather than read back out of it, because being convertible
@@ -246,10 +253,11 @@ class _ConvertibleDatasetCitation(BaseModel):
         return ("dataset", self.dataset_id)
 
 
-# One citation the conversion will emit an annotation for. A pair of models rather than one
-# widened model: the two kinds share no field beyond the URL buried in each, and half the fields
-# of a merged model would be `None` in every instance.
-_ConvertibleCitation = _ConvertibleDocumentCitation | _ConvertibleDatasetCitation
+# One source the reader can open, which is what an annotation is emitted for: an inline citation
+# the conversion folds into a pill, or a References row. A pair of models rather than one widened
+# model: the two kinds share no field beyond the URL buried in each, and half the fields of a
+# merged model would be `None` in every instance.
+ConvertibleCitation = ConvertibleDocumentCitation | ConvertibleDatasetCitation
 
 
 class CitationConversion(BaseModel):
@@ -351,6 +359,16 @@ def cited_dataset_ids(text: str) -> list[str]:
     return ids
 
 
+def new_tag_id() -> str:
+    """An opaque marker tag id. 48 random bits, so two tags of one message never share one."""
+    return uuid.uuid4().hex[:12]
+
+
+def marker_tag(tag_id: str) -> str:
+    """The empty marker tag an annotation claims by `tag_id`, written where its pill goes."""
+    return f'<{CITATION_TAG_NAME} data-id="{tag_id}"></{CITATION_TAG_NAME}>'
+
+
 def convert_citations(
     text: str,
     *,
@@ -358,7 +376,7 @@ def convert_citations(
     document_titles: Mapping[int, str] | None = None,
     dataset_sources: Mapping[str, DatasetSource] | None = None,
     pill_title_max_chars: int | None = None,
-    make_tag_id: Callable[[], str] = lambda: uuid.uuid4().hex[:12],
+    make_tag_id: Callable[[], str] = new_tag_id,
 ) -> CitationConversion:
     """Replace every convertible citation with its marker tag, and build the annotations.
 
@@ -388,7 +406,7 @@ def convert_citations(
     cursor = 0
 
     for run in _group_into_runs(markers, text=text):
-        convertible: list[_ConvertibleCitation] = []
+        convertible: list[ConvertibleCitation] = []
         kept_as_text: list[CitationMarker] = []
         for marker in run:
             citation = _convertible_citation(
@@ -406,7 +424,7 @@ def convert_citations(
 
         pieces.append(text[cursor : run[0].start])
         tag_id = make_tag_id()
-        pieces.append(f'<{CITATION_TAG_NAME} data-id="{tag_id}"></{CITATION_TAG_NAME}>')
+        pieces.append(marker_tag(tag_id))
 
         # Two markers naming the same source are one source cited once.
         sources_seen: set[tuple[str, ...]] = set()
@@ -528,7 +546,7 @@ def _build_annotation(
     *,
     index: int,
     tag_id: str,
-    citation: _ConvertibleCitation,
+    citation: ConvertibleCitation,
     document_titles: Mapping[int, str],
     pill_title_max_chars: int | None,
 ) -> Annotation:
@@ -540,14 +558,80 @@ def _build_annotation(
     document's cited page, a dataset's `dataset` — is appended after the shortening, so a long
     name never costs the reader the part that says what the label names.
 
+    The page belongs in both labels of a document, because a document server attributes at page
+    level: two pages of one publication are two sources, and a run folding them behind one pill
+    must still read as two entries in its popup. A document no title resolved for reads `doc <id>,
+    page <ix>` in both — the text the marker carried, and the one label that is not shortened,
+    because it is short by construction and the smallest configurable budget could eat the id.
+    A dataset's leading part is the catalogue's name for it, or the URN the marker carried when it
+    reported none — the same shape either way, so nothing in the label says which.
+    """
+    if isinstance(citation, ConvertibleDocumentCitation):
+        title = document_titles.get(citation.document_id)
+        leading = title if title else f"doc {citation.document_id}"
+        trailing = f", page {citation.page}"
+        pill_leading = _shorten_for_pill(leading, pill_title_max_chars) if title else leading
+    else:
+        leading = citation.source.name if citation.source.name else citation.dataset_id
+        trailing = _DATASET_LABEL_SUFFIX
+        pill_leading = _shorten_for_pill(leading, pill_title_max_chars)
+    return _annotation(
+        index=index,
+        tag_id=tag_id,
+        citation=citation,
+        card_title=f"{leading}{trailing}",
+        pill_title=f"{pill_leading}{trailing}",
+    )
+
+
+def build_row_annotation(
+    *,
+    index: int,
+    tag_id: str,
+    target: ConvertibleCitation,
+    label: str,
+    label_is_identifier: bool,
+    pill_title_max_chars: int | None,
+) -> Annotation:
+    """One annotation for a References row whose source the reader can open.
+
+    It opens what an inline pill of the same source opens, and differs only in its labels: both
+    carry the row's name alone, with no cited page and no `dataset`, because the row names the
+    source rather than a location in it, and its table's sub-heading already says what kind of
+    source it is. The pill's copy is shortened to `pill_title_max_chars` like any pill's, except
+    a document's `doc <id>` fallback, for the reason the inline one is not shortened.
+
+    `label_is_identifier` says the row found no name under its first column and fell back to its
+    source's identifier.
+    """
+    keep_whole = label_is_identifier and isinstance(target, ConvertibleDocumentCitation)
+    return _annotation(
+        index=index,
+        tag_id=tag_id,
+        citation=target,
+        card_title=label,
+        pill_title=label if keep_whole else _shorten_for_pill(label, pill_title_max_chars),
+    )
+
+
+def _annotation(
+    *,
+    index: int,
+    tag_id: str,
+    citation: ConvertibleCitation,
+    card_title: str,
+    pill_title: str,
+) -> Annotation:
+    """The annotation claiming one tag, given the two labels its caller settled on.
+
     No label is derived from a URL and no part of one is decoded: the file name inside a shared
     URL is a storage path segment and the last segment of a portal URL is a slug, neither of them
     a name the reader should be shown.
     """
     body = (
-        _document_body(citation, document_titles=document_titles, pill_chars=pill_title_max_chars)
-        if isinstance(citation, _ConvertibleDocumentCitation)
-        else _dataset_body(citation, pill_chars=pill_title_max_chars)
+        _document_body(citation, card_title=card_title, pill_title=pill_title)
+        if isinstance(citation, ConvertibleDocumentCitation)
+        else _dataset_body(citation, card_title=card_title, pill_title=pill_title)
     )
     return Annotation(
         index=index,
@@ -557,60 +641,38 @@ def _build_annotation(
 
 
 def _document_body(
-    citation: _ConvertibleDocumentCitation,
-    *,
-    document_titles: Mapping[int, str],
-    pill_chars: int | None,
+    citation: ConvertibleDocumentCitation, *, card_title: str, pill_title: str
 ) -> AnnotationBody:
-    """A cited document's popup entry: its publication title and the page, and the file to open.
-
-    The page belongs in both labels, because a document server attributes at page level: two
-    pages of one publication are two sources, and a run folding them behind one pill must still
-    read as two entries in its popup. A document no title resolved for reads `doc <id>, page
-    <ix>` in both — the text the marker carried, and the one label that is not shortened, because
-    it is short by construction and the smallest configurable budget could eat the id.
-    """
-    title = document_titles.get(citation.document_id)
-    leading = title if title else f"doc {citation.document_id}"
-    trailing = f", page {citation.page}"
-    pill_leading = _shorten_for_pill(leading, pill_chars) if title else leading
+    """A cited document's popup entry: the file to open, and the page the viewer scrolls to."""
     return AnnotationBody(
-        title=f"{leading}{trailing}",
+        title=card_title,
         source=AnnotationSource(
-            attachment=AnnotationAttachment(
-                type=PDF_MIME_TYPE, url=citation.url, title=f"{pill_leading}{trailing}"
-            )
+            attachment=AnnotationAttachment(type=PDF_MIME_TYPE, url=citation.url, title=pill_title)
         ),
         selector=PdfPageSelector(page=citation.page),
     )
 
 
 def _dataset_body(
-    citation: _ConvertibleDatasetCitation, *, pill_chars: int | None
+    citation: ConvertibleDatasetCitation, *, card_title: str, pill_title: str
 ) -> AnnotationBody:
-    """A cited dataset's popup entry: its name and the page to open in a browser.
+    """A cited dataset's popup entry: the page to open in a browser, and what the card says.
 
-    The leading part is the catalogue's name for the dataset, or the URN the marker carried when
-    it reported none — the same shape either way, so nothing in the label says which. The URL is
-    carried verbatim and appears in no label: the reader reaches it through the card's
+    The URL is carried verbatim and appears in no label: the reader reaches it through the card's
     open-in-browser action, which is the client's own path and the only one there is.
     """
-    source = citation.source
-    leading = source.name if source.name else citation.dataset_id
     return AnnotationBody(
-        title=f"{leading}{_DATASET_LABEL_SUFFIX}",
+        title=card_title,
         source=AnnotationSource(
             attachment=AnnotationAttachment(
-                type=DATASET_MIME_TYPE,
-                url=citation.url,
-                title=f"{_shorten_for_pill(leading, pill_chars)}{_DATASET_LABEL_SUFFIX}",
+                type=DATASET_MIME_TYPE, url=citation.url, title=pill_title
             )
         ),
         quote=_dataset_quote(citation),
     )
 
 
-def _dataset_quote(citation: _ConvertibleDatasetCitation) -> str:
+def _dataset_quote(citation: ConvertibleDatasetCitation) -> str:
     """What the card says about the dataset: which one it is, and how current it is.
 
     A Markdown list, because the client renders this one field through its Markdown renderer, so
@@ -629,34 +691,49 @@ def _convertible_citation(
     *,
     document_urls: Mapping[int, str],
     dataset_sources: Mapping[str, DatasetSource],
-) -> _ConvertibleCitation | None:
-    """What this citation opens, or None when it cannot become a pill.
-
-    One condition per kind of source, both decided here and both about whether the reader can
-    open what the pill would point at. A document citation needs a PDF URL for the document it
-    names. A dataset citation needs a record for the URN it names, carrying a URL a browser can
-    open — a storage-relative path would make the client offer a file download rather than a page.
-    """
+) -> ConvertibleCitation | None:
+    """What this citation opens, or None when it cannot become a pill."""
     if marker.document_id is not None and marker.page is not None:
-        url = document_urls.get(marker.document_id)
-        if url is None or not is_pdf_url(url):
-            return None
-        return _ConvertibleDocumentCitation(
-            document_id=marker.document_id, page=marker.page, url=url
+        return convertible_document(
+            document_id=marker.document_id, page=marker.page, document_urls=document_urls
         )
     if marker.dataset_id is not None:
-        source = dataset_sources.get(marker.dataset_id)
-        # A record with no URL is a cited dataset all the same: it keeps its marker text here and
-        # is still listed in the References section, which is why the catalogue read keeps every
-        # cited record rather than only the ones a pill can use. The URL is checked here rather
-        # than assumed — the catalogue reader normalizes an unusable one away, but this function
-        # is also called with sources a caller built itself.
-        if source is None or source.url is None or not is_web_url(source.url):
-            return None
-        return _ConvertibleDatasetCitation(
-            dataset_id=marker.dataset_id, url=source.url, source=source
-        )
+        return convertible_dataset(dataset_id=marker.dataset_id, dataset_sources=dataset_sources)
     return None
+
+
+def convertible_document(
+    *, document_id: int, page: int, document_urls: Mapping[int, str]
+) -> ConvertibleDocumentCitation | None:
+    """What a citation of this document and page opens, or None when the reader cannot open it.
+
+    The condition is a PDF URL for the document. It decides both an inline citation's pill and a
+    References row's, so the two cannot disagree about whether a document can be opened.
+    """
+    url = document_urls.get(document_id)
+    if url is None or not is_pdf_url(url):
+        return None
+    return ConvertibleDocumentCitation(document_id=document_id, page=page, url=url)
+
+
+def convertible_dataset(
+    *, dataset_id: str, dataset_sources: Mapping[str, DatasetSource]
+) -> ConvertibleDatasetCitation | None:
+    """What a citation of this dataset opens, or None when the reader cannot open it.
+
+    The condition is a record for the URN carrying a URL a browser can open — a storage-relative
+    path would make the client offer a file download rather than a page. It decides both an inline
+    citation's pill and a References row's.
+    """
+    source = dataset_sources.get(dataset_id)
+    # A record with no URL is a cited dataset all the same: it keeps its marker text and is still
+    # listed in the References section, which is why the catalogue read keeps every cited record
+    # rather than only the ones a pill can use. The URL is checked here rather than assumed — the
+    # catalogue reader normalizes an unusable one away, but this function is also called with
+    # sources a caller built itself.
+    if source is None or source.url is None or not is_web_url(source.url):
+        return None
+    return ConvertibleDatasetCitation(dataset_id=dataset_id, url=source.url, source=source)
 
 
 def is_pdf_url(url: str) -> bool:

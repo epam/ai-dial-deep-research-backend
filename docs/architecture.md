@@ -208,8 +208,8 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   `<publication title>, page <ix>`, a dataset reads `<dataset name> dataset`, and a lookup that
   resolved nothing changes only the leading part — `doc <id>` for a document, the URN for a
   dataset — so no label says which citations fell back. The pill's copy of the leading part is
-  shortened to `max_pill_title_chars` (default 20, null to switch it off) because the client does not trim an
-  overflowing label; the card keeps it whole. One label that is never
+  shortened to `max_pill_title_chars` where a channel sets it (null, the default, shows it whole),
+  because the client does not trim an overflowing label; the card keeps it whole. One label that is never
   shortened is an unresolved document's, `doc <id>, page <ix>` being short by construction. A
   document annotation carries the cited page in a zero-size `pdf_bbox` selector, an
   `application/pdf` attachment type and no `body.quote`; a dataset annotation carries no selector,
@@ -230,18 +230,25 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   source and falls back to `doc <id>` or the URN when its key resolves nothing, while every other
   column is left blank, and nothing marks a row as degraded. A cell renders a string as written, a
   number or boolean as its text and a list joined with `, `, escaping `|` and collapsing line
-  breaks so a value cannot break the table. No row carries a link or a marker tag: a cited
-  document's shared URL is storage-relative, so an ordinary Markdown link to it opens nothing, and
-  making a row openable would mean an annotation and therefore a citation card. The no-hyperlink rule
-  governs what the report writer writes, and nothing here writes openable markup of its own. The
+  breaks so a value cannot break the table. A row whose source can be opened — on the
+  same condition its inline citations convert on — carries only a marker tag in its first cell, and
+  an annotation of the row's own claims it, so the source's name is the pill. That annotation is an
+  inline one's with two differences: both labels are the first cell's value alone, with no page and
+  no `dataset` (shortened on the pill to `max_pill_title_chars` like any pill, except a `doc <id>`
+  fallback), and a document row opens its document at page 1. Row annotations
+  follow the inline ones in the same array, their indices continuing it. The row is opened through
+  an annotation rather than a link because a cited document's shared URL is storage-relative, so an
+  ordinary Markdown link to it opens nothing; nothing here writes a link, so the no-hyperlink rule
+  needs no exemption. The
   section is appended and nothing is taken out of the draft: a draft that wrote its own references
   section is reported for the extra `##` heading while a version remains, and its words count
   toward the ceiling, but a draft that spends its last version still carrying one is delivered with
   that section followed by the app's. Removing it would mean removing a heading and everything
   below it, which takes whatever the writer put after it. The section is built for every delivered
   report; no configuration switches it off.
-  The build is the last pass, so its failure costs the section alone and is one WARNING
-  (`kind=references_build_failed`); every pill the conversion earned is already in the text.
+  The build is the last pass, so its failure costs the section and its row pills alone and is one
+  WARNING (`kind=references_build_failed`); every pill the conversion earned is already in the
+  text.
   The step's three resolutions are issued together in one `asyncio.gather`, each failing
   independently into an empty mapping, so the step costs one round trip. The
   document metadata comes from one MCP resource read per turn, at the URI named by

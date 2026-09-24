@@ -587,17 +587,17 @@ class ApplicationProperties(BaseModel):
         " so write it in the language this channel's readers read.",
     )
     max_pill_title_chars: int | None = Field(
-        default=20,
+        default=None,
         ge=10,
         description="How much of a citation pill's leading part it shows — a cited document's"
         " publication title, or a cited dataset's name, or that dataset's identifier where no name"
-        " resolved — the ellipsis counted within it. A pill is a narrow element in the middle of a"
-        " sentence and also carries the client's own count marker when it stands for several"
-        " sources, so a long name runs off it; the client does not shorten the label itself. What"
-        " follows the leading part — a document's cited page, the word dataset — is appended after"
-        " the shortening and is never lost to a long name, and the citation card keeps the leading"
-        " part whole regardless of this value. Raise it if the pills read too short in your"
-        " client, or set it to null to show every label whole.",
+        " resolved — the ellipsis counted within it. It also limits the name on a References row's"
+        " pill. Null, the default, shows every label whole. Set a number if your client has no room"
+        " for long names: a pill is a narrow element and also carries the client's own count"
+        " marker when it stands for several sources, and the client does not shorten the label"
+        " itself. What follows the leading part of an inline pill — a document's cited page, the"
+        " word dataset — is appended after the shortening and is never lost to a long name, and"
+        " the citation card keeps the name whole regardless of this value.",
     )
     mcp_servers: list[MCPClientSettings] = Field(
         min_length=1,
