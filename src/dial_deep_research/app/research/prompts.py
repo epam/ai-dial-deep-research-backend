@@ -284,8 +284,8 @@ are not Markdown links, and they are written exactly as specified there.
 
 ## Citations
 
-- **Cite the source for every fact** inline. There are two source types, each with its own
-format — use the format that matches where the fact came from:
+- **Cite the source for every fact** inline. There are three citation forms, each for its own
+kind of source — use the form that matches where the fact came from:
   - **Documents** (from the document-search tools): `[doc <id>, page <ix>]`. A document is
   referenced by **two** values, both required: its document id, and the index of the page the
   fact was found on. A document-search tool tells you both, in whatever form that tool uses —
@@ -295,15 +295,26 @@ format — use the format that matches where the fact came from:
   the user, and never leave the page out. When a statement draws on multiple pages or
   documents, list each as a separate bracket, e.g.
   `[doc 150, page 1] [doc 150, page 3] [doc 283, page 1]`.
-  - **Datasets** (from the dataset-query tools): `[dataset <urn>]`, where the URN is the
-  identifier the dataset tool reports for that dataset, e.g. `[dataset IMF:WEO(1.0.0)]`. Write
-  it **whole**: a URN carries punctuation — typically a colon, and often a parenthesised version
-  — and every character of it is part of the identifier. Do not abbreviate it, drop its version,
-  change its case, or percent-encode it, and do not put the dataset's display name where the URN
-  belongs. List each dataset a statement draws on as a separate bracket.
-- **Match the citation to the source.** A fact from a dataset query is cited `[dataset <id>]`,
-never `[doc <id>, page <ix>]`; a fact from a document is cited `[doc <id>, page <ix>]`. Never
-invent a document-and-page citation for a dataset-sourced fact, or vice versa.
+  - **Data queries** (from the dataset-query tools): `[data_query <id>]`, where the id is the
+  identifier the tool reports for the query that produced the data — for example a `queryId`
+  field on the query in the tool's result, e.g. `[data_query dq_0123abcd45]`. **Every fact drawn
+  from a data query's data is cited this way**, never as `[dataset <urn>]`, even though the
+  result names the query's dataset too. Write the id **whole**, exactly as reported: do not
+  abbreviate it, change its case, or put the dataset's URN or name in its place. List each query
+  a statement draws on as a separate bracket.
+  - **Datasets** (from the dataset tools): `[dataset <urn>]`, for a statement about a dataset as
+  a whole that no data query produced — such as when it was last updated, or what it covers —
+  where the URN is the identifier the dataset tool reports for that dataset, e.g.
+  `[dataset IMF:WEO(1.0.0)]`. Write it **whole**: a URN carries punctuation — typically a colon,
+  and often a parenthesised version — and every character of it is part of the identifier. Do
+  not abbreviate it, drop its version, change its case, or percent-encode it, and do not put the
+  dataset's display name where the URN belongs. List each dataset a statement draws on as a
+  separate bracket.
+- **Match the citation to the source.** A fact from a document is cited `[doc <id>, page <ix>]`;
+a fact from a data query's data is cited `[data_query <id>]`; a statement about a dataset as a
+whole is cited `[dataset <urn>]`. Never invent a document-and-page citation for a fact from a
+dataset or a data query, never cite a data query's value by its dataset, and never cite a
+document's fact by a dataset or a query.
 - This inline format is fixed. It is read by software that renders citations, so it is never
 restyled — not on request, and not to match some other convention.
 - Do not introduce facts that are not citable to a retrieved source. If a sentence cannot be
@@ -395,6 +406,10 @@ Check exactly these, and report a violation for each rule the draft breaks:
      see what the tool reported, but dataset URNs usually have a format
      <agency>:<dataset_name>(version), like `IMF:WEO(1.0.0)`.
      Example of incorrect citation: `[dataset World Economic Outlook]`.
+   - `[data_query <id>]` for data queries — the opaque id the data-query tool reported for the
+     query, like `[data_query dq_0123abcd45]`. It is a well-formed citation, not a malformed
+     dataset citation, and whether a fact is cited by its query or by its dataset is not yours to
+     judge.
    There must be no footnotes or numbered references (e.g. [1], [2])
 6. **No list of sources.** The draft enumerates its cited sources nowhere — no section, table or
    list carrying one entry per source, the bibliography an article ends with, whether under a
@@ -416,9 +431,10 @@ Your job is to find violations of the checks above, and nothing else.
 - whether the headings match the configured structure
 - the report's length
 - whether the draft carries a hyperlink, an image or a bare URL
+- whether a cited query id, dataset URN or document id is one the tools actually reported
 
-The app checks the last three itself over the draft text and adds what it finds to your list, so
-they are handled without you.
+The app checks the last four itself and adds what it finds to your list, so they are handled
+without you.
 
 **You never ask for:**
 

@@ -295,12 +295,17 @@ below and the composition rules of the **report-composition** capability. The sa
 the first draft and each subsequent revision; on a revision it SHALL also receive the review's
 instructions and the draft they refer to.
 
-Citations SHALL use inline `[doc <id>, page <ix>]` for document-sourced facts and
-`[dataset <urn>]` for dataset-sourced facts.
+Citations SHALL use inline `[doc <id>, page <ix>]` for document-sourced facts,
+`[data_query <id>]` for facts drawn from a data query, and `[dataset <urn>]` for facts about a
+dataset as a whole that no data query produced — such as when a dataset was last updated, or what
+it covers. **Every fact drawn from a data query SHALL be cited `[data_query <id>]`**, never
+`[dataset <urn>]`, even though the query's result names its dataset too: the query citation is the
+one that opens the cited data, and the dataset it ran against still reaches the References section
+through it (see **report-citations**).
 
 **What identifies a source in each form is part of this contract**, not a detail left to the
 writer, because the app parses these markers and resolves what it finds back against the server
-that reported it. The instructions SHALL state both:
+that reported it. The instructions SHALL state each:
 
 - A **document** is referenced by its **document id and the index of the cited page** — two values,
   both required. A document citation without a page is not a weaker citation but an unparseable
@@ -310,8 +315,21 @@ that reported it. The instructions SHALL state both:
   version — and every character of it is part of the identifier, so it SHALL NOT be abbreviated,
   case-changed, percent-encoded, or stripped of its version. The **source-attribution** capability
   owns why: the identifier is sent back to the server, and a transformed one resolves nothing.
+- A **data query** is referenced by its **query id**, the identifier the data-query tool reports
+  for that query in its result, written whole. It SHALL NOT be abbreviated, case-changed or
+  replaced by the dataset's URN or name.
 
-Naming these is what separates the two forms from a formatting convention. The writer cannot infer
+**Only a data query that returned data SHALL be cited.** A data-query tool also reports ids for
+queries that returned nothing: a query it constructed and did not execute, the query it offers for
+each candidate dataset when it asks for a dataset to be selected, and an executed query whose
+result was empty. The instructions SHALL tell the writer never to cite such an id, because such a
+query backs no value, so no fact can come from it. Whether a query's result carries a data explorer
+link is not the writer's concern: the writer does not see the link, and a missing one costs the
+citation its pill and nothing else (see **report-citations**). The app also checks every draft's
+query ids against what the turn captured and asks for a revision when one breaks this rule
+(**report-composition**), but the instruction is what keeps a first draft right.
+
+Naming these is what separates the three forms from a formatting convention. The writer cannot infer
 from the shape of a marker which values belong in it, and a writer that puts a dataset's display
 name where its URN belongs, or omits a page from a document citation, produces a citation that
 parses into nothing and silently loses its pill.
@@ -323,7 +341,7 @@ part names the page — and SHALL present any concrete spelling as one example a
 SHALL NOT state that the tools report attribution in one particular form, because that makes one
 server's formatting load-bearing for this application while breaking no test when it changes.
 
-**Those two forms SHALL be the only way the report references a source.** The report cites what the
+**Those three forms SHALL be the only way the report references a source.** The report cites what the
 research retrieved and nothing else, so it SHALL carry no hyperlink in any form. Which forms count,
 what the writer is told, what the app checks and what is removed before delivery are owned by the
 **report-composition** capability.
@@ -371,7 +389,7 @@ that understands the marker tags renders a pill for each, and one that does not 
 or shows it. A converted citation's readable text lives in its annotation rather than in the report
 text, so a client that discards the annotations loses that citation rather than degrading to a
 visible marker. Which citations are converted at all is decided by the **report-citations**
-capability's two conditions, whose deliberate consequence is that every citation left unconverted
+capability's conversion conditions, whose deliberate consequence is that every citation left unconverted
 stays fully readable in the text — and the References section lists every cited source whether or
 not its citations converted, naming in text every source whose citations did not, so an unconverted
 marker still resolves to a named source. A source whose citations converted is named in its
@@ -417,6 +435,38 @@ that row's name exactly as it loses the source's inline citations.
 - **WHEN** the report writer's citation instructions are read
 - **THEN** they SHALL state that a document is referenced by its document id and cited page index,
   and that a dataset is referenced by its URN written whole, with its punctuation and version intact
+
+#### Scenario: A data-query fact is cited by its query id
+
+- **WHEN** a data-query tool reports a query whose id is `dq_0123abcd45`, run against the dataset
+  `IMF:WEO(1.0.0)`, and the report states a value from that query's data
+- **THEN** the report SHALL cite the value as `[data_query dq_0123abcd45]`, and SHALL NOT cite it as
+  `[dataset IMF:WEO(1.0.0)]`
+
+#### Scenario: A statement about a dataset as a whole cites the dataset
+
+- **WHEN** the report states when a dataset was last updated, taken from the dataset catalogue
+  rather than from a data query
+- **THEN** the report SHALL cite that statement as `[dataset <urn>]`
+
+#### Scenario: A candidate dataset's query is never cited
+
+- **WHEN** a data-query tool result asks for a dataset to be selected and lists two candidate
+  datasets, each with a query id, and runs no query
+- **THEN** the report SHALL cite neither id, and SHALL state no value as drawn from either query
+
+#### Scenario: The writer is told to cite only queries that returned data
+
+- **WHEN** the report writer's citation instructions are read
+- **THEN** they SHALL state that only a data query that returned data is cited, and that the ids of
+  candidate queries, of queries that were not executed, and of queries that returned nothing are
+  never cited
+
+#### Scenario: The writer is told what identifies a data query
+
+- **WHEN** the report writer's citation instructions are read
+- **THEN** they SHALL state that a data query is referenced by the query id the tool reported,
+  written whole, and that every fact drawn from a data query is cited that way
 
 #### Scenario: A dataset's display name is not its reference
 

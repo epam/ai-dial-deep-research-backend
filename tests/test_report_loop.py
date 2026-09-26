@@ -17,12 +17,14 @@ Routing itself lives in `test_research_routing.py`; the stage's rendering in `te
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from itertools import count
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from langchain_core.documents.base import Blob
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -31,8 +33,11 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.runnables import Runnable, RunnableLambda
+from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from dial_deep_research.app.research import nodes
+from dial_deep_research.app.research.citation_lookups import CitationLookups
+from dial_deep_research.app.research.data_queries import DataQueryStore
 from dial_deep_research.app.research.nodes import ReportReviewOutcome
 from dial_deep_research.app.research.prompts import (
     REPORT_SYSTEM_PROMPT,
@@ -45,8 +50,13 @@ from dial_deep_research.app.research.report_rules import (
     build_report_rules,
     render_writer_instructions,
 )
-from dial_deep_research.app_properties import DEFAULT_REPORT_STRUCTURE, ReportSection
+from dial_deep_research.app_properties import (
+    DEFAULT_REPORT_STRUCTURE,
+    DocumentMetadataSource,
+    ReportSection,
+)
 from dial_deep_research.utils.content import count_image_blocks, count_words
+from tests.citation_fakes import no_lookups
 
 _TODAY = "2026-07-16"
 
@@ -127,6 +137,7 @@ def _report_node(
         sections=sections if sections is not None else DEFAULT_REPORT_STRUCTURE,
         max_words=max_words,
         references_name=_REFERENCES_NAME,
+        lookups=no_lookups(),
         emit_revision_failed_stage=(failures.append if failures is not None else lambda _o: None),
         emit_activity=lambda _title: None,
     )
@@ -333,6 +344,7 @@ def _review_node(
     *,
     sections: list[ReportSection] | None = None,
     max_words: int = 2750,
+    lookups: CitationLookups | None = None,
 ) -> tuple[Any, list[ReportReviewOutcome]]:
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: llm)
     stages: list[ReportReviewOutcome] = []
@@ -341,6 +353,7 @@ def _review_node(
         sections=sections if sections is not None else DEFAULT_REPORT_STRUCTURE,
         max_words=max_words,
         references_name=_REFERENCES_NAME,
+        lookups=lookups or no_lookups(),
         emit_result_stage=stages.append,
         emit_activity=lambda _title: None,
     )
@@ -362,6 +375,35 @@ async def test_an_approved_draft_within_the_ceiling_is_delivered(
     assert outcome.draft_number == 1
     # The heading's two words count with the body's three.
     assert outcome.word_count == 5
+
+
+async def test_the_review_looks_up_cited_documents_before_checking_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The identifier rules read what the review's own lookup learned about this draft."""
+
+    class _Resource:
+        async def get_resources(self, _server_name: str, *, uris: list[str]) -> list[Blob]:
+            return [Blob.from_data(data=json.dumps({"207": {}}), mime_type="application/json")]
+
+    lookups = CitationLookups(
+        dataset_tool=None,
+        client=cast(MultiServerMCPClient, _Resource()),
+        document_source=DocumentMetadataSource(
+            server_name="documents",
+            resource_template="documents://metadata/{document_ids}",
+            title_key="publication_title",
+        ),
+        data_queries=DataQueryStore(),
+    )
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION, lookups=lookups)
+
+    await node(_state(report=_conforming_draft("A [doc 207, page 1]. B [doc 999, page 2].")))
+
+    [outcome] = stages
+    [violation] = outcome.violations
+    assert "document 999" in violation
 
 
 async def test_violations_become_the_revision_instruction_and_reach_the_stage(
@@ -736,6 +778,7 @@ def test_report_system_prompt_states_the_ceiling_and_the_protected_names() -> No
                 sections=DEFAULT_REPORT_STRUCTURE,
                 max_words=2750,
                 references_name=_REFERENCES_NAME,
+                lookups=no_lookups(),
             )
         ),
         protected_sections=render_protected_section_names(DEFAULT_REPORT_STRUCTURE),

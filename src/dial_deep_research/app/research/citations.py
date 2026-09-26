@@ -8,10 +8,11 @@ the behaviour a real report gets.
 The delivered text is produced by three alterations, in this order:
 
 1. `remove_hyperlinks`, which leaves nothing in the report pointing the reader outward.
-2. the citation conversion — `cited_document_ids` and `cited_dataset_ids` over the link-free
+2. the citation conversion — `cited_document_ids` and `cited_dataset_urns` over the link-free
    text, the documents' URLs and titles and the datasets' catalogue records resolved for what
-   they report, then `convert_citations` — which replaces each convertible marker with a marker
-   tag and returns the annotations that claim those tags.
+   they report, then `convert_citations` with the turn's captured data-query records — which
+   replaces each convertible marker with a marker tag and returns the annotations that claim
+   those tags.
 3. the References section, built by `references.py` from the same resolved metadata and appended
    to the converted text. That module takes three things from this one for a row that opens its
    source: whether the source can be opened (`convertible_document`, `convertible_dataset` — the
@@ -20,17 +21,19 @@ The delivered text is produced by three alterations, in this order:
 
 A citation's labels are a leading part naming the source and a fixed trailing part saying what
 kind of source it is: `<publication title>, page <ix>` for a document, `<dataset name> dataset`
-for a dataset. A lookup that resolved nothing changes only the leading part — `doc <id>` for a
-document, the dataset's URN for a dataset — so the cost of missing metadata is a plainer pill
-rather than a missing one, and no label tells the reader which citations fell back.
+for a dataset, and the same for a data query, named by the dataset it ran against. A lookup that
+resolved nothing changes only the leading part — `doc <id>` for a document, the dataset's URN for
+a dataset — so the cost of missing metadata is a plainer pill rather than a missing one, and no
+label tells the reader which citations fell back.
 
 The order is fixed so the outcome is deterministic. It also keeps the marker parser free of any
 rule about a bracket followed by `(`: a Markdown link written `[doc 1 overview](url)` reaches the
 parser as the bare label `doc 1 overview`, which matches no marker.
 
 Each kind of citation becomes a pill on its own condition — a document when it has a PDF URL the
-reader can open, a dataset when the catalogue reported a page a browser can open — and keeps its
-marker text when the condition fails, so the failure mode is a missing pill and never a lost
+reader can open, a dataset when the catalogue reported a page a browser can open, a data query
+when the turn captured a data explorer link for it — and keeps its marker text when the condition
+fails, so the failure mode is a missing pill and never a lost
 citation. Where in the Markdown the marker stands is not a condition: the client parses a marker
 tag wherever it appears — a paragraph, a list item, a table cell, a heading, a blockquote. The
 exception is code, where Markdown parses no raw HTML: a marker inside a fenced block or a code
@@ -44,9 +47,12 @@ import re
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Literal
-from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from dial_deep_research.app.research.data_queries import DataQueryRecord
+from dial_deep_research.app.research.web_urls import is_web_url
+from dial_deep_research.app_properties import DEFAULT_DATA_QUERY_CARD_FILTER_MAX_LINE_CHARS
 
 # The tag written at each converted citation, and the tag name every annotation's selector
 # carries. The client rewrites a tag whose id an annotation claims into a pill, and shows a tag
@@ -56,24 +62,22 @@ CITATION_TAG_NAME = "cit"
 
 PDF_MIME_TYPE = "application/pdf"
 
-# What a dataset citation's source is: a page on the web rather than a file. The client branches
-# on this string twice — it routes only `application/pdf` into its document viewer, and it offers
-# the open-in-browser action, the one action that reaches a page, only for an HTML type.
+# What a dataset or data-query citation's source is: a page on the web rather than a file. The
+# client branches on this string twice — it routes only `application/pdf` into its document viewer,
+# and it offers the open-in-browser action, the one action that reaches a page, only for an HTML
+# type.
 DATASET_MIME_TYPE = "text/html"
 
 # What marks a title the pill shows only part of. One character, so it costs the caller's
 # budget as little as possible.
 _ELLIPSIS = "…"
 
-# The schemes a citation pill may open. A dataset citation's URL is followed by the client in a
-# new browser tab, so it has to be one the browser can resolve on its own.
-_WEB_URL_SCHEMES = ("http", "https")
-
 # The word every dataset label ends with. A dataset's name is often a bare noun phrase that says
 # nothing about what kind of source it is, and a URN says less still.
 _DATASET_LABEL_SUFFIX = " dataset"
 
-# The two inline citation forms the report is written in (see the research-execution capability).
+# The three inline citation forms the report is written in (see the research-execution
+# capability).
 # The document form takes a positive integer id and a positive integer page, because both halves
 # are used: the id is what the file-sharing tool is asked for, and the page is what the reader is
 # scrolled to. Anything else in the brackets is left as text — a page range, a non-numeric id, a
@@ -92,7 +96,11 @@ _DOCUMENT_MARKER = r"\[[ \t]*doc(?:ument)?[ \t]+(?P<doc_id>[1-9][0-9]*)[ \t]*,[ 
 # survive parsing unchanged. The id is matched against the catalogue verbatim (see
 # **source-attribution**), which is why nothing here trims, folds or decodes it.
 _DATASET_MARKER = r"\[[ \t]*dataset[ \t]+(?P<dataset_id>[^\[\]\n]+?)[ \t]*\]"
-_MARKER_RE = re.compile(f"{_DOCUMENT_MARKER}|{_DATASET_MARKER}", re.IGNORECASE)
+# A query id is the opaque string the data-query tool reports for a query. It is parsed like a
+# URN, and for the same reason: it is matched against the captured records verbatim, and holding
+# it to one server's current spelling would make this parser depend on how that server names ids.
+_DATA_QUERY_MARKER = r"\[[ \t]*data_query[ \t]+(?P<data_query_id>[^\[\]\n]+?)[ \t]*\]"
+_MARKER_RE = re.compile(f"{_DOCUMENT_MARKER}|{_DATASET_MARKER}|{_DATA_QUERY_MARKER}", re.IGNORECASE)
 
 # What may stand between two markers of one run, matched in full. No newline: a citation on the
 # next line supports a different statement, as does one after a full stop or a word.
@@ -102,9 +110,10 @@ _RUN_SEPARATOR_RE = re.compile(r"[ \t,;]*")
 class CitationMarker(BaseModel):
     """One citation marker found in report text, and the span it occupies.
 
-    Which pair of fields is filled says which form the marker was written in: a document marker
+    Which fields are filled says which form the marker was written in: a document marker
     carries the document id and the cited page, a dataset marker carries the URN alone — a
-    dataset citation names no location inside what it cites.
+    dataset citation names no location inside what it cites — and a data-query marker carries
+    the query id alone.
     """
 
     start: int
@@ -113,6 +122,7 @@ class CitationMarker(BaseModel):
     document_id: int | None = None
     page: int | None = None
     dataset_id: str | None = None
+    data_query_id: str | None = None
 
 
 class DatasetSource(BaseModel):
@@ -194,9 +204,10 @@ class AnnotationBody(BaseModel):
     null. Any later field that is meaningfully null on the wire has to revisit that dump.
 
     A document citation carries `selector` and no `quote`: the page is what a reader is scrolled
-    to, and the app does not hold the cited passage's text. A dataset citation carries `quote`
-    and no `selector`: it names no location inside what it cites, and the field the client
-    reserves for a passage is where its identity and currency go instead.
+    to, and the app does not hold the cited passage's text. A dataset citation carries neither:
+    it names no location inside what it cites, and its name and currency are in the title. A
+    data-query citation carries `quote` and no `selector`: the field the client reserves for a
+    passage is where the query's filter goes.
     """
 
     title: str
@@ -253,11 +264,34 @@ class ConvertibleDatasetCitation(BaseModel):
         return ("dataset", self.dataset_id)
 
 
+class ConvertibleDataQueryCitation(BaseModel):
+    """A data-query citation its condition holds for: the query, and where it opens.
+
+    `url` is the data explorer link the turn captured for the query, never its dataset's page.
+    `urn` is the dataset the query ran against, when the query reported one, and `source` what the
+    catalogue said about that dataset, when it said anything: both only label the citation.
+    """
+
+    query_id: str
+    url: str
+    urn: str | None
+    record: DataQueryRecord
+    source: DatasetSource | None = None
+
+    @property
+    def source_key(self) -> tuple[str, ...]:
+        """What makes this one source: the query. Two queries of one dataset cite different data,
+        and each opens its own."""
+        return ("data_query", self.query_id)
+
+
 # One source the reader can open, which is what an annotation is emitted for: an inline citation
-# the conversion folds into a pill, or a References row. A pair of models rather than one widened
-# model: the two kinds share no field beyond the URL buried in each, and half the fields of a
-# merged model would be `None` in every instance.
-ConvertibleCitation = ConvertibleDocumentCitation | ConvertibleDatasetCitation
+# the conversion folds into a pill, or a References row. Separate models rather than one widened
+# model: the kinds share no field beyond the URL buried in each, and most fields of a merged
+# model would be `None` in every instance.
+ConvertibleCitation = (
+    ConvertibleDocumentCitation | ConvertibleDatasetCitation | ConvertibleDataQueryCitation
+)
 
 
 class CitationConversion(BaseModel):
@@ -266,7 +300,8 @@ class CitationConversion(BaseModel):
     text: str
     annotations: list[Annotation]
     # Citation markers still standing in `text`, in whatever form the writer wrote them — the
-    # ones whose document resolved no PDF URL, and whose dataset resolved no page URL.
+    # ones whose document resolved no PDF URL, whose dataset resolved no page URL, and whose query
+    # has no data explorer link.
     markers_left: int
 
 
@@ -311,8 +346,10 @@ def find_citation_markers(text: str) -> list[CitationMarker]:
                 text=match.group(0),
                 document_id=int(doc_id) if doc_id is not None else None,
                 page=int(match.group("page")) if doc_id is not None else None,
-                # Taken exactly as written: the URN is matched against the catalogue verbatim.
+                # Taken exactly as written: the URN is matched against the catalogue verbatim, and
+                # the query id against the captured records.
                 dataset_id=match.group("dataset_id"),
+                data_query_id=match.group("data_query_id"),
             )
         )
     return markers
@@ -359,6 +396,70 @@ def cited_dataset_ids(text: str) -> list[str]:
     return ids
 
 
+def cited_data_query_ids(text: str) -> list[str]:
+    """The distinct query ids the text cites, in report order, each exactly as written."""
+    ids: list[str] = []
+    for marker in find_citation_markers(text):
+        if marker.data_query_id is None or marker.data_query_id in ids:
+            continue
+        ids.append(marker.data_query_id)
+    return ids
+
+
+class DatasetTableEntry(BaseModel):
+    """One row the report's citations call for in the dataset table.
+
+    A dataset, by `urn`, or a cited query with an explorer link that reported no dataset, by
+    `query_id`: that query is a cited source whose dataset is unknown, so it is listed by its own
+    marker text. Exactly one of the two is set.
+    """
+
+    urn: str | None = None
+    query_id: str | None = None
+
+
+def cited_dataset_entries(
+    text: str, *, data_queries: Mapping[str, DataQueryRecord]
+) -> list[DatasetTableEntry]:
+    """The dataset table's rows in the order the text first cites each, without duplicates.
+
+    A dataset marker contributes its URN. A data-query marker whose query has an explorer link
+    contributes the dataset its query ran against, or itself when the query reported no dataset:
+    such a citation is a pill, and a pill's source gets a row. A data-query marker whose query has
+    no explorer link contributes nothing, so a data-query citation is either a pill with a row or
+    text with neither.
+    """
+    entries: list[DatasetTableEntry] = []
+    for marker in find_citation_markers(text):
+        entry: DatasetTableEntry | None = None
+        if marker.dataset_id is not None:
+            entry = DatasetTableEntry(urn=marker.dataset_id)
+        elif marker.data_query_id is not None:
+            record = data_queries.get(marker.data_query_id)
+            if record is not None and record.has_explorer_link:
+                urn = record.dataset_urn
+                entry = (
+                    DatasetTableEntry(urn=urn)
+                    if urn is not None
+                    else DatasetTableEntry(query_id=marker.data_query_id)
+                )
+        if entry is not None and entry not in entries:
+            entries.append(entry)
+    return entries
+
+
+def cited_dataset_urns(text: str, *, data_queries: Mapping[str, DataQueryRecord]) -> list[str]:
+    """The distinct datasets the text cites, directly or through a query, in report order.
+
+    These are the datasets the catalogue is read for: the URN entries of `cited_dataset_entries`.
+    """
+    return [
+        entry.urn
+        for entry in cited_dataset_entries(text, data_queries=data_queries)
+        if entry.urn is not None
+    ]
+
+
 def new_tag_id() -> str:
     """An opaque marker tag id. 48 random bits, so two tags of one message never share one."""
     return uuid.uuid4().hex[:12]
@@ -375,7 +476,9 @@ def convert_citations(
     document_urls: Mapping[int, str],
     document_titles: Mapping[int, str] | None = None,
     dataset_sources: Mapping[str, DatasetSource] | None = None,
+    data_queries: Mapping[str, DataQueryRecord] | None = None,
     pill_title_max_chars: int | None = None,
+    filter_line_max_chars: int = DEFAULT_DATA_QUERY_CARD_FILTER_MAX_LINE_CHARS,
     make_tag_id: Callable[[], str] = new_tag_id,
 ) -> CitationConversion:
     """Replace every convertible citation with its marker tag, and build the annotations.
@@ -389,15 +492,22 @@ def convert_citations(
             titles at all passes nothing and every label reads as the marker did.
         dataset_sources: what the catalogue reported about each cited dataset, by URN. A URN that
             is absent, or whose URL is not one a browser can open, keeps its citations as text; a
-            caller resolving no datasets at all passes nothing and every dataset marker stays.
+            caller resolving no datasets at all passes nothing and every dataset marker stays. It
+            also labels a data-query citation by the dataset its query ran against.
+        data_queries: the turn's captured data-query records, by query id. A query id that is
+            absent, or whose record has no data explorer link, keeps its citations as text; a
+            caller with no data queries passes nothing and every data-query marker stays.
         pill_title_max_chars: how much of a label's leading part the pill shows, the ellipsis
             counted within it. `None` shows it whole. The popup card carries the leading part
             whole either way.
+        filter_line_max_chars: how long one filter item on a data-query card may be, the
+            ellipsis counted within it.
         make_tag_id: source of tag ids. Injectable so a test can read the ids it expects; the
             default is opaque and unique per tag.
     """
     titles = document_titles or {}
     datasets = dataset_sources or {}
+    queries = data_queries or {}
     markers = find_citation_markers(text)
 
     pieces: list[str] = []
@@ -410,7 +520,10 @@ def convert_citations(
         kept_as_text: list[CitationMarker] = []
         for marker in run:
             citation = _convertible_citation(
-                marker, document_urls=document_urls, dataset_sources=datasets
+                marker,
+                document_urls=document_urls,
+                dataset_sources=datasets,
+                data_queries=queries,
             )
             if citation is None:
                 kept_as_text.append(marker)
@@ -439,6 +552,7 @@ def convert_citations(
                     citation=citation,
                     document_titles=titles,
                     pill_title_max_chars=pill_title_max_chars,
+                    filter_line_max_chars=filter_line_max_chars,
                 )
             )
 
@@ -491,6 +605,8 @@ def log_citations_resolved(
     markers_left: int,
     hyperlinks_removed: int,
     duration_seconds: float,
+    data_queries_requested: int = 0,
+    data_queries_resolved: int = 0,
 ) -> None:
     """Emit the citation-step event (8c) of the logging-policy INFO skeleton.
 
@@ -507,17 +623,25 @@ def log_citations_resolved(
 
     `datasets_resolved` counts the cited datasets the catalogue reported a usable page URL for.
     The gap to `datasets_requested` is likewise the whole record of a dataset that has no portal
-    page, which is the channel's own data rather than a fault and warns about nothing.
+    page, which is the channel's own data rather than a fault and warns about nothing. Both
+    dataset counts cover `[dataset <urn>]` markers alone, not the datasets reached through a
+    cited query.
+
+    `data_queries_resolved` counts the cited query ids the turn captured with a data explorer
+    link. Both query counts default to zero for a caller that cites no data queries.
     """
     log.info(
         "Report citations resolved: documents_requested=%d documents_resolved=%d"
-        " documents_titled=%d datasets_requested=%d datasets_resolved=%d annotations=%d"
+        " documents_titled=%d datasets_requested=%d datasets_resolved=%d"
+        " data_queries_requested=%d data_queries_resolved=%d annotations=%d"
         " markers_left=%d hyperlinks_removed=%d duration=%.1fs",
         documents_requested,
         documents_resolved,
         documents_titled,
         datasets_requested,
         datasets_resolved,
+        data_queries_requested,
+        data_queries_resolved,
         annotations,
         markers_left,
         hyperlinks_removed,
@@ -549,6 +673,7 @@ def _build_annotation(
     citation: ConvertibleCitation,
     document_titles: Mapping[int, str],
     pill_title_max_chars: int | None,
+    filter_line_max_chars: int,
 ) -> Annotation:
     """One annotation for one converted citation, whichever kind of source it names.
 
@@ -564,23 +689,47 @@ def _build_annotation(
     page <ix>` in both — the text the marker carried, and the one label that is not shortened,
     because it is short by construction and the smallest configurable budget could eat the id.
     A dataset's leading part is the catalogue's name for it, or the URN the marker carried when it
-    reported none — the same shape either way, so nothing in the label says which.
+    reported none — the same shape either way, so nothing in the label says which. A data query
+    is labelled by the dataset it ran against the same way, and by its own marker text,
+    unshortened, when it reported no dataset.
+
+    Only the card of a dataset or data-query citation goes on to the dataset's last-update date:
+    the pill is the narrowest label, and the date is not what tells two sources apart.
     """
+    quote: str | None = None
+    last_updated: str | None = None
     if isinstance(citation, ConvertibleDocumentCitation):
         title = document_titles.get(citation.document_id)
         leading = title if title else f"doc {citation.document_id}"
         trailing = f", page {citation.page}"
         pill_leading = _shorten_for_pill(leading, pill_title_max_chars) if title else leading
-    else:
+    elif isinstance(citation, ConvertibleDatasetCitation):
         leading = citation.source.name if citation.source.name else citation.dataset_id
         trailing = _DATASET_LABEL_SUFFIX
         pill_leading = _shorten_for_pill(leading, pill_title_max_chars)
+        last_updated = citation.source.last_updated
+    else:
+        quote = _data_query_quote(citation.record, max_line_chars=filter_line_max_chars)
+        if citation.urn is None:
+            leading = f"data_query {citation.query_id}"
+            trailing = ""
+            pill_leading = leading
+        else:
+            source = citation.source
+            leading = source.name if source is not None and source.name else citation.urn
+            trailing = _DATASET_LABEL_SUFFIX
+            pill_leading = _shorten_for_pill(leading, pill_title_max_chars)
+            last_updated = source.last_updated if source is not None else None
+    card_title = f"{leading}{trailing}"
+    if last_updated:
+        card_title = f"{card_title} - last update {last_updated}"
     return _annotation(
         index=index,
         tag_id=tag_id,
         citation=citation,
-        card_title=f"{leading}{trailing}",
+        card_title=card_title,
         pill_title=f"{pill_leading}{trailing}",
+        quote=quote,
     )
 
 
@@ -621,6 +770,7 @@ def _annotation(
     citation: ConvertibleCitation,
     card_title: str,
     pill_title: str,
+    quote: str | None = None,
 ) -> Annotation:
     """The annotation claiming one tag, given the two labels its caller settled on.
 
@@ -631,7 +781,7 @@ def _annotation(
     body = (
         _document_body(citation, card_title=card_title, pill_title=pill_title)
         if isinstance(citation, ConvertibleDocumentCitation)
-        else _dataset_body(citation, card_title=card_title, pill_title=pill_title)
+        else _web_body(url=citation.url, card_title=card_title, pill_title=pill_title, quote=quote)
     )
     return Annotation(
         index=index,
@@ -653,10 +803,8 @@ def _document_body(
     )
 
 
-def _dataset_body(
-    citation: ConvertibleDatasetCitation, *, card_title: str, pill_title: str
-) -> AnnotationBody:
-    """A cited dataset's popup entry: the page to open in a browser, and what the card says.
+def _web_body(*, url: str, card_title: str, pill_title: str, quote: str | None) -> AnnotationBody:
+    """A cited dataset's or data query's popup entry: the page to open in a browser.
 
     The URL is carried verbatim and appears in no label: the reader reaches it through the card's
     open-in-browser action, which is the client's own path and the only one there is.
@@ -664,26 +812,40 @@ def _dataset_body(
     return AnnotationBody(
         title=card_title,
         source=AnnotationSource(
-            attachment=AnnotationAttachment(
-                type=DATASET_MIME_TYPE, url=citation.url, title=pill_title
-            )
+            attachment=AnnotationAttachment(type=DATASET_MIME_TYPE, url=url, title=pill_title)
         ),
-        quote=_dataset_quote(citation),
+        quote=quote,
     )
 
 
-def _dataset_quote(citation: ConvertibleDatasetCitation) -> str:
-    """What the card says about the dataset: which one it is, and how current it is.
+def _data_query_quote(record: DataQueryRecord, *, max_line_chars: int) -> str | None:
+    """What the card says about a query: one item per filter it set, and the period it asked for.
 
-    A Markdown list, because the client renders this one field through its Markdown renderer, so
-    two facts read as two items rather than as one run-on line. The last-update row is dropped
-    whole when the catalogue reported no date: a reader learns nothing from a line saying the app
-    knows nothing, and a dataset without a date is ordinary rather than a fault.
+    A Markdown list, because the client renders this one field through its Markdown renderer. A
+    filter item names the dimension and the selected values in display names, falling back to
+    the codes where no name was reported, and is cut to `max_line_chars` by the rule a pill's
+    leading part is cut by: a filter on dozens of values would otherwise fill the card, and the
+    data explorer link opens the whole selection anyway. Only an `in` filter with values is
+    listed, since a list of values would misstate a range or an exclusion. The period is the
+    requested one, which is the period the link opens. `None` when there is nothing to list.
     """
-    items = [f"* URN: {citation.dataset_id}"]
-    if citation.source.last_updated:
-        items.append(f"* Last update: {citation.source.last_updated}")
-    return "\n".join(items)
+    items: list[str] = []
+    for query_filter in record.filters:
+        if query_filter.operator != "in" or not query_filter.values:
+            continue
+        dimension = query_filter.dimension_name or query_filter.dimension_id
+        values = ", ".join(value.name or value.id for value in query_filter.values)
+        items.append(_shorten_for_pill(f"* {dimension}: {values}", max_line_chars))
+    period = record.requested_period
+    start = period.start_period if period is not None else None
+    end = period.end_period if period is not None else None
+    if start and end:
+        items.append(f"* From {start} until {end}")
+    elif start:
+        items.append(f"* From {start}")
+    elif end:
+        items.append(f"* Until {end}")
+    return "\n".join(items) if items else None
 
 
 def _convertible_citation(
@@ -691,6 +853,7 @@ def _convertible_citation(
     *,
     document_urls: Mapping[int, str],
     dataset_sources: Mapping[str, DatasetSource],
+    data_queries: Mapping[str, DataQueryRecord],
 ) -> ConvertibleCitation | None:
     """What this citation opens, or None when it cannot become a pill."""
     if marker.document_id is not None and marker.page is not None:
@@ -699,6 +862,12 @@ def _convertible_citation(
         )
     if marker.dataset_id is not None:
         return convertible_dataset(dataset_id=marker.dataset_id, dataset_sources=dataset_sources)
+    if marker.data_query_id is not None:
+        return convertible_data_query(
+            query_id=marker.data_query_id,
+            data_queries=data_queries,
+            dataset_sources=dataset_sources,
+        )
     return None
 
 
@@ -736,6 +905,33 @@ def convertible_dataset(
     return ConvertibleDatasetCitation(dataset_id=dataset_id, url=source.url, source=source)
 
 
+def convertible_data_query(
+    *,
+    query_id: str,
+    data_queries: Mapping[str, DataQueryRecord],
+    dataset_sources: Mapping[str, DatasetSource],
+) -> ConvertibleDataQueryCitation | None:
+    """What a citation of this query opens, or None when the reader cannot open it.
+
+    The condition is a data explorer link captured for the query id, matched verbatim. Whether
+    the query returned data is not part of it: the report review catches a citation of a query
+    without data, and one it leaves in place is resolved as well as it can be. There is no
+    fallback to the dataset's page, which would claim a precision the citation lost.
+    """
+    record = data_queries.get(query_id)
+    url = record.data_explorer_url if record is not None else None
+    if record is None or url is None:
+        return None
+    urn = record.dataset_urn
+    return ConvertibleDataQueryCitation(
+        query_id=query_id,
+        url=url,
+        urn=urn,
+        record=record,
+        source=dataset_sources.get(urn) if urn is not None else None,
+    )
+
+
 def is_pdf_url(url: str) -> bool:
     """Whether the URL's own path names a PDF.
 
@@ -748,23 +944,6 @@ def is_pdf_url(url: str) -> bool:
     """
     path = url.split("#", 1)[0].split("?", 1)[0]
     return path.lower().endswith(".pdf")
-
-
-def is_web_url(url: str) -> bool:
-    """Whether the URL is one a browser can open: absolute, `http` or `https`, with a host.
-
-    Public for the reason `is_pdf_url` is: a caller resolving URLs has to refuse one this would
-    reject, rather than hand over a URL whose citations then quietly keep their marker text.
-
-    The dataset-metadata contract returns a string and nothing else, so the URL's own form is
-    what the app has to go on. A storage-relative `files/…` path, a scheme the client would not
-    follow and a value that is not a URL at all are each treated as not openable — the
-    conservative direction, since a pill that opens nothing is worse than a marker that at least
-    names its source. A relative path in particular would make the client offer a file download
-    rather than open a page.
-    """
-    parts = urlsplit(url)
-    return parts.scheme.lower() in _WEB_URL_SCHEMES and bool(parts.netloc)
 
 
 def _group_into_runs(markers: Sequence[CitationMarker], *, text: str) -> list[list[CitationMarker]]:

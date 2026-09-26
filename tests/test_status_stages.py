@@ -20,9 +20,11 @@ from dial_deep_research.app.history import Plan, PrepState
 from dial_deep_research.app.mcp_tools import LoadedMcpTools
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research import runner as runner_module
+from dial_deep_research.app.research.data_queries import DataQueryStore
 from dial_deep_research.app.research.runner import _INITIAL_ACTIVITY, ResearchRunner
 from dial_deep_research.app.research.state import build_initial_state
 from dial_deep_research.app_properties import DEFAULT_REPORT_STRUCTURE, ApplicationProperties
+from tests.citation_fakes import no_lookups
 from tests.dial_spies import ChoiceSpy
 
 _STATUS = "update_status"
@@ -252,7 +254,11 @@ class _FailingGraph:
 def _stub_graph(monkeypatch: MonkeyPatch, graph: Any) -> None:
     async def _no_tools(**_kwargs: Any) -> LoadedMcpTools:
         return LoadedMcpTools(
-            agent_tools=[], file_sharing_tool=None, dataset_metadata_tool=None, client=None
+            agent_tools=[],
+            file_sharing_tool=None,
+            dataset_metadata_tool=None,
+            client=None,
+            data_queries=DataQueryStore(),
         )
 
     monkeypatch.setattr(runner_module, "load_mcp_tools", _no_tools)
@@ -332,6 +338,7 @@ async def test_the_report_node_names_its_work_before_calling_a_model(
         sections=DEFAULT_REPORT_STRUCTURE,
         max_words=2750,
         references_name="References",
+        lookups=no_lookups(),
         emit_revision_failed_stage=lambda _outcome: None,
         emit_activity=seen.append,
     )
@@ -352,6 +359,7 @@ async def test_report_review_names_its_work_before_calling_a_model(
         sections=DEFAULT_REPORT_STRUCTURE,
         max_words=2750,
         references_name="References",
+        lookups=no_lookups(),
         emit_result_stage=lambda _outcome: None,
         emit_activity=seen.append,
     )

@@ -10,6 +10,7 @@ shape — exists to make that outcome predictable.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+from typing import Any
 
 import pytest
 
@@ -18,14 +19,16 @@ from dial_deep_research.app.research.citations import (
     DATASET_MIME_TYPE,
     PDF_MIME_TYPE,
     DatasetSource,
+    cited_data_query_ids,
     cited_dataset_ids,
     cited_document_ids,
     convert_citations,
     find_citation_markers,
     find_hyperlinks,
-    is_web_url,
     remove_hyperlinks,
 )
+from dial_deep_research.app.research.data_queries import DataQueryRecord
+from dial_deep_research.app.research.web_urls import is_web_url
 
 _PDF_URL = "files/user-bucket/appdata/deep-research/doc%20101.pdf"
 _OTHER_PDF_URL = "files/user-bucket/appdata/deep-research/doc-102.pdf"
@@ -648,13 +651,13 @@ def _convert_datasets(
 def test_the_payload_of_one_converted_dataset_citation() -> None:
     converted = _convert_datasets(f"…rose by 2.1% [dataset {_DATASET_ID}] over the period.")
 
-    # Dumped the way `send_annotations` dumps it: a dataset citation names no page, so the
-    # selector is absent from the payload rather than present as a null.
+    # Dumped the way `send_annotations` dumps it: a dataset citation names no page and carries no
+    # quote, so both are absent from the payload rather than present as a null.
     assert converted.annotations[0].model_dump(exclude_none=True) == {
         "index": 0,
         "target": {"selector": {"type": "html_tag", "tag": "cit", "id": "tag-0"}},
         "body": {
-            "title": f"{_DATASET_NAME} dataset",
+            "title": f"{_DATASET_NAME} dataset - last update {_LAST_UPDATE}",
             "source": {
                 "type": "attachment",
                 "attachment": {
@@ -663,7 +666,6 @@ def test_the_payload_of_one_converted_dataset_citation() -> None:
                     "title": f"{_DATASET_NAME} dataset",
                 },
             },
-            "quote": f"* URN: {_DATASET_ID}\n* Last update: {_LAST_UPDATE}",
         },
     }
     assert converted.markers_left == 0
@@ -751,10 +753,9 @@ def test_a_named_and_an_unnamed_dataset_produce_the_same_label_shape() -> None:
         },
     )
     named, unnamed = converted.annotations
-    assert named.body.title == f"{_DATASET_NAME} dataset"
+    assert named.body.title == f"{_DATASET_NAME} dataset - last update {_LAST_UPDATE}"
     assert unnamed.body.title == f"{unnamed_id} dataset"
     for annotation in converted.annotations:
-        assert annotation.body.title.endswith(" dataset")
         assert annotation.body.source.attachment.title.endswith(" dataset")
 
 
@@ -762,7 +763,7 @@ def test_the_pill_shortens_the_name_and_the_card_keeps_it_whole() -> None:
     converted = _convert_datasets(f"A claim. [dataset {_DATASET_ID}]", budget=20)
     annotation = converted.annotations[0]
     assert annotation.body.source.attachment.title == "World Economic Outl… dataset"
-    assert annotation.body.title == f"{_DATASET_NAME} dataset"
+    assert annotation.body.title == f"{_DATASET_NAME} dataset - last update {_LAST_UPDATE}"
 
 
 def test_the_budget_applies_to_a_urn_too_and_the_word_survives_it() -> None:
@@ -782,7 +783,7 @@ def test_no_budget_shows_the_whole_name_on_both() -> None:
     converted = _convert_datasets(f"A claim. [dataset {_DATASET_ID}]", budget=None)
     annotation = converted.annotations[0]
     assert annotation.body.source.attachment.title == f"{_DATASET_NAME} dataset"
-    assert annotation.body.title == f"{_DATASET_NAME} dataset"
+    assert annotation.body.title.startswith(f"{_DATASET_NAME} dataset")
 
 
 def test_no_dataset_label_carries_the_url() -> None:
@@ -793,20 +794,29 @@ def test_no_dataset_label_carries_the_url() -> None:
     assert "portal.example.org" not in annotation.body.source.attachment.title
 
 
-def test_a_dataset_with_no_last_update_date_carries_one_quote_item() -> None:
+def test_a_dataset_with_no_last_update_date_has_no_date_in_its_title() -> None:
     converted = _convert_datasets(
         f"A claim. [dataset {_DATASET_ID}]",
         {_DATASET_ID: DatasetSource(url=_DATASET_URL, name=_DATASET_NAME)},
     )
-    assert converted.annotations[0].body.quote == f"* URN: {_DATASET_ID}"
+    body = converted.annotations[0].body
+    assert body.title == f"{_DATASET_NAME} dataset"
+    assert body.quote is None
 
 
 def test_the_last_update_date_is_carried_as_the_tool_reported_it() -> None:
     converted = _convert_datasets(
         f"A claim. [dataset {_DATASET_ID}]",
-        {_DATASET_ID: DatasetSource(url=_DATASET_URL, last_updated="30 April 2025")},
+        {
+            _DATASET_ID: DatasetSource(
+                url=_DATASET_URL, name=_DATASET_NAME, last_updated="30 April 2025"
+            )
+        },
     )
-    assert converted.annotations[0].body.quote.endswith("* Last update: 30 April 2025")
+    body = converted.annotations[0].body
+    assert body.title == f"{_DATASET_NAME} dataset - last update 30 April 2025"
+    assert body.source.attachment.title == f"{_DATASET_NAME} dataset"
+    assert body.quote is None
 
 
 def test_a_dataset_citation_carries_no_page_selector() -> None:
@@ -820,7 +830,10 @@ def test_a_document_and_a_dataset_in_one_run_share_a_pill() -> None:
     assert [
         (annotation.index, annotation.target.selector.id, annotation.body.title)
         for annotation in converted.annotations
-    ] == [(0, "tag-0", "doc 101, page 2"), (1, "tag-0", f"{_DATASET_NAME} dataset")]
+    ] == [
+        (0, "tag-0", "doc 101, page 2"),
+        (1, "tag-0", f"{_DATASET_NAME} dataset - last update {_LAST_UPDATE}"),
+    ]
     assert converted.markers_left == 0
 
 
@@ -835,3 +848,253 @@ def test_a_dataset_is_converted_wherever_it_stands() -> None:
     converted = _convert_datasets(f"| 2.4% | [dataset {_DATASET_ID}] |")
     assert converted.text == f"| 2.4% | {_tag('tag-0')} |"
     assert len(converted.annotations) == 1
+
+
+# --- data-query citations -----------------------------------------------------------------------
+
+
+_QUERY_ID = "dq_0123abcd45"
+_EXPLORER_URL = "https://portal.example.org/explorer?urn=IMF:WEO(1.0.0)&filter=A.DE.GDP"
+
+
+def _query(
+    query_id: str = _QUERY_ID,
+    *,
+    url: str | None = _EXPLORER_URL,
+    urn: str | None = _DATASET_ID,
+    series_count: int | None = 2,
+    filters: list[dict[str, Any]] | None = None,
+    period: dict[str, str] | None = None,
+    structured: bool = True,
+) -> DataQueryRecord:
+    meta: dict[str, Any] = {"queryId": query_id}
+    if url is not None:
+        meta["dataExplorerUrl"] = url
+    content: dict[str, Any] = {"queryId": query_id, "filters": filters or []}
+    if urn is not None:
+        content["datasetUrn"] = urn
+    if series_count is not None:
+        content["seriesCount"] = series_count
+    if period is not None:
+        content["requestedPeriod"] = period
+    return DataQueryRecord.model_validate(
+        {"_meta": meta, "structured_content": content if structured else None}
+    )
+
+
+def _in_filter(dimension: str, *names: str) -> dict[str, Any]:
+    return {
+        "dimensionId": dimension.upper(),
+        "dimensionName": dimension,
+        "operator": "in",
+        "values": [{"id": name[:2].upper(), "name": name} for name in names],
+    }
+
+
+def _convert_queries(
+    text: str,
+    queries: dict[str, DataQueryRecord],
+    *,
+    sources: dict[str, DatasetSource] | None = None,
+    budget: int | None = None,
+    line_budget: int = 80,
+):
+    return convert_citations(
+        text,
+        document_urls=_URLS,
+        dataset_sources={_DATASET_ID: _DATASET} if sources is None else sources,
+        data_queries=queries,
+        pill_title_max_chars=budget,
+        filter_line_max_chars=line_budget,
+        make_tag_id=_tag_ids(),
+    )
+
+
+def test_a_data_query_marker_is_parsed_with_its_id_verbatim() -> None:
+    assert cited_data_query_ids(f"A [data_query {_QUERY_ID}] and [DATA_QUERY  Dq_X ].") == [
+        _QUERY_ID,
+        "Dq_X",
+    ]
+
+
+def test_a_cited_query_with_an_explorer_link_becomes_a_pill() -> None:
+    converted = _convert_queries(
+        f"…grew 2.9% in 2023 [data_query {_QUERY_ID}].", {_QUERY_ID: _query()}
+    )
+
+    assert converted.text == f"…grew 2.9% in 2023 {_tag('tag-0')}."
+    [annotation] = converted.annotations
+    attachment = annotation.body.source.attachment
+    assert attachment.type == DATASET_MIME_TYPE
+    assert attachment.url == _EXPLORER_URL
+    assert attachment.title == f"{_DATASET_NAME} dataset"
+    assert annotation.body.title == f"{_DATASET_NAME} dataset - last update {_LAST_UPDATE}"
+    assert annotation.body.selector is None
+    assert converted.markers_left == 0
+
+
+def test_the_query_id_is_matched_verbatim() -> None:
+    draft = "A claim. [data_query DQ_0123ABCD45]"
+    converted = _convert_queries(draft, {_QUERY_ID: _query()})
+    assert converted.text == draft
+    assert converted.annotations == []
+
+
+def test_a_query_id_the_turn_never_captured_keeps_its_text() -> None:
+    draft = "A claim. [data_query dq_ffffffffff]"
+    converted = _convert_queries(draft, {_QUERY_ID: _query()})
+    assert converted.text == draft
+    assert converted.markers_left == 1
+
+
+def test_a_query_captured_without_a_link_keeps_its_text_and_draws_no_dataset_pill() -> None:
+    draft = f"A claim. [data_query {_QUERY_ID}]"
+    converted = _convert_queries(draft, {_QUERY_ID: _query(url=None)})
+    assert converted.text == draft
+    assert converted.annotations == []
+
+
+def test_a_relative_explorer_link_is_not_convertible() -> None:
+    draft = f"A claim. [data_query {_QUERY_ID}]"
+    converted = _convert_queries(draft, {_QUERY_ID: _query(url="explorer?urn=IMF:WEO(1.0.0)")})
+    assert converted.annotations == []
+
+
+def test_a_query_that_returned_no_data_but_has_a_link_still_converts() -> None:
+    converted = _convert_queries(
+        f"A claim. [data_query {_QUERY_ID}]", {_QUERY_ID: _query(series_count=None)}
+    )
+    assert converted.annotations[0].body.source.attachment.url == _EXPLORER_URL
+
+
+def test_a_query_without_a_dataset_urn_is_labelled_with_its_marker_text() -> None:
+    converted = _convert_queries(
+        f"A claim. [data_query {_QUERY_ID}]", {_QUERY_ID: _query(structured=False)}, budget=10
+    )
+    body = converted.annotations[0].body
+    assert body.title == f"data_query {_QUERY_ID}"
+    assert body.source.attachment.title == f"data_query {_QUERY_ID}"
+    assert body.quote is None
+
+
+def test_a_catalogue_without_the_dataset_labels_the_query_by_its_urn() -> None:
+    converted = _convert_queries(
+        f"A claim. [data_query {_QUERY_ID}]", {_QUERY_ID: _query()}, sources={}
+    )
+    body = converted.annotations[0].body
+    assert body.title == f"{_DATASET_ID} dataset"
+    assert body.source.attachment.title == f"{_DATASET_ID} dataset"
+
+
+def test_the_pill_budget_shortens_a_query_pill_before_the_word_dataset() -> None:
+    converted = _convert_queries(
+        f"A claim. [data_query {_QUERY_ID}]", {_QUERY_ID: _query()}, budget=20
+    )
+    assert converted.annotations[0].body.source.attachment.title == "World Economic Outl… dataset"
+
+
+def test_a_data_query_pill_never_opens_the_datasets_page() -> None:
+    converted = _convert_queries(f"A claim. [data_query {_QUERY_ID}]", {_QUERY_ID: _query()})
+    dumped = converted.annotations[0].model_dump_json()
+    assert _DATASET_URL not in dumped
+
+
+def test_two_queries_of_one_dataset_in_a_run_are_two_entries() -> None:
+    queries = {
+        "dq_0000000001": _query("dq_0000000001", url=f"{_EXPLORER_URL}&a=1"),
+        "dq_0000000002": _query("dq_0000000002", url=f"{_EXPLORER_URL}&a=2"),
+    }
+    converted = _convert_queries(
+        "A claim. [data_query dq_0000000001] [data_query dq_0000000002]", queries
+    )
+    assert converted.text == f"A claim. {_tag('tag-0')}"
+    assert [a.target.selector.id for a in converted.annotations] == ["tag-0", "tag-0"]
+    assert [a.body.source.attachment.url for a in converted.annotations] == [
+        f"{_EXPLORER_URL}&a=1",
+        f"{_EXPLORER_URL}&a=2",
+    ]
+
+
+def test_one_query_cited_twice_in_a_run_is_one_annotation() -> None:
+    converted = _convert_queries(
+        f"A claim. [data_query {_QUERY_ID}], [data_query {_QUERY_ID}]", {_QUERY_ID: _query()}
+    )
+    assert len(converted.annotations) == 1
+
+
+def test_a_data_query_card_shows_the_filter_in_words() -> None:
+    record = _query(
+        filters=[
+            _in_filter("Series", "Real GDP growth"),
+            _in_filter("Country", "United States", "Germany"),
+        ],
+        period={"startPeriod": "2020-01-01", "endPeriod": "2024-12-31"},
+    )
+    converted = _convert_queries(f"A claim. [data_query {_QUERY_ID}]", {_QUERY_ID: record})
+    assert converted.annotations[0].body.quote == (
+        "* Series: Real GDP growth\n"
+        "* Country: United States, Germany\n"
+        "* From 2020-01-01 until 2024-12-31"
+    )
+
+
+def test_a_filter_without_names_falls_back_to_the_codes() -> None:
+    record = _query(
+        filters=[{"dimensionId": "COUNTRY", "operator": "in", "values": [{"id": "DE"}]}]
+    )
+    converted = _convert_queries(f"A claim. [data_query {_QUERY_ID}]", {_QUERY_ID: record})
+    assert converted.annotations[0].body.quote == "* COUNTRY: DE"
+
+
+def test_a_long_filter_item_is_cut_to_the_default_budget() -> None:
+    record = _query(filters=[_in_filter("Country", *(f"Country number {i}" for i in range(35)))])
+    converted = _convert_queries(f"A claim. [data_query {_QUERY_ID}]", {_QUERY_ID: record})
+    [item] = converted.annotations[0].body.quote.splitlines()
+    assert len(item) == 80
+    assert item.endswith("…")
+
+
+def test_a_channels_line_budget_sets_the_item_length() -> None:
+    long_item = _in_filter("Country", "United States", "Germany", "France", "Japan", "Brazil")
+    short_item = _in_filter("Series", "Real GDP growth")
+    record = _query(filters=[long_item, short_item])
+    converted = _convert_queries(
+        f"A claim. [data_query {_QUERY_ID}]", {_QUERY_ID: record}, line_budget=40
+    )
+    first, second = converted.annotations[0].body.quote.splitlines()
+    assert len(first) == 40
+    assert first.endswith("…")
+    assert second == "* Series: Real GDP growth"
+
+
+@pytest.mark.parametrize(
+    ("period", "item"),
+    [
+        pytest.param({"startPeriod": "2020-01-01"}, "* From 2020-01-01", id="start-only"),
+        pytest.param({"endPeriod": "2030-01-01"}, "* Until 2030-01-01", id="end-only"),
+    ],
+)
+def test_an_open_ended_period_names_its_one_bound(period: dict[str, str], item: str) -> None:
+    record = _query(period=period)
+    converted = _convert_queries(f"A claim. [data_query {_QUERY_ID}]", {_QUERY_ID: record})
+    assert converted.annotations[0].body.quote == item
+
+
+def test_a_query_with_no_period_has_no_period_item() -> None:
+    record = _query(filters=[_in_filter("Country", "Germany")])
+    converted = _convert_queries(f"A claim. [data_query {_QUERY_ID}]", {_QUERY_ID: record})
+    assert converted.annotations[0].body.quote == "* Country: Germany"
+
+
+def test_a_non_set_operator_is_left_out() -> None:
+    excluded = {**_in_filter("Country", "Germany"), "operator": "excluded"}
+    record = _query(filters=[excluded, _in_filter("Series", "Real GDP growth")])
+    converted = _convert_queries(f"A claim. [data_query {_QUERY_ID}]", {_QUERY_ID: record})
+    assert converted.annotations[0].body.quote == "* Series: Real GDP growth"
+
+
+def test_without_captured_queries_every_data_query_marker_stays() -> None:
+    draft = f"A claim. [data_query {_QUERY_ID}]"
+    converted = convert_citations(draft, document_urls=_URLS)
+    assert converted.text == draft
+    assert converted.markers_left == 1

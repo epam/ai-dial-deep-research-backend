@@ -24,14 +24,15 @@ what may be said about it (counts, never a name or a URL).
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Annotated, Any
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError
 
-from dial_deep_research.app.research.citations import DatasetSource, is_web_url
+from dial_deep_research.app.research.citations import DatasetSource
+from dial_deep_research.app.research.web_urls import is_web_url
 
 # Failure kinds, as they appear in the citation step's warnings. Each names the dataset
 # resolution, so one warning says which of the step's three resolutions failed.
@@ -101,12 +102,28 @@ async def read_dataset_sources(
 
     Every record whose `id` is cited is kept, whatever it carries: the pill is not the only thing
     that reads one, and the report's References section lists a cited dataset whether or not it can
-    be opened. What a missing field costs is decided where that field is used — a record with no
-    usable name is labelled from the URN, and one whose URL a browser cannot open carries no URL,
-    so its citations keep the marker text the report writer wrote.
+    be opened. A dataset the answer omits is simply absent from the result, and its References row
+    is built from its URN alone.
 
-    A dataset the answer omits is simply absent from the result, and its References row is built
-    from its URN alone.
+    Raises what `read_catalogue` raises.
+    """
+    return select_cited(await read_catalogue(tool=tool), dataset_ids=dataset_ids)
+
+
+def select_cited(
+    catalogue: Mapping[str, DatasetSource], *, dataset_ids: Sequence[str]
+) -> dict[str, DatasetSource]:
+    """The catalogue's records for the cited URNs, each matched character for character."""
+    return {urn: catalogue[urn] for urn in dataset_ids if urn in catalogue}
+
+
+async def read_catalogue(*, tool: BaseTool) -> dict[str, DatasetSource]:
+    """Every dataset the catalogue reports, by URN.
+
+    What a missing field costs is decided where that field is used — a record with no usable name
+    is labelled from the URN, and one whose URL a browser cannot open carries no URL, so its
+    citations keep the marker text the report writer wrote. A record with no usable `id` matches no
+    cited URN and is skipped.
 
     The tool is invoked **tool-call-shaped** for the reason `share_documents` is: a
     plain-argument call returns no `ToolMessage`, and the structured result travels in that
@@ -127,7 +144,7 @@ async def read_dataset_sources(
     )
     # This tool stays in the research agent's tool list, so it keeps the agent's error handling:
     # an MCP error arrives as an error `ToolMessage` rather than as an exception. Reading the
-    # status is what makes such a failure reach the caller (see the change's design, decision 6).
+    # status is what makes such a failure reach the caller.
     if isinstance(result, ToolMessage) and result.status == "error":
         raise DatasetMetadataError(KIND_DATASET_CALL_FAILED)
     artifact = result.artifact if isinstance(result, ToolMessage) else None
@@ -144,10 +161,9 @@ async def read_dataset_sources(
         raise DatasetMetadataError(KIND_DATASET_UNREADABLE_RESULT) from error
 
     raw_by_id = _raw_records_by_id(structured)
-    cited = set(dataset_ids)
     sources: dict[str, DatasetSource] = {}
     for record in catalogue.datasets:
-        if record.id is None or record.id not in cited:
+        if record.id is None:
             continue
         # A URL the client could not follow is normalized away here rather than carried inward: a
         # pill that opens nothing is worse than a marker that at least names its source, and every

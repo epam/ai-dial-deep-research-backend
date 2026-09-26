@@ -112,19 +112,28 @@ numbers produces pills that open the wrong page, with nothing in the chain able 
 Semantic requirement.
 
 A dataset server SHALL attribute every fact it reports to at least the dataset the fact was drawn
-from, identified as that server reports it. Attribution to an individual series within a dataset is
+from, identified as that server reports it. A fact drawn from a **data query** SHALL also be
+attributed to the query that produced it, identified by the query id the server reported for that
+query in the same tool result. Attribution to an individual series inside a query's result is
 **deferred**: a server MAY report it, and the app ignores it today.
 
 This requirement is load-bearing twice over. It bounds what the report may claim about a
-dataset-sourced fact, and it is also what a reader clicks: a dataset citation is converted into a
-pill whose link opens that dataset's page (see **report-citations**), and the identifier in the
-attribution is what the app sends back to the server to find that page. An attribution that names
-the wrong dataset therefore produces a pill that opens the wrong dataset, not merely a sentence that
-credits the wrong source.
+dataset-sourced fact, and it is also what a reader clicks. A data-query citation is converted into
+a pill whose link opens that query in the server's data explorer, and a dataset citation into a
+pill whose link opens the dataset's page (see **report-citations**). In both, the identifier in the
+attribution is what the app resolves to find the page. An attribution that names the wrong query
+or the wrong dataset therefore produces a pill that opens the wrong data, not merely a sentence
+that credits the wrong source.
+
+A query id is what the report cites for a data-query fact, and the dataset the query ran against is
+what the References section lists for it. The app learns that dataset from what the server
+reported about the query, never from the report, so a data-query citation needs no separate
+dataset citation beside it.
 
 #### Scenario: A dataset-sourced fact names its dataset
 
-- **WHEN** a dataset server reports a fact drawn from a dataset
+- **WHEN** a dataset server reports a fact drawn from a dataset without running a query, such as the
+  dataset's last-update date from its catalogue
 - **THEN** the attribution SHALL carry that dataset's identifier, and the report SHALL cite the fact
   with that identifier rather than with a document-and-page citation
 
@@ -133,6 +142,13 @@ credits the wrong source.
 - **WHEN** a dataset server attributes a fact to the dataset it reports as `IMF:WEO(1.0.0)`
 - **THEN** the report SHALL cite that fact as `[dataset IMF:WEO(1.0.0)]`, and the pill that
   marker becomes SHALL open the page the same server reports for that same identifier
+
+#### Scenario: A data-query fact names its query
+
+- **WHEN** a dataset server runs a query it reports as `dq_0123abcd45` and a fact in the report is
+  drawn from that query's data
+- **THEN** the report SHALL cite that fact as `[data_query dq_0123abcd45]`, and the pill that marker
+  becomes SHALL open the data explorer link the same server reported for that same query id
 
 ### Requirement: Finer attribution detail is ignored rather than refused
 
@@ -165,16 +181,18 @@ app SHALL NOT change its case, trim it, re-encode it, renumber it, or transform 
 **Resolving** covers both forms the resolution takes. An identifier sent back to the server as a
 tool argument — a document id passed to the file-sharing tool, or into a metadata resource URI — goes
 out exactly as the marker wrote it. An identifier **matched locally** against what the server
-already answered — a dataset id compared to the `id` of each record the dataset-metadata tool
-reported — is compared exactly as the marker wrote it, against the record's own value likewise
-untransformed. The rule is the same rule because the risk is the same: a comparison that
-case-folds, trims or strips a version can match the wrong record as easily as a rewritten argument
-can fetch the wrong file.
+already answered is compared exactly as the marker wrote it, against the server's own value
+likewise untransformed. Two identifiers are matched locally: a dataset id compared to the `id` of
+each record the dataset-metadata tool reported, and a query id compared to the query id of each
+data-query record the server's tool results carried during the turn. The rule is the same rule
+because the risk is the same: a comparison that case-folds, trims or strips a version can match the
+wrong record as easily as a rewritten argument can fetch the wrong file.
 
 A document identifier is a positive integer, and it is the same integer for every surface of one
 server: the attribution that reported it, the file-sharing tool, and the document-metadata resource.
 A dataset identifier is an opaque string that may carry punctuation, such as the colon in
-`IMF:WEO`.
+`IMF:WEO`. A query identifier is an opaque string as well, and it is the same string in the tool
+result the model reads and in the data-query record the app reads.
 
 A citation marker names no server, so nothing in the report says which server an identifier belongs
 to. What decides it is the configuration rule that at most one server of each supported type may be
@@ -198,6 +216,12 @@ own documents would make an identifier ambiguous and a pill could open the wrong
   answer carries records with the ids `IMF:WEO(1.0.0)` and `imf:weo`
 - **THEN** the app SHALL select the record whose id is `IMF:WEO(1.0.0)`, comparing the strings
   character for character, and SHALL NOT treat the case-folded id as a match
+
+#### Scenario: A query identifier is matched against the captured records exactly
+
+- **WHEN** the delivered report cites `[data_query DQ_0123ABCD45]` and the turn captured a
+  data-query record whose query id is `dq_0123abcd45`
+- **THEN** the citation SHALL NOT resolve against that record, and it SHALL keep its marker text
 
 ### Requirement: The report writer translates attribution into the report's citation form
 

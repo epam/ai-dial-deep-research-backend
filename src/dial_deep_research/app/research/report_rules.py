@@ -16,9 +16,12 @@ and a `## References` heading fails that rule's own check like any other unexpec
 written under a sub-heading, under a bold line or under nothing at all is invisible to a heading
 comparison, so reporting that is a check of the review model's own.
 
-Only what is decidable from the draft text belongs here. Whether a section is padded with
-unsupported text, whether a citation matches the source it came from, whether an annotation is a
-banned rating — those need a reader, and stay with the review model.
+Only what is decidable from the draft text — or from the draft and what the app itself learned
+during the turn — belongs here. The cited query ids are checked against the data-query records the
+turn captured, and the cited dataset URNs and document ids against what their servers make
+available, through the turn's shared lookups. Whether a section is padded with unsupported text,
+whether a citation matches the source it came from, whether an annotation is a banned rating —
+those need a reader, and stay with the review model.
 """
 
 from __future__ import annotations
@@ -28,7 +31,14 @@ from collections.abc import Sequence
 
 from dial_deep_research.app_properties import ReportSection
 
-from .citations import find_hyperlinks
+from .citation_lookups import CitationLookups
+from .citations import (
+    cited_data_query_ids,
+    cited_dataset_ids,
+    cited_document_ids,
+    find_hyperlinks,
+)
+from .data_queries import DataQueryStore
 from .prompts import render_report_structure
 from .report_length import (
     LENGTH_EXEMPTIONS,
@@ -52,19 +62,30 @@ class ReportRule(ABC):
 
 
 def build_report_rules(
-    *, sections: Sequence[ReportSection], max_words: int, references_name: str
+    *,
+    sections: Sequence[ReportSection],
+    max_words: int,
+    references_name: str,
+    lookups: CitationLookups,
 ) -> tuple[ReportRule, ...]:
-    """The rules for one instance's configuration, in the order they appear in the prompt."""
+    """The rules for one turn, in the order they appear in the prompt.
+
+    `lookups` is the turn's shared lookups, which also carry its captured data-query records.
+    """
     return (
         ReportStructureRule(sections=sections, references_name=references_name),
         ReportLengthRule(max_words=max_words),
         ReportHyperlinkRule(),
+        ReportDataQueryRule(data_queries=lookups.data_queries),
+        ReportDatasetIdRule(lookups=lookups),
+        ReportDocumentIdRule(lookups=lookups),
     )
 
 
 def render_writer_instructions(rules: Sequence[ReportRule]) -> str:
-    """The rules' instructions, for the report writer's system prompt."""
-    return "\n\n".join(rule.writer_instruction() for rule in rules)
+    """The rules' instructions, for the report writer's system prompt. A rule whose instruction
+    is empty adds nothing."""
+    return "\n\n".join(text for rule in rules if (text := rule.writer_instruction()))
 
 
 class ReportStructureRule(ReportRule):
@@ -176,6 +197,81 @@ class ReportHyperlinkRule(ReportRule):
         ]
 
 
+class ReportDataQueryRule(ReportRule):
+    """Every cited query id is one the turn captured, of a query that returned data.
+
+    Judged on `returned_data` alone, never on the explorer link: a query that returned data is
+    usable evidence, the writer cannot see the link, and a missing one costs the citation its pill
+    and nothing else. A query without data backs no value, so the only fact its citation can stand
+    for is a fact about the dataset, which is what the violation redirects to. The check reads ids
+    only: whether a fact is supported by the query it cites needs the tool results.
+
+    The store is read while the turn is still running, which is safe: every tool call has finished
+    by the time a report node runs.
+    """
+
+    def __init__(self, *, data_queries: DataQueryStore) -> None:
+        self._data_queries = data_queries
+
+    def writer_instruction(self) -> str:
+        return _DATA_QUERY_INSTRUCTION
+
+    def violations(self, draft: str) -> list[str]:
+        found: list[str] = []
+        for query_id in cited_data_query_ids(draft):
+            record = self._data_queries.records.get(query_id)
+            if record is None:
+                found.append(_UNKNOWN_QUERY_VIOLATION.format(query_id=query_id))
+            elif not record.returned_data:
+                found.append(_QUERY_WITHOUT_DATA_VIOLATION.format(query_id=query_id))
+        return found
+
+
+class ReportDatasetIdRule(ReportRule):
+    """Every cited dataset URN is one the dataset catalogue carries.
+
+    Valid means available on the server, not seen in a tool response: the app reads attribution
+    out of no tool result, so the catalogue is what a URN is checked against. A URN whose lookup
+    failed, and every URN on a channel without a dataset server, raises nothing — a false
+    violation would make the writer remove a citation the report needs. The writer is told how to
+    cite a dataset by the prompt's citation section, so this rule adds no instruction of its own.
+    """
+
+    def __init__(self, *, lookups: CitationLookups) -> None:
+        self._lookups = lookups
+
+    def writer_instruction(self) -> str:
+        return ""
+
+    def violations(self, draft: str) -> list[str]:
+        return [
+            _UNKNOWN_DATASET_VIOLATION.format(urn=urn)
+            for urn in cited_dataset_ids(draft)
+            if self._lookups.dataset_known(urn) is False
+        ]
+
+
+class ReportDocumentIdRule(ReportRule):
+    """Every cited document id is one the document-metadata resource knows.
+
+    The cited page is not checked. An id whose lookup failed, and every id on a channel without a
+    document server, raises nothing, for the reason `ReportDatasetIdRule` gives.
+    """
+
+    def __init__(self, *, lookups: CitationLookups) -> None:
+        self._lookups = lookups
+
+    def writer_instruction(self) -> str:
+        return ""
+
+    def violations(self, draft: str) -> list[str]:
+        return [
+            _UNKNOWN_DOCUMENT_VIOLATION.format(document_id=document_id)
+            for document_id in cited_document_ids(draft)
+            if self._lookups.document_known(document_id) is False
+        ]
+
+
 # How each detected form is named to the report writer. The keys are `Hyperlink.kind`.
 _HYPERLINK_FORMS: dict[str, str] = {
     "link": "a Markdown link",
@@ -261,3 +357,39 @@ The draft carries {form}: `{text}`. A report references a source only by an inli
 rewrite the sentence around it — name the source in words and cite the retrieved page inline, or \
 drop the reference altogether. Deleting the URL and leaving the rest of the sentence as it stands \
 is not the fix: the sentence has to read correctly without it."""
+
+
+_DATA_QUERY_INSTRUCTION = """\
+## Citing data queries
+
+Cite a data query only when it returned data. A data-query tool also reports ids for queries that
+returned nothing: a query it constructed and did not execute, the query it offers for each
+candidate dataset when it asks for a dataset to be selected, and an executed query whose result was
+empty. Never cite such an id: a query that returned nothing backs no value, so no fact can come
+from it."""
+
+
+_UNKNOWN_QUERY_VIOLATION = """\
+The draft cites `[data_query {query_id}]`, but no tool reported a query with the id \
+`{query_id}`. Correct it to the id exactly as the data-query tool reported it for the query the \
+fact came from."""
+
+
+_QUERY_WITHOUT_DATA_VIOLATION = """\
+The draft cites `[data_query {query_id}]`, but that query returned no data, and only a data query \
+that returned data may be cited. Where the statement is about the dataset itself — its last \
+update, its structure, what it covers or does not cover — cite the dataset as `[dataset <urn>]` \
+instead. Otherwise drop the citation, or drop the statement when nothing else in the report \
+supports it."""
+
+
+_UNKNOWN_DATASET_VIOLATION = """\
+The draft cites `[dataset {urn}]`, but no dataset with the identifier `{urn}` exists. Cite the \
+dataset by its URN exactly as the dataset tool reported it — whole, with its punctuation and \
+version."""
+
+
+_UNKNOWN_DOCUMENT_VIOLATION = """\
+The draft cites document {document_id}, but no document with the id {document_id} exists. Cite \
+the document by its id exactly as the search tool reported it for the document the fact came \
+from."""

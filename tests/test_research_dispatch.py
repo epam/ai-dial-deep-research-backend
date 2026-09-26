@@ -12,15 +12,18 @@ from the updates that drive the live output.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.types import ValuesStreamPart
 from pytest import MonkeyPatch
 
 from dial_deep_research.app.history import Plan, PrepState
 from dial_deep_research.app.mcp_tools import LoadedMcpTools
 from dial_deep_research.app.research import runner as runner_module
+from dial_deep_research.app.research.citation_lookups import CitationLookups
+from dial_deep_research.app.research.data_queries import DataQueryStore
 from dial_deep_research.app.research.nodes import ReportBudgetExhausted
 from dial_deep_research.app.research.runner import ResearchRunner
 from dial_deep_research.app_properties import ApplicationProperties
@@ -47,11 +50,15 @@ async def _deliver(runner: ResearchRunner) -> None:
     await runner._deliver_report(
         file_sharing_tool=None,
         configured_tool_name=None,
-        mcp_client=None,
-        metadata_source=None,
-        dataset_metadata_tool=None,
+        lookups=CitationLookups(
+            dataset_tool=None,
+            client=cast(MultiServerMCPClient, None),
+            document_source=None,
+            data_queries=DataQueryStore(),
+        ),
         configured_dataset_tool_name=None,
         pill_title_max_chars=20,
+        filter_line_max_chars=80,
         references_heading="References",
         references_empty_text="This report cites no source.",
         references_tables=(),
@@ -226,7 +233,11 @@ class _GraphStub:
 def _stub_graph_build(monkeypatch: MonkeyPatch, captured: dict[str, Any]) -> None:
     async def _no_tools(**_kwargs: Any) -> LoadedMcpTools:
         return LoadedMcpTools(
-            agent_tools=[], file_sharing_tool=None, dataset_metadata_tool=None, client=None
+            agent_tools=[],
+            file_sharing_tool=None,
+            dataset_metadata_tool=None,
+            client=None,
+            data_queries=DataQueryStore(),
         )
 
     monkeypatch.setattr(runner_module, "load_mcp_tools", _no_tools)

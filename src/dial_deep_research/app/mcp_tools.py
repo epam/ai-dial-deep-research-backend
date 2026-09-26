@@ -8,6 +8,9 @@ One `tools/list` fetch per server serves consumers with different needs: the age
 which a model is offered, and the two tools the citation step calls — the file-sharing tool,
 which only application code calls, and the dataset-metadata tool, which both do (see the
 report-citations capability).
+
+The client also carries the data-query capture: a tool-call interceptor that keeps the dataset
+server's data-query records, which the tool messages cannot carry (see `research/data_queries.py`).
 """
 
 from __future__ import annotations
@@ -21,8 +24,10 @@ from typing import NamedTuple
 
 from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.interceptors import ToolCallInterceptor
 from langchain_mcp_adapters.sessions import Connection
 
+from dial_deep_research.app.research.data_queries import DataQueryCapture, DataQueryStore
 from dial_deep_research.app_properties import MCPClientSettings
 from dial_deep_research.settings import settings
 from dial_deep_research.utils.json_schema_fixes import hoist_defs_to_root
@@ -60,16 +65,22 @@ class LoadedMcpTools(NamedTuple):
     citation step reads an MCP resource through it later in the turn (see
     `research/document_metadata.py`). It holds only the connection map, so a later read opens a
     session of its own with the same credentials.
+
+    `data_queries` fills as the turn's tool calls run: the data-query records the client's
+    capture keeps, which a data-query citation resolves against.
     """
 
     agent_tools: list[BaseTool]
     file_sharing_tool: BaseTool | None
     dataset_metadata_tool: BaseTool | None
     client: MultiServerMCPClient
+    data_queries: DataQueryStore
 
 
 def build_mcp_client(
-    mcp_servers: list[MCPClientSettings], bearer_token: str | None = None
+    mcp_servers: list[MCPClientSettings],
+    bearer_token: str | None = None,
+    data_queries: DataQueryStore | None = None,
 ) -> MultiServerMCPClient:
     """Build a fresh per-request MCP client with one connection per configured server.
 
@@ -77,9 +88,21 @@ def build_mcp_client(
     mode builds the Core URL from `dial_url` and forwards the request bearer token (when
     present) as `Authorization: Bearer`; direct mode uses the server's bundled `connection`
     URL and api-key.
+
+    With `data_queries`, every server naming a `data_query_meta_key` gets a capture that keeps
+    its tool results' data-query records in that store.
     """
     connections: dict[str, Connection] = {}
+    interceptors: list[ToolCallInterceptor] = []
     for server in mcp_servers:
+        if data_queries is not None and server.data_query_meta_key:
+            interceptors.append(
+                DataQueryCapture(
+                    server_name=server.server_name,
+                    meta_key=server.data_query_meta_key,
+                    store=data_queries,
+                )
+            )
         if server.deployment_id is not None:
             base = settings.dial_url.encoded_string().rstrip("/")
             url = f"{base}/v1/deployments/{server.deployment_id}/mcp"
@@ -99,7 +122,7 @@ def build_mcp_client(
             "timeout": MCP_CONNECT_TIMEOUT_SECONDS,
             "sse_read_timeout": MCP_READ_TIMEOUT_SECONDS,
         }
-    return MultiServerMCPClient(connections=connections)
+    return MultiServerMCPClient(connections=connections, tool_interceptors=interceptors)
 
 
 def _dump_tool_schemas_to_json(tools: list[BaseTool], dp: Path) -> None:
@@ -130,7 +153,8 @@ async def load_mcp_tools(
     file-sharing tool there must not offer it to a model, and leaving either out must not hide
     it from the app.
     """
-    mcp_client = build_mcp_client(mcp_servers, bearer_token=bearer_token)
+    data_queries = DataQueryStore()
+    mcp_client = build_mcp_client(mcp_servers, bearer_token=bearer_token, data_queries=data_queries)
     agent_tools: list[BaseTool] = []
     file_sharing_tool: BaseTool | None = None
     dataset_metadata_tool: BaseTool | None = None
@@ -220,4 +244,5 @@ async def load_mcp_tools(
         file_sharing_tool=file_sharing_tool,
         dataset_metadata_tool=dataset_metadata_tool,
         client=mcp_client,
+        data_queries=data_queries,
     )

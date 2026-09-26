@@ -277,7 +277,7 @@ emitted for it — on one condition: **the cited dataset resolved a URL that a b
 slot carries it: the report's citation form is `[dataset <id>]`, owned by **research-execution**, but
 what fills it for every supported dataset server is a URN such as `IMF:WEO(1.0.0)`. The wire
 field the dataset-metadata tool reports it under is `id`, which is the server's key and is not
-renamed here; every user-visible mention of it — the card's body row, the fallback labels — reads
+renamed here; every user-visible mention of it — the fallback labels — reads
 `URN`, because that is what the value is and what the dataset server's own documentation calls it.
 
 The dataset-metadata tool must have reported a record for that URN carrying a URL, and that
@@ -300,8 +300,8 @@ The failure mode is a missing pill, never a lost citation.
 
 **Neither a dataset's name nor its last-update date is part of the condition.** A dataset that
 resolved a URL but no usable name is still converted, its labels reading `<urn> dataset` in place of
-`<name> dataset`, the same shape with a different leading string; a dataset that resolved no date is still converted, its quote simply carrying one item
-instead of two. This is the same shape of fallback an untitled document gets, for the same reason: a
+`<name> dataset`, the same shape with a different leading string; a dataset that resolved no date is still converted, its card title simply ending at
+` dataset` with no last-update part. This is the same shape of fallback an untitled document gets, for the same reason: a
 plainer pill costs the reader less than a missing one.
 
 **Where the marker stands is not a condition**, exactly as for a document citation: the step SHALL
@@ -606,7 +606,7 @@ agent's tools for this to hold.
 A dataset citation needs three things the app does not hold: the dataset's human name, which labels
 the pill and the card and leads its References row; the address of its page, which no label shows and
 which the reader reaches through the card's open-in-browser action; and its last-update date, which
-the card's body carries when the server knows one. All come from **one MCP tool**, the
+the card's title carries when the server knows one. All come from **one MCP tool**, the
 **dataset-metadata tool**, and the app SHALL depend on nothing about it beyond the contract stated
 here. Which server provides it, what that server names it, and where it keeps the catalogue are all
 outside the contract, and the app SHALL behave identically for any server that satisfies it.
@@ -666,9 +666,12 @@ requirement below prescribes rather than degrade the report.
 - **Idempotent and read-only**: the app calls the tool once per turn, and repeated calls across
   turns SHALL be safe and SHALL change nothing on the server.
 
-The app SHALL call the tool **once per turn**, and only on a turn whose delivered report cites at
-least one dataset. It SHALL NOT call the tool once per cited dataset, and SHALL NOT call it for a
-dataset that research touched but the delivered report does not cite.
+The app SHALL call the tool **once per turn** when it succeeds, and only on a turn where a reviewed
+draft or the delivered report cites at least one dataset. The first draft the report review checks
+that cites a dataset makes the call; every later draft's check and the delivery reuse that answer
+(see the requirement on looking cited identifiers up once per turn). A failed call is not reused,
+so the next check or the delivery calls again. It SHALL NOT call the tool once per cited dataset,
+and SHALL NOT call it for a dataset that research touched but no draft cites.
 
 The app SHALL select from the answer **every** record whose `id` equals a cited id, and SHALL ignore
 every other record. Selection SHALL NOT depend on what a record carries: a record with no usable page
@@ -679,13 +682,14 @@ many datasets the report cites.
 
 #### Scenario: One call serves every cited dataset
 
-- **WHEN** the delivered report cites four datasets and research queried three more it did not cite
-- **THEN** the app SHALL call the dataset-metadata tool exactly once, with no arguments, and SHALL
-  read the four cited ids out of its answer
+- **WHEN** three reviewed drafts and the delivered report cite four datasets, and research queried
+  three more that no draft cites
+- **THEN** the app SHALL call the dataset-metadata tool exactly once, with no arguments, during the
+  review of the first draft, and SHALL read the four cited ids out of that one answer
 
 #### Scenario: A report citing no dataset makes no call
 
-- **WHEN** the delivered report cites documents only
+- **WHEN** every reviewed draft and the delivered report cite documents only
 - **THEN** the app SHALL NOT call the dataset-metadata tool
 
 #### Scenario: A record with no page URL is still selected
@@ -772,7 +776,11 @@ carries:
   the sources apart, and the page belongs in the label because a document server attributes at page
   level: two pages of one publication are two sources and must read as two entries. A **dataset**
   citation's label SHALL read **`<name> dataset`** when the dataset-metadata tool reported a usable
-  name, and **`<urn> dataset`** — the URN the marker carried — when it did not.
+  name, and **`<urn> dataset`** — the URN the marker carried — when it did not. When the tool
+  reported a last-update date for the dataset, the card's label SHALL go on to
+  **` - last update <date>`**, as in `World Economic Outlook dataset - last update 2025-04-30`;
+  without a date it SHALL end at ` dataset`. The date is the one fact about a dataset's currency the
+  reader needs to judge it, and the title is where the card shows it.
 
   The trailing word is not decoration: a dataset's name is often a bare noun phrase such as
   `World Economic Outlook`, which says nothing about what kind of source it is, and a URN alone says less
@@ -866,6 +874,10 @@ what kind of source it is and, for a document, which page of it:
 | document | `<title>, page <ix>` | `doc <id>, page <ix>` |
 | dataset | `<name> dataset` | `<urn> dataset` |
 
+A dataset's **card** label adds ` - last update <date>` after the trailing part when a date was
+reported, and nothing when none was. The pill never carries the date: it is the narrowest label,
+and the date is not what tells two sources apart.
+
 What a failed lookup changes is **only what fills the leading slot** — the server's name for the
 source, or the identifier the report's marker carried. It SHALL NOT change the shape, SHALL NOT drop
 the trailing part, and SHALL NOT mark the citation as degraded in any way a reader can see: no
@@ -882,23 +894,20 @@ unresolved dataset's is shortened, because a URN has no bounded length.
 **A document citation SHALL send no `body.quote`**: the app does not have the cited passage's source
 text, and an empty quote reserves blank space in the popup.
 
-**A dataset citation SHALL send a `body.quote`** carrying what the reader needs in order to judge the
-source, which for a dataset is not a passage but the dataset's own identity and currency. It SHALL be
-a Markdown list of up to two items, in this order:
-
-- `* URN: <urn>` — the URN the marker carried, always present.
-- `* Last update: <date>` — the date the dataset-metadata tool reported for that dataset, **omitted
-  entirely** when the tool reported none. A missing date SHALL NOT produce an empty item, a `null`,
-  or a placeholder such as "unknown": the reader learns nothing from a line that says the app knows
-  nothing, and an absent date is ordinary rather than a fault.
+**A dataset citation SHALL send no `body.quote` either.** Its name is in the title, and so is its
+last-update date, the one fact about its currency; the URN is not shown on the card, because a
+reader cannot act on it and the dataset's References row names the dataset already. An empty quote
+would reserve blank space in the popup, as it would for a document. A missing date SHALL NOT produce
+an empty title part, a `null`, or a placeholder such as "unknown": the reader learns nothing from a
+title that says the app knows nothing, and an absent date is ordinary rather than a fault.
 
 The date SHALL be carried **exactly as the tool reported it**, with no reformatting, no locale
 rendering and no relative phrasing ("3 months ago"), for the reason **source-attribution** gives for
 identifiers: the app is not the authority on what the server's value means.
 
-The field is Markdown rather than plain text because the client renders this one through its Markdown
-renderer, unlike `body.title`, and the list is what makes two facts read as two facts in a narrow
-card.
+A **data-query** citation is the one kind that sends a `body.quote`, carrying its filter; its fields
+are owned by the data-query annotation requirement. The field is Markdown rather than plain text
+because the client renders it through its Markdown renderer, unlike `body.title`.
 
 The array SHALL be emitted **once**, after the report text has been appended to the choice, as a
 single streamed delta on the same choice while it is still open. Annotations SHALL NOT be emitted
@@ -990,12 +999,12 @@ when the message finishes rather than as the report streams.
 #### Scenario: A dataset citation carries a web source and no page
 
 - **WHEN** the step converts `[dataset IMF:WEO(1.0.0)]`, the dataset-metadata tool reported the
-  name `World Economic Outlook` and the URL `https://portal.example.org/datasets/imf-weo`
+  name `World Economic Outlook`, the URL `https://portal.example.org/datasets/imf-weo` and no
+  last-update date
 - **THEN** the annotation's `body.source.attachment.type` SHALL be `text/html`, its `url` SHALL be
   that portal URL unchanged, `body.title` SHALL read `World Economic Outlook dataset`,
-  `body.source.attachment.title` SHALL read `World Economic Outlook` shortened to the channel's budget,
-  `body.quote` SHALL carry the URN item and, when a date was reported, the last-update item,
-  `body.selector` SHALL be absent, and no label SHALL carry the URL
+  `body.source.attachment.title` SHALL read `World Economic Outlook` shortened to the channel's budget
+  followed by ` dataset`, `body.quote` SHALL be absent, `body.selector` SHALL be absent, and no label SHALL carry the URL
 
 #### Scenario: An unnamed dataset falls back to the marker's own text
 
@@ -1020,18 +1029,20 @@ when the message finishes rather than as the report streams.
   appended after the shortening, and the card SHALL read `Primary Commodity Prices dataset`, the whole
   name with the same trailing word
 
-#### Scenario: A dataset whose last-update date is unknown carries one quote item
+#### Scenario: A dataset whose last-update date is unknown has no date in its title
 
-- **WHEN** the dataset-metadata tool reports the cited dataset with an id and a URL but no
+- **WHEN** the dataset-metadata tool reports the cited dataset with an id, a name and a URL but no
   last-update date
-- **THEN** `body.quote` SHALL carry the `URN` item alone, that row dropped from the list entirely,
-  with no empty item and no placeholder text
+- **THEN** `body.title` SHALL read `<name> dataset` and end there, with no dash, no empty date and no
+  placeholder text, and `body.quote` SHALL be absent
 
 #### Scenario: The last-update date is carried as the tool reported it
 
-- **WHEN** the tool reports the cited dataset's last-update date as `2025-04-30`
-- **THEN** `body.quote` SHALL carry `* Last update: 2025-04-30`, that string unchanged, and the app
-  SHALL NOT reformat it into another date format or into a relative phrase
+- **WHEN** the tool reports the cited dataset `World Economic Outlook` with the last-update date
+  `2025-04-30`
+- **THEN** `body.title` SHALL read `World Economic Outlook dataset - last update 2025-04-30`, that
+  date unchanged, the pill SHALL carry no date, and the app SHALL NOT reformat the date into another
+  format or into a relative phrase
 
 ### Requirement: The References section is built by the app from the cited sources' metadata
 
@@ -1104,17 +1115,19 @@ mechanism that opens both kinds of source, and a row reusing it opens exactly wh
 the same source opens.
 
 **A row's annotation is an inline citation's annotation with its own labels and page.** It SHALL
-carry the attachment type, the URL and, for a dataset, the `body.quote` that a converted citation of
-the same source carries (the requirement "A converted citation is a marker tag in the text and an
-annotation that names it"), and SHALL differ from it in two things:
+carry the attachment type and the URL that a converted citation of the same source carries (the
+requirement "A converted citation is a marker tag in the text and an annotation that names it"),
+and, like that citation, no `body.quote`. It SHALL differ from it in two things:
 
 - **The label is the row's name alone.** `body.title` SHALL carry the text the first cell would have
   carried: the value under the first column's key, rendered by the cell rules above, or the source's
   identifier where that key resolves nothing. The `|` escape SHALL NOT be applied, because the label
   is not table text and a reader would see the backslash; a line break still becomes a space. The
-  label SHALL carry **no trailing part** — no `, page <ix>` and no ` dataset` — because the row
-  already sits under a sub-heading naming its kind of source, and a References row names the
-  source, never the cited location. `body.source.attachment.title` SHALL carry the same text,
+  label SHALL carry **no trailing part** — no `, page <ix>`, no ` dataset` and no
+  ` - last update <date>` — because the row already sits under a sub-heading naming its kind of
+  source, a References row names the source, never the cited location, and a row's other cells
+  carry whatever else the channel configured, a last-update column among them. A dataset row's
+  pill and card therefore both read the dataset's title alone, such as `World Economic Outlook`. `body.source.attachment.title` SHALL carry the same text,
   shortened to the channel's pill budget exactly as an inline pill's leading part is, or whole where
   the channel names no budget (**application-config-schema** owns the field). A document row labelled
   `doc <id>` SHALL NOT be shortened, for the reason an unresolved inline document label is not: it is
@@ -1225,8 +1238,9 @@ a row lists is one the delivered report cites.
 - **WHEN** a delivered report cites `IMF:WEO(1.0.0)`, and the dataset-metadata tool reported the name
   `World Economic Outlook` and the URL `https://portal.example.org/datasets/imf-weo`
 - **THEN** that row's first cell SHALL carry one marker tag, and its annotation SHALL carry type
-  `text/html`, that URL unchanged, the `body.quote` a citation of that dataset carries, no selector,
-  and both labels reading `World Economic Outlook` with no ` dataset`
+  `text/html`, that URL unchanged, no `body.quote`, no selector, and both labels reading
+  `World Economic Outlook` with no ` dataset` and no last-update part, even when the catalogue
+  reported a last-update date
 
 #### Scenario: A row whose source cannot be opened stays text
 
@@ -1564,3 +1578,508 @@ turn.
   be emitted, and the delivered text SHALL carry no marker tag — differing from the settled draft
   only where the link pass removed something and where the References section says that nothing was
   cited
+### Requirement: Data-query records are captured from the turn's tool results
+
+A data-query citation needs four things the report does not hold: the address that opens the cited
+query in the dataset server's data explorer, the URN of the dataset the query ran against, the
+number of series the query returned, and the query's filter, which the citation's card shows. The
+dataset server reports all four when it runs a query, in the same tool result the research agent
+reads, and the app SHALL take them from there. It SHALL NOT ask the server again at the citation
+step: a query id means something only in the result that reported it.
+
+**Which results are captured.** A tool result from the configured `statgpt` server is a data-query
+result when its `_meta` carries a payload under the key the server's `data_query_meta_key` names
+(**application-config-schema** owns the field), matched character for character. A result without
+that payload contributes nothing, whatever tool produced it, so the app SHALL NOT need to know which
+of the server's tools runs queries.
+
+**Where the app reads them.** A data-query result carries two parts the app reads. The structured
+result is also serialized into the text content the model reads. The `_meta` payload is outside
+what a model reads, which is why a channel keeps the data explorer URL there and out of the
+structured result:
+
+- **The `_meta` payload**, a JSON object carrying a **`queries`** array. Each element SHALL carry a
+  string **`queryId`**, and MAY carry a string **`dataExplorerUrl`**, the address that opens that
+  query's data in the data explorer. The app reads nothing else from the payload.
+- **The structured result**, which MAY carry a **`queries`** array whose elements carry a string
+  `queryId`. An element MAY carry a string **`datasetUrn`**, the URN of the queried dataset; an
+  integer **`seriesCount`**, the number of series the query returned; **`filters`**; and a
+  **`requestedPeriod`**. Each filter carries a `dimensionId`, an `operator`, and a `values` array
+  whose elements carry an `id`, the code the query used; a filter MAY carry a `dimensionName`, and
+  a value MAY carry a `name`. The requested period MAY carry a `startPeriod` and an `endPeriod`.
+
+The data explorer URL SHALL be read from the `_meta` element and from nothing else. Every other
+field a citation uses SHALL be read from the structured element. The dataset URN comes from the
+structured element because that is the spelling the writer saw in the tool's text content, so the
+URN the catalogue is searched for is the URN a `[dataset <urn>]` citation of the same dataset would
+carry.
+
+**One result may report several queries**, one per element of `queries[]` — a query that ran
+against two datasets, for example, reports one query per dataset. Every element SHALL become its own
+record, and the two parts SHALL be joined element to element by `queryId`, never by position. A query
+id present in only one of the two parts still becomes a record, carrying what that part reported.
+The structured result's **`candidateDatasets`** are read as well: each element MAY carry a
+`query`, which becomes the structured-content element of a record for its `queryId`. A candidate is
+a query the server offers to run on another dataset. It did not run, so its record has no `_meta`
+element, has no explorer link and did not return data (the terms are defined below). It is kept so
+the report review can tell a writer that cited it that the query returned no data, rather than that
+its id is unknown.
+
+The fields named above are the only ones the app reads. It SHALL NOT refuse an element for carrying
+other fields, and it SHALL keep each element whole on its record (see below). A missing or
+unreadable part SHALL cost only what that part is for. A missing `_meta` element costs the pill and
+the References row. A missing structured element costs the dataset, the series count and the
+filter. An unreadable filter costs its own item on the card.
+
+**Assumptions about the data-query server.** This capability relies on the following, which hold
+for the StatGPT data-query tool on a correctly configured channel; a channel's configuration faults
+are out of scope:
+
+1. A query that ran and **returned data** carries a `seriesCount` greater than zero in its
+   structured element and a `dataExplorerUrl` in its `_meta` element.
+2. A query that ran and **returned no data** carries no `seriesCount`, and may carry a
+   `dataExplorerUrl`. It backs no value. The report review asks the writer to replace or drop a
+   citation of it (**report-composition**); one that survives the review is still resolved as well
+   as it can be.
+3. A query that **did not run** — constructed only, or offered for a candidate dataset — carries no
+   `seriesCount` and no `dataExplorerUrl`, and a candidate has no `_meta` element at all.
+4. A query id identifies one query within the turn, and the same query run on the same day reports
+   the same id.
+
+**What a model reads is unchanged.** Capturing SHALL NOT alter the content a tool result delivers to
+the research agent, SHALL NOT add a data explorer URL or anything else to it, and SHALL NOT fail or
+delay the tool call. A payload that cannot be read SHALL cost that result's records and nothing
+else: the tool call succeeds for the agent exactly as it would with no capture at all, and the
+citation step reports the count (see **logging-policy**).
+
+**What the capture keeps.** The app SHALL keep, for the rest of the turn, a map from each
+`queryId` to one record with exactly two keys:
+
+- **`_meta`** — that query's element of the `_meta` payload's `queries`, whole, as the server sent
+  it; absent when the payload did not report the id.
+- **`structured_content`** — that query's element of the structured result's `queries`, or the
+  `query` of its `candidateDatasets` element, whole; absent when the structured result did not
+  report the id.
+
+Nothing is renamed, derived or dropped at capture. Everything a citation uses is read out of those
+two elements: the data explorer URL from the `_meta` element, and the dataset URN, the series
+count, the filters and the requested period from the structured element.
+
+**Three terms describe a captured record.** This capability and **report-composition** use them,
+and each is decided by one field:
+
+- **A query with an explorer link** is a record whose `_meta` element carries a `dataExplorerUrl`
+  that a browser can open: an absolute `http` or `https` URL, judged by the rule a dataset
+  citation's URL is judged by. This term decides the delivery. A citation of such a query becomes a
+  pill and contributes a References row; a citation of any other query stays text and contributes
+  no row.
+- **A query that returned data** is a record whose structured element carries a `seriesCount`
+  greater than zero. This term decides the report review: only such a query may be cited
+  (**report-composition**).
+- **The query's dataset** is the dataset whose URN the record's structured element carries as
+  `datasetUrn`. Its name, its last-update date and its page URL are what the dataset-metadata tool
+  reports for that URN.
+
+The first two terms are independent of each other. A query that returned data may lack an explorer
+link, on a channel that publishes none for its dataset: its citation passes the review and is
+delivered as text. A query with an explorer link may have returned no data: the review catches its
+citation, and a citation the review leaves in place is still delivered as a pill, because a pill
+that opens the query the report named serves the reader better than a bare id.
+
+Keeping the elements whole means a later feature that shows more of a query reads a field the
+record already holds, rather than a change to the capture. When a later result reports a `queryId`
+already kept, the later record SHALL replace the earlier one. A query id is stable for the same
+query run on the same day, so a repeated query reports the same id, and the latest report of it is
+the one the agent read last. Records SHALL be kept for one turn only: a query id reported in an
+earlier turn is not resolvable in a later one.
+
+**Why capture rather than read the tool messages.** The MCP adapter the app builds its tools with
+passes the structured result on to the tool message and discards `_meta`, so by the time a tool
+message exists the data explorer URL is gone. The capture is the only point in the turn where both
+parts are in hand.
+
+#### Scenario: An executed query is captured with its link
+
+- **WHEN** a data-query tool result carries, under the configured `_meta` key, a query with
+  `queryId` `dq_0123abcd45` and a `dataExplorerUrl`
+  `https://portal.example.org/explorer?urn=IMF:WEO(1.0.0)&filter=A.DE+US.GDP`, and its structured
+  result carries the same `queryId` with `datasetUrn` `IMF:WEO(1.0.0)` and `seriesCount` `2`
+- **THEN** the app SHALL keep a record for `dq_0123abcd45` carrying that URL, that URN and that
+  series count, and the tool message the research agent reads SHALL carry no URL it did not carry
+  before
+
+#### Scenario: A constructed query that did not run is captured without a link
+
+- **WHEN** a tool result reports a query that the server constructed but did not run, so its
+  `_meta` element carries a `queryId` and no `dataExplorerUrl`, and its structured element carries
+  no `seriesCount`
+- **THEN** the app SHALL keep a record for that id that has no explorer link and did not return data
+
+#### Scenario: One result reporting two queries yields two records
+
+- **WHEN** a data-query result's `_meta` payload and structured result each carry two query
+  elements, `dq_0000000001` against `IMF:WEO(1.0.0)` and `dq_0000000002` against
+  `IMF:DIRECTION_OF_TRADE_STATISTICS(1.0.0)`, listed in a different order in the two parts
+- **THEN** the app SHALL keep two records, each joining the `_meta` element and the structured
+  element that carry its own `queryId`
+
+#### Scenario: A record keeps the elements whole
+
+- **WHEN** a structured-result element carries `querySummary`, `datasetName` and `factualPeriod`
+  beside the fields the app reads
+- **THEN** the record SHALL hold that element with all of those fields, although no citation reads
+  them
+
+#### Scenario: Candidate queries are kept without a link
+
+- **WHEN** a result asks for a dataset to be selected, so its structured result carries
+  `candidateDatasets` whose elements each carry a query with a `queryId`
+- **THEN** the app SHALL keep a record for each of those ids carrying only `structured_content`, and
+  none of them SHALL have an explorer link or count as a query that returned data
+
+#### Scenario: A result without the configured key contributes nothing
+
+- **WHEN** a tool result carries a `_meta` payload under a key other than the configured one, or
+  no `_meta` at all
+- **THEN** the app SHALL keep no record from it, and SHALL NOT read query ids out of its structured
+  result or its text content
+
+#### Scenario: An unreadable payload costs only its own records
+
+- **WHEN** a tool result carries a payload under the configured key whose `queries` is not an array
+- **THEN** the tool call SHALL succeed for the research agent unchanged, no record SHALL be kept from
+  that result, and records kept from other results SHALL be unaffected
+
+#### Scenario: A missing structured result costs the dataset and the filter
+
+- **WHEN** a tool result carries a readable `_meta` payload for a query with a data explorer URL,
+  and no structured result
+- **THEN** the app SHALL keep the record with its URL, and a citation of that query SHALL still
+  become a pill, labelled with its marker text, whose card carries no filter item
+
+### Requirement: A data-query citation is converted when its query has an explorer link
+
+A `[data_query <id>]` marker SHALL be converted — its marker replaced by a marker tag, one
+annotation emitted for it — on one condition: **the turn captured a query with an explorer link for
+that id**, as the capture requirement defines the term. Whether the query returned data is **not**
+part of the condition. The report review is where a citation of a query without data is caught and
+revised (**report-composition**); a citation the review leaves in place — its version budget spent,
+for instance — is resolved as well as it can be.
+
+The query id SHALL be matched **verbatim** against the captured records' `queryId`s, as
+**source-attribution** requires: no case change, no trimming, no re-encoding.
+
+A data-query citation whose id the turn never captured, or captured as a query without an explorer
+link, SHALL keep its marker text exactly as the report writer wrote it and SHALL produce no
+annotation. It SHALL NOT fall back to the dataset's page: a pill that opens the dataset rather than
+the cited data would claim a precision the citation lost. Conversion SHALL NOT be partial, and the
+failure mode is a missing pill, never a lost citation.
+
+**Neither the query's dataset, the dataset's name, its last-update date nor the query's filter is
+part of the condition.** Each costs only what it is for on the card, as the data-query annotation
+requirement states.
+
+**Where the marker stands is not a condition**, exactly as for the other two forms.
+
+The marker form is `[data_query <id>]`, owned by **research-execution**. The `<id>` slot SHALL
+accept any run of characters other than a bracket or a line break, and the id SHALL be taken
+exactly as written, the way a dataset URN is.
+
+#### Scenario: A cited query with a data explorer link becomes a pill
+
+- **WHEN** a paragraph reads `…grew 2.9% in 2023 [data_query dq_0123abcd45].` and the turn captured
+  that id with the URL `https://portal.example.org/explorer?urn=IMF:WEO(1.0.0)&filter=A.DE.GDP`
+- **THEN** the marker SHALL be replaced by a marker tag, and one annotation SHALL be emitted naming
+  that tag and carrying that URL
+
+#### Scenario: A query id the turn never captured keeps its text
+
+- **WHEN** the report cites `[data_query dq_ffffffffff]` and no tool result in the turn reported
+  that id
+- **THEN** the marker SHALL remain in the delivered text, and no annotation SHALL be emitted for it
+
+#### Scenario: A query captured without a link keeps its text
+
+- **WHEN** the report cites a query id the turn captured with no data explorer URL
+- **THEN** the marker SHALL remain in the delivered text, no annotation SHALL be emitted for it, and
+  no dataset pill SHALL be drawn in its place
+
+#### Scenario: A delivered citation of a query that returned no data still becomes a pill
+
+- **WHEN** the delivered report still cites a query id whose `_meta` element carries a data explorer
+  URL and whose structured element carries no `seriesCount`, because the query ran and returned no
+  data and the review's version budget ran out before a revision removed the citation
+- **THEN** the marker SHALL become a pill opening that URL, and the query's dataset SHALL be listed
+  in the References section
+
+#### Scenario: A query the payload does not list keeps its text
+
+- **WHEN** the report cites a query id that the structured result lists and the `_meta` payload of
+  the same result does not
+- **THEN** the marker SHALL remain in the delivered text, and the query SHALL contribute no
+  References row
+
+#### Scenario: A relative link is not convertible
+
+- **WHEN** the captured record's data explorer URL is `explorer?urn=IMF:WEO(1.0.0)`
+- **THEN** the citation SHALL NOT be converted, because the URL is not an absolute web URL
+
+### Requirement: A data-query annotation opens the cited query and shows its filter
+
+A converted data-query citation's annotation SHALL carry the fields every annotation carries —
+`index` and `target.selector` — exactly as the annotation-payload requirement states them. It SHALL
+differ from a **dataset** citation's annotation in its URL, in its labels when the query's dataset
+is not known, and in its `body.quote`:
+
+- **`body.source.attachment.type`** SHALL be `text/html`, because the URL is a page on the web, and
+  that type is what makes the client's card offer the open-in-browser action.
+- **`body.source.attachment.url`** SHALL be the captured data explorer URL, carried verbatim. The
+  dataset's page URL SHALL NOT be used by a data-query annotation, even when the dataset-metadata
+  tool reports one: the page belongs to a `[dataset <urn>]` citation and to the dataset's References
+  row.
+- **`body.source.attachment.title`**, the pill, names the query's dataset, and falls back
+  through three forms:
+  1. **`<name> dataset`**, where the name is the one the dataset-metadata tool reported for the
+     query's dataset URN;
+  2. **`<urn> dataset`**, the structured element's `datasetUrn`, when the tool reported no name for
+     it — the catalogue carries no record for the URN, or the call failed;
+  3. **`data_query <id>`**, the marker's own text, when the structured element carries no
+     `datasetUrn`, so nothing says which dataset the query ran against. It carries no ` dataset`,
+     because it names no dataset.
+
+  The first two are shortened to the channel's budget with ` dataset` appended after the
+  shortening, as a dataset pill is. The third SHALL NOT be shortened, for the reason an unresolved
+  document label is not: it is short by construction, and a cut could eat the id. The name SHALL
+  be taken from the catalogue and not from the data-query result, although the structured result
+  may carry a dataset name as well: the reader should see one dataset named one way across every
+  pill and every References row.
+- **`body.title`**, the card's title, SHALL carry the pill's leading part whole. After a dataset
+  name or a URN it goes on with ` dataset`, and then with **` - last update <date>`** when the
+  dataset-metadata tool reported a last-update date for the query's dataset URN, as in
+  `World Economic Outlook dataset - last update 2025-04-30`. Without a date it SHALL read
+  `<name> dataset` or `<urn> dataset` alone. Where the pill reads `data_query <id>`, so does the
+  card title.
+- **`body.selector`** SHALL be omitted, as for a dataset citation.
+- **`body.quote`** SHALL be a Markdown list describing what the query asked for, and nothing else:
+  1. **One item per filter**, in the order the structured result reported them:
+     `* <dimension>: <value>, <value>, …`. The dimension is the filter's `dimensionName`, or its
+     `dimensionId` when no name was reported. Each value is its `name`, or its `id` when no name was
+     reported, and the values are joined with `, `. Only an `in` filter carrying at least one value
+     contributes an item; a filter with any other operator SHALL be left out rather than guessed
+     at, because a list of values would misstate a range or an exclusion.
+
+     **An item longer than the channel's `data_query_card_filter_max_line_chars`
+     (**application-config-schema**), 80 by default, SHALL be cut to exactly that many
+     characters, the ellipsis `…` counted within them**, with any whitespace left at the cut
+     removed before the ellipsis, the way a pill's leading part is cut. The whole line counts, the
+     `* ` and the dimension included. A filter on 35 countries therefore reads as its first few
+     names and an ellipsis: the card shows what kind of selection the query made, and the data
+     explorer link opens the whole of it.
+  2. **One period item**, from the requested period: `* From <start> until <end>` when both bounds
+     were reported, `* From <start>` when only the start was, and `* Until <end>` when only the end
+     was. The item SHALL be omitted when the query reported no requested period or neither bound.
+     The requested period is used rather than the period the data covers because it is the period
+     the data explorer link opens. The line budget does not apply to it, because a period item is
+     short by construction.
+
+  The list carries no URN and no last-update item: the URN is what the dataset's References row
+  names, and the date is in the card's title. Dates SHALL be carried with no reformatting. An item
+  the app has nothing for SHALL be omitted rather than rendered as a placeholder, so a query whose
+  structured result was not captured has an empty list, and then `body.quote` SHALL be omitted.
+
+**A data query is its own source.** Within a run, two markers naming the same query id SHALL produce
+one annotation. Two markers naming different query ids SHALL produce two annotations, even when both
+queries ran against one dataset: they cite different data, and each entry opens its own. A
+data-query citation and a `[dataset <urn>]` citation of the same dataset in one run are likewise two
+sources, one opening the data and one opening the dataset's page.
+
+#### Scenario: A data-query card shows the filter in words
+
+- **WHEN** a converted data-query citation's captured record carries, in this order, an `in` filter
+  on `Series` with the value names `Real GDP growth` and an `in` filter on `Country` with the value
+  names `United States` and `Germany`, a requested period from `2020-01-01` to `2024-12-31`, and the
+  catalogue reports `World Economic Outlook` last updated `2025-04-30`
+- **THEN** the pill SHALL read `World Economic Outlook dataset`, the card title SHALL read
+  `World Economic Outlook dataset - last update 2025-04-30`, and `body.quote` SHALL read
+  `* Series: Real GDP growth`, `* Country: United States, Germany` and
+  `* From 2020-01-01 until 2024-12-31`, one item per line in that order
+
+#### Scenario: A long filter item is cut to the default budget
+
+- **WHEN** the channel sets no `data_query_card_filter_max_line_chars`, and a captured query's
+  `Country` filter carries 35 value names, so its item runs past 80 characters
+- **THEN** the item SHALL be 80 characters long and end with `…`
+
+#### Scenario: A channel's line budget sets the item length
+
+- **WHEN** the channel sets `data_query_card_filter_max_line_chars` to `40`, and a query's card
+  carries one filter item of 60 characters and one of 30
+- **THEN** the first item SHALL be 40 characters long and end with `…`, and the second SHALL be
+  carried whole
+
+#### Scenario: An open-ended period names its one bound
+
+- **WHEN** a captured query's requested period carries an `endPeriod` of `2030-01-01` and no
+  `startPeriod`
+- **THEN** the period item SHALL read `* Until 2030-01-01`
+
+#### Scenario: A query with no period has no period item
+
+- **WHEN** a captured query's structured element carries no requested period
+- **THEN** `body.quote` SHALL carry no period item, and the filter items SHALL be rendered as usual
+
+#### Scenario: A non-set operator is left out
+
+- **WHEN** a captured query's filter carries the operator `excluded`
+- **THEN** `body.quote` SHALL carry no item for that filter, and every other item SHALL be rendered
+  as usual
+
+#### Scenario: A catalogue failure costs only the name and the date
+
+- **WHEN** a cited query was captured with a data explorer URL and a `datasetUrn`, and the
+  dataset-metadata call fails
+- **THEN** the citation SHALL still become a pill, labelled `<urn> dataset`, and its card title SHALL
+  read `<urn> dataset` with no last-update part
+
+#### Scenario: A query with no dataset URN is labelled with its marker text
+
+- **WHEN** a cited query `dq_0123abcd45` was captured with a data explorer URL, and its structured
+  element carries no `datasetUrn`
+- **THEN** the citation SHALL become a pill opening that URL, and both the pill and the card title
+  SHALL read `data_query dq_0123abcd45`
+
+#### Scenario: A data-query pill never opens the dataset's page
+
+- **WHEN** a cited query was captured with a data explorer URL, and the catalogue reports a page URL
+  for the query's dataset
+- **THEN** the annotation's URL SHALL be the data explorer URL, and the dataset's page URL SHALL
+  appear in no data-query annotation
+
+#### Scenario: Two queries of one dataset in one run are two entries
+
+- **WHEN** a run reads `[data_query dq_0000000001] [data_query dq_0000000002]`, both captured with a
+  data explorer URL and both run against `IMF:WEO(1.0.0)`
+- **THEN** the run SHALL become one marker tag claimed by two annotations, each opening its own
+  query's URL
+
+### Requirement: A cited data query cites the dataset it ran against
+
+Wherever this capability speaks of the datasets the delivered report cites, a `[data_query <id>]`
+citation of a **query with an explorer link** whose record names **the query's dataset** (the
+capture requirement defines both terms) SHALL count as a citation of that dataset, at the position
+of that marker. This covers exactly two things:
+
+- **The dataset-metadata call.** The app SHALL call the dataset-metadata tool on a turn whose report
+  cites at least one dataset directly or through such a query, and SHALL select the catalogue
+  records of both sets of URNs, still in one call.
+- **The References section.** The dataset table SHALL carry one row for each distinct dataset cited
+  either way, ordered by where the dataset is first cited in either form. The row is the row a
+  `[dataset <urn>]` citation of the same dataset produces: its cells read the catalogue record, its
+  first cell falls back to the URN, and it is openable on the dataset citation's condition, opening
+  the **dataset's page**, never a query's data explorer link. A References row names the source,
+  and the source a query draws on is its dataset.
+
+It SHALL NOT cover inline conversion: a data-query citation converts on its own condition, and a
+dataset marker on its own.
+
+**A query whose dataset is not known gets a row of its own.** A cited query with an explorer link
+whose structured element carries no `datasetUrn` names no dataset to list, yet it is a cited
+source, and every cited source gets a row. It SHALL contribute one row to the dataset table, at the
+position of its first citation. The row's first cell SHALL carry `data_query <id>`, the marker's
+own text, and its other cells SHALL be empty. The row SHALL NOT be openable: a References row opens
+a dataset's page, and this query names no dataset. Two citations of one such query id share one
+row.
+
+**A query without an explorer link contributes no row.** A data-query citation contributes to the
+References section on exactly the condition its pill is drawn, so a data-query citation is either a
+pill with a row or plain text with neither. That is the one exception to the rule that every cited
+source gets a row. For an id the turn never captured it is forced: nothing the app holds says which
+dataset it belongs to. For a captured query without a link it is chosen: on a correctly configured
+channel a query that returned data carries a link (the capture requirement's first assumption), so
+a query without one is a query the report should not have cited.
+
+#### Scenario: A dataset cited only through queries is listed
+
+- **WHEN** the report cites `[data_query dq_0000000001]` and `[data_query dq_0000000002]`, both
+  captured with a data explorer URL and the `datasetUrn` `IMF:WEO(1.0.0)`, and never cites
+  `[dataset IMF:WEO(1.0.0)]`
+- **THEN** the dataset-metadata tool SHALL be called once, and the dataset table SHALL carry exactly
+  one row for `IMF:WEO(1.0.0)`, opening the dataset's page when the catalogue reported one
+
+#### Scenario: A dataset cited both ways is listed once
+
+- **WHEN** the report first cites `[dataset IMF:DIRECTION_OF_TRADE_STATISTICS(1.0.0)]`, then a data
+  query whose dataset is `IMF:WEO(1.0.0)`, then a data query whose dataset is
+  `IMF:DIRECTION_OF_TRADE_STATISTICS(1.0.0)`, both queries captured with a data explorer URL
+- **THEN** the dataset table SHALL carry two rows, the direction-of-trade dataset first and the
+  World Economic Outlook dataset second
+
+#### Scenario: An uncaptured query id contributes no row
+
+- **WHEN** the report's only dataset-server citation is `[data_query dq_ffffffffff]`, which the turn
+  never captured
+- **THEN** the dataset-metadata tool SHALL NOT be called, and the section SHALL carry no dataset
+  table
+
+#### Scenario: A query without an explorer link contributes no row
+
+- **WHEN** the report's only dataset-server citation is a query captured with the `datasetUrn`
+  `IMF:WEO(1.0.0)` and no data explorer URL
+- **THEN** the dataset-metadata tool SHALL NOT be called, and the section SHALL carry no dataset
+  table
+
+#### Scenario: A query without a dataset URN gets a text row
+
+- **WHEN** the report cites `[data_query dq_0123abcd45]`, captured with a data explorer URL and with
+  no structured element
+- **THEN** the dataset table SHALL carry a row whose first cell reads `data_query dq_0123abcd45` as
+  text, whose other cells are empty, and for which no annotation is emitted
+
+### Requirement: Cited identifiers are looked up once per turn and shared by the review and the delivery
+
+The report review checks that every dataset and document a draft cites is one its server knows
+(**report-composition** owns the checks and their wording). It learns that from the same two
+surfaces the delivery reads — the dataset-metadata tool and the document-metadata resource — and
+the two SHALL share one set of lookups per turn rather than ask the servers twice:
+
+- **The catalogue** is fetched by the first check of a draft that cites a dataset, directly or
+  through a cited query with an explorer link and a dataset URN, and a successful answer serves
+  every later check and the delivery.
+- **Document metadata** is read, per check, for the cited document ids not yet looked up, in one
+  resource read per check. An id's answer, including its absence from the answer, serves every
+  later check and the delivery; the delivery reads only ids no check has looked up.
+
+**What "known" means.** Known means available on the server — never "seen in an earlier tool
+response", for the reason the identifier checks in **report-composition** give. A dataset URN is
+known when the catalogue, the list of datasets the server makes available, carries a record whose
+`id` equals it, character for character. A document id is known when the document-metadata
+resource's answer carries it. For the second to hold, the resource SHALL omit from its answer **exactly** the ids its
+channel does not know: an id it knows SHALL be present, even when its metadata object is empty. This
+tightens the partial-answer allowance in the document-metadata requirement, which permits an
+unknown id's absence without saying that absence means unknown.
+
+**A failed lookup decides nothing.** When the catalogue call or a resource read fails, or its answer
+cannot be read, the ids it was asked about SHALL be treated as not looked up: no check reports them
+as unknown, and the next check or the delivery asks again. A check that cannot tell whether an id
+is valid SHALL stay silent about it, because a false violation makes the writer remove a citation
+the report needs.
+
+Page indices are **not** checked: whether a cited page exists in a document is deferred.
+
+#### Scenario: A document looked up during review is not read again at delivery
+
+- **WHEN** a reviewed draft cites documents `207` and `442`, the check reads both, and the delivered
+  report cites the same two
+- **THEN** the delivery SHALL read no document metadata, and SHALL use the answer the check read for
+  the pills' titles and the References rows
+
+#### Scenario: An id the resource omits is unknown
+
+- **WHEN** a reviewed draft cites document `999` and the resource's answer for `207,999` carries
+  `207` only
+- **THEN** document `999` SHALL be treated as unknown, and document `207` as known
+
+#### Scenario: A failed catalogue call flags nothing
+
+- **WHEN** a reviewed draft cites `[dataset IMF:WEO(1.0.0)]` and the dataset-metadata call fails
+- **THEN** the review SHALL report no dataset as unknown, and the delivery SHALL call the tool again
