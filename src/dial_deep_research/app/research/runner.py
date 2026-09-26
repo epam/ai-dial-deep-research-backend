@@ -38,7 +38,6 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.tools import BaseTool
-from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.types import StreamPart
 from pydantic import BaseModel, Field
 
@@ -46,7 +45,6 @@ from dial_deep_research.app.history import PrepState
 from dial_deep_research.app.mcp_tools import load_mcp_tools
 from dial_deep_research.app_properties import (
     ApplicationProperties,
-    DocumentMetadataSource,
     ServerReferencesTable,
 )
 from dial_deep_research.utils.dial_annotations import send_annotations
@@ -59,9 +57,13 @@ from dial_deep_research.utils.dial_stages import (
     log_tool_call_completed,
 )
 
+from .citation_lookups import CitationLookups
 from .citations import (
     Annotation,
     DatasetSource,
+    DatasetTableEntry,
+    cited_data_query_ids,
+    cited_dataset_entries,
     cited_dataset_ids,
     cited_document_ids,
     convert_citations,
@@ -69,15 +71,11 @@ from .citations import (
     log_citations_resolved,
     remove_hyperlinks,
 )
-from .dataset_metadata import (
-    KIND_DATASET_CALL_FAILED,
-    DatasetMetadataError,
-    read_dataset_sources,
-)
+from .data_queries import DataQueryStore
+from .dataset_metadata import KIND_DATASET_CALL_FAILED, DatasetMetadataError
 from .document_metadata import (
     KIND_METADATA_READ_FAILED,
     DocumentMetadataError,
-    read_document_metadata,
     read_titles,
 )
 from .file_sharing import FileSharingError, share_documents
@@ -161,6 +159,8 @@ class _ReportDelivery(BaseModel):
     documents_titled: int = 0
     datasets_requested: int = 0
     datasets_resolved: int = 0
+    data_queries_requested: int = 0
+    data_queries_resolved: int = 0
     markers_left: int = 0
     hyperlinks_removed: int = 0
 
@@ -174,7 +174,7 @@ def _with_references_section(
     document_ids: Sequence[int],
     document_metadata: Mapping[int, Mapping[str, Any]],
     document_urls: Mapping[int, str],
-    dataset_ids: Sequence[str],
+    dataset_entries: Sequence[DatasetTableEntry],
     dataset_sources: Mapping[str, DatasetSource],
     first_index: int,
     pill_title_max_chars: int | None,
@@ -196,7 +196,7 @@ def _with_references_section(
             metadata=document_metadata,
             document_urls=document_urls,
         ),
-        "dataset": dataset_rows(dataset_ids, sources=dataset_sources),
+        "dataset": dataset_rows(dataset_entries, sources=dataset_sources),
     }
     contents = [
         ReferencesTableContent(
@@ -214,6 +214,39 @@ def _with_references_section(
         pill_title_max_chars=pill_title_max_chars,
     )
     return ReferencesSection(text=f"{text}\n\n{built.text}", annotations=built.annotations)
+
+
+def _warn_data_query_outcomes(*, query_ids: Sequence[str], data_queries: DataQueryStore) -> None:
+    """The data-query outcomes of the turn worth a WARNING, each with a message of its own.
+
+    Only on a turn whose report cites a query id, and never naming one. "Nothing captured" has
+    three causes the message cannot tell apart: a `data_query_meta_key` that matches nothing the
+    server sends, a dataset server whose channel does not enable the payload, and a research turn
+    that ran no data query while the report still cites query ids. The first two cost every
+    data-query pill; the third is a writer that invented ids past the review's check. "Ids not
+    captured" is suppressed then, since every cited id is uncaptured and one cause yields one
+    warning. A cited query that was captured never warns, with a link or without one: the gap
+    between the requested and resolved query counts is the whole record of it.
+    """
+    if not query_ids:
+        return
+    if not data_queries.records:
+        logger.warning(
+            "Report cites data queries, but the turn captured no data-query records: cited_ids=%d",
+            len(query_ids),
+        )
+    else:
+        unmatched = sum(1 for query_id in query_ids if query_id not in data_queries.records)
+        if unmatched:
+            logger.warning(
+                "Report cites data query ids that match no captured query: unmatched_ids=%d",
+                unmatched,
+            )
+    if data_queries.unreadable_payloads:
+        logger.warning(
+            "Tool results carried an unreadable data-query payload in _meta: tool_results=%d",
+            data_queries.unreadable_payloads,
+        )
 
 
 def _count_markers(text: str) -> int:
@@ -252,6 +285,14 @@ class ResearchRunner:
         bearer_token: str | None = None,
     ) -> list[BaseMessage]:
         loaded = await load_mcp_tools(mcp_servers=properties.mcp_servers, bearer_token=bearer_token)
+        # One set of lookups per request, shared by the report review's identifier checks and the
+        # citation step, so neither asks a server again about what the other already learned.
+        lookups = CitationLookups(
+            dataset_tool=loaded.dataset_metadata_tool,
+            client=loaded.client,
+            document_source=properties.document_metadata,
+            data_queries=loaded.data_queries,
+        )
         # Both are research-specific and app-owned: the sentinel ends an iteration, the status
         # tool tells the user what the agent is doing. Neither reaches an MCP server.
         tools = [
@@ -268,6 +309,7 @@ class ResearchRunner:
             max_report_words=properties.max_report_words,
             max_report_versions=properties.max_report_versions,
             references_section_name=properties.references_section_name,
+            citation_lookups=lookups,
             emit_research_review_result_stage=self._emit_research_review_result_stage,
             emit_research_budget_exhausted=self._emit_research_budget_exhausted_stage,
             emit_report_review_result_stage=self._emit_report_review_result_stage,
@@ -304,11 +346,10 @@ class ResearchRunner:
         await self._deliver_report(
             file_sharing_tool=loaded.file_sharing_tool,
             configured_tool_name=properties.file_sharing_tool,
-            mcp_client=loaded.client,
-            metadata_source=properties.document_metadata,
-            dataset_metadata_tool=loaded.dataset_metadata_tool,
+            lookups=lookups,
             configured_dataset_tool_name=properties.dataset_metadata_tool,
             pill_title_max_chars=properties.max_pill_title_chars,
+            filter_line_max_chars=properties.data_query_card_filter_max_line_chars,
             references_heading=properties.references_section_name,
             references_empty_text=properties.references_section_empty_text,
             references_tables=properties.references_tables,
@@ -320,11 +361,10 @@ class ResearchRunner:
         *,
         file_sharing_tool: BaseTool | None,
         configured_tool_name: str | None,
-        mcp_client: MultiServerMCPClient,
-        metadata_source: DocumentMetadataSource | None,
-        dataset_metadata_tool: BaseTool | None,
+        lookups: CitationLookups,
         configured_dataset_tool_name: str | None,
         pill_title_max_chars: int | None,
+        filter_line_max_chars: int,
         references_heading: str,
         references_empty_text: str,
         references_tables: Sequence[ServerReferencesTable],
@@ -350,11 +390,10 @@ class ResearchRunner:
                 self._report,
                 file_sharing_tool=file_sharing_tool,
                 configured_tool_name=configured_tool_name,
-                mcp_client=mcp_client,
-                metadata_source=metadata_source,
-                dataset_metadata_tool=dataset_metadata_tool,
+                lookups=lookups,
                 configured_dataset_tool_name=configured_dataset_tool_name,
                 pill_title_max_chars=pill_title_max_chars,
+                filter_line_max_chars=filter_line_max_chars,
                 references_heading=references_heading,
                 references_empty_text=references_empty_text,
                 references_tables=references_tables,
@@ -378,6 +417,8 @@ class ResearchRunner:
             documents_titled=delivery.documents_titled,
             datasets_requested=delivery.datasets_requested,
             datasets_resolved=delivery.datasets_resolved,
+            data_queries_requested=delivery.data_queries_requested,
+            data_queries_resolved=delivery.data_queries_resolved,
             annotations=delivery.citations_annotated,
             markers_left=delivery.markers_left,
             hyperlinks_removed=delivery.hyperlinks_removed,
@@ -390,11 +431,10 @@ class ResearchRunner:
         *,
         file_sharing_tool: BaseTool | None,
         configured_tool_name: str | None,
-        mcp_client: MultiServerMCPClient,
-        metadata_source: DocumentMetadataSource | None,
-        dataset_metadata_tool: BaseTool | None,
+        lookups: CitationLookups,
         configured_dataset_tool_name: str | None,
         pill_title_max_chars: int | None,
+        filter_line_max_chars: int,
         references_heading: str,
         references_empty_text: str,
         references_tables: Sequence[ServerReferencesTable],
@@ -415,16 +455,32 @@ class ResearchRunner:
             return _ReportDelivery(text=draft, markers_left=_count_markers(draft))
 
         delivery = _ReportDelivery(text=removal.text, hyperlinks_removed=removal.removed)
+        metadata_source = lookups.document_source
+        data_queries = lookups.data_queries
         try:
             document_ids = cited_document_ids(removal.text)
+            # The dataset counts describe the `[dataset <urn>]` markers alone; the datasets the
+            # catalogue is read for and the References table lists also include those reached
+            # through a cited query with an explorer link.
             dataset_ids = cited_dataset_ids(removal.text)
+            dataset_entries = cited_dataset_entries(removal.text, data_queries=data_queries.records)
+            catalogue_urns = [entry.urn for entry in dataset_entries if entry.urn is not None]
+            query_ids = cited_data_query_ids(removal.text)
             delivery.documents_requested = len(document_ids)
             delivery.datasets_requested = len(dataset_ids)
+            delivery.data_queries_requested = len(query_ids)
+            delivery.data_queries_resolved = sum(
+                1
+                for query_id in query_ids
+                if (record := data_queries.records.get(query_id)) is not None
+                and record.has_explorer_link
+            )
+            _warn_data_query_outcomes(query_ids=query_ids, data_queries=data_queries)
             # A resolution to make, or edits already applied: either is work worth announcing. A
             # draft that cites nothing and carried no link leaves the step with nothing to say,
             # and a stage there would open and close in the same instant.
             has_resolution = (file_sharing_tool is not None and document_ids) or (
-                dataset_metadata_tool is not None and dataset_ids
+                lookups.has_dataset_tool and catalogue_urns
             )
             if removal.removed or has_resolution:
                 self._set_activity(CITATIONS_ACTIVITY)
@@ -438,22 +494,23 @@ class ResearchRunner:
                     configured_tool_name=configured_tool_name,
                     document_ids=document_ids,
                 ),
-                self._read_document_metadata(
-                    client=mcp_client, source=metadata_source, document_ids=document_ids
-                ),
+                self._read_document_metadata(lookups=lookups, document_ids=document_ids),
                 self._read_dataset_sources(
-                    tool=dataset_metadata_tool,
+                    lookups=lookups,
                     configured_tool_name=configured_dataset_tool_name,
-                    dataset_ids=dataset_ids,
+                    dataset_ids=catalogue_urns,
                 ),
             )
             delivery.documents_resolved = len(document_urls)
             # What the (8c) event calls a resolved dataset is one the catalogue reported a page
             # URL for, which is what makes its citations convertible. The read keeps the others
             # too, for their References rows, so the count is taken here rather than from its
-            # size.
+            # size, and over the dataset markers' URNs alone.
             delivery.datasets_resolved = sum(
-                1 for source in dataset_sources.values() if source.url is not None
+                1
+                for dataset_id in dataset_ids
+                if (source := dataset_sources.get(dataset_id)) is not None
+                and source.url is not None
             )
             # A title for a document that resolved no URL labels nothing: that document's
             # citations keep their marker text, so there is no pill for the title to reach.
@@ -476,7 +533,9 @@ class ResearchRunner:
                 document_urls=document_urls,
                 document_titles=titles_of_resolved,
                 dataset_sources=dataset_sources,
+                data_queries=data_queries.records,
                 pill_title_max_chars=pill_title_max_chars,
+                filter_line_max_chars=filter_line_max_chars,
             )
         except Exception as error:
             self._warn_citation_failure(kind=_KIND_CONVERSION_FAILED, error=error)
@@ -497,7 +556,7 @@ class ResearchRunner:
                 document_ids=document_ids,
                 document_metadata=document_metadata,
                 document_urls=document_urls,
-                dataset_ids=dataset_ids,
+                dataset_entries=dataset_entries,
                 dataset_sources=dataset_sources,
                 first_index=len(delivery.annotations),
                 pill_title_max_chars=pill_title_max_chars,
@@ -562,8 +621,7 @@ class ResearchRunner:
     async def _read_document_metadata(
         self,
         *,
-        client: MultiServerMCPClient,
-        source: DocumentMetadataSource | None,
+        lookups: CitationLookups,
         document_ids: Sequence[int],
     ) -> dict[int, dict[str, Any]]:
         """What the resource reports about every cited document, by document id.
@@ -584,8 +642,11 @@ class ResearchRunner:
         the gap between the resolved and titled counts on the step's own event is the record of
         it. A document server must name a metadata resource, so the DEBUG case is a channel that
         serves no documents rather than one that declined to configure them.
+
+        Read through the turn's lookups, so a document the report review already looked up is not
+        read again.
         """
-        if source is None:
+        if lookups.document_source is None:
             logger.debug(
                 "Report citations: no MCP server serves documents, so every citation is labelled"
                 " from the marker the report writer wrote"
@@ -594,9 +655,7 @@ class ResearchRunner:
         if not document_ids:
             return {}
         try:
-            return await read_document_metadata(
-                client=client, source=source, document_ids=document_ids
-            )
+            return await lookups.document_metadata(document_ids)
         except DocumentMetadataError as failure:
             self._warn_citation_failure(kind=failure.kind)
             return {}
@@ -607,7 +666,7 @@ class ResearchRunner:
     async def _read_dataset_sources(
         self,
         *,
-        tool: BaseTool | None,
+        lookups: CitationLookups,
         configured_tool_name: str | None,
         dataset_ids: Sequence[str],
     ) -> dict[str, DatasetSource]:
@@ -623,6 +682,9 @@ class ResearchRunner:
         A dataset the catalogue reports without a page URL is no failure at all — whether a
         dataset has a portal page is the channel's own data — and the gap between the requested
         and resolved counts on the step's own event is the whole record of it.
+
+        Read through the turn's lookups, so a catalogue the report review already fetched is not
+        fetched again.
         """
         if configured_tool_name is None:
             logger.debug(
@@ -630,7 +692,7 @@ class ResearchRunner:
                 " delivered as the marker text the report writer wrote"
             )
             return {}
-        if tool is None:
+        if not lookups.has_dataset_tool:
             self._warn_citation_failure(
                 kind=_KIND_DATASET_TOOL_NOT_ADVERTISED, tool_name=configured_tool_name
             )
@@ -638,7 +700,7 @@ class ResearchRunner:
         if not dataset_ids:
             return {}
         try:
-            return await read_dataset_sources(tool=tool, dataset_ids=dataset_ids)
+            return await lookups.dataset_sources(dataset_ids)
         except DatasetMetadataError as failure:
             self._warn_citation_failure(kind=failure.kind, tool_name=configured_tool_name)
             return {}

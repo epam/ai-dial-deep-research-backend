@@ -22,6 +22,7 @@ from dial_deep_research.app.research.graph import build_research_graph
 from dial_deep_research.app.research.prompts import ReportReview
 from dial_deep_research.app.research.state import build_initial_state
 from dial_deep_research.app_properties import ReportSection
+from tests.citation_fakes import no_lookups
 
 pytestmark = pytest.mark.asyncio
 
@@ -116,6 +117,7 @@ def _build(
         max_report_words=max_report_words,
         max_report_versions=max_report_versions,
         references_section_name="References",
+        citation_lookups=no_lookups(),
         emit_research_review_result_stage=lambda _outcome: None,
         emit_research_budget_exhausted=lambda _outcome: None,
         emit_report_review_result_stage=stages.append,

@@ -51,6 +51,7 @@ from .citations import (
     Annotation,
     ConvertibleCitation,
     DatasetSource,
+    DatasetTableEntry,
     build_row_annotation,
     convertible_dataset,
     convertible_document,
@@ -268,22 +269,27 @@ def document_rows(
 
 
 def dataset_rows(
-    dataset_ids: Sequence[str], *, sources: Mapping[str, DatasetSource]
+    entries: Sequence[DatasetTableEntry], *, sources: Mapping[str, DatasetSource]
 ) -> list[ReferenceRow]:
-    """One row per cited dataset, in the order the report first cites them.
+    """One row per dataset table entry, in the order the report first cites them.
 
     A dataset the catalogue does not report keeps its row, with no fields: its first cell reads the
-    URN the report's marker carried, which is the only name the app has for it. Its fields are the
-    catalogue record as reported, which is what the configured columns read.
+    URN the report carried, which is the only name the app has for it. Its fields are the
+    catalogue record as reported, which is what the configured columns read. A cited query that
+    reported no dataset is listed by its marker text, with no fields and nothing to open: a row
+    opens a dataset's page, and this query names no dataset.
     """
     rows: list[ReferenceRow] = []
-    for dataset_id in dataset_ids:
-        source = sources.get(dataset_id)
+    for entry in entries:
+        if entry.urn is None:
+            rows.append(ReferenceRow(identifier=f"data_query {entry.query_id}", fields={}))
+            continue
+        source = sources.get(entry.urn)
         rows.append(
             ReferenceRow(
-                identifier=dataset_id,
+                identifier=entry.urn,
                 fields=dict(source.raw_fields) if source is not None else {},
-                target=convertible_dataset(dataset_id=dataset_id, dataset_sources=sources),
+                target=convertible_dataset(dataset_id=entry.urn, dataset_sources=sources),
             )
         )
     return rows

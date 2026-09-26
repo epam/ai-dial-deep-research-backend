@@ -31,6 +31,7 @@ from dial_deep_research.app.research.prompts import ResearchReview
 from dial_deep_research.app.research.runner import ResearchRunner
 from dial_deep_research.app.research.state import build_initial_state
 from dial_deep_research.app_properties import ReportSection
+from tests.citation_fakes import no_lookups
 from tests.dial_spies import ChoiceSpy
 
 pytestmark = pytest.mark.asyncio
@@ -253,6 +254,7 @@ async def _run_graph_with_the_cap_reached(
         max_report_words=2750,
         max_report_versions=1,
         references_section_name="References",
+        citation_lookups=no_lookups(),
         emit_research_review_result_stage=lambda outcome: (
             findings.append(outcome),
             order.append("findings"),

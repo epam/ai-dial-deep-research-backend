@@ -151,6 +151,17 @@
         "dial:propertyOrder": 8
       }
     },
+    "data_query_card_filter_max_line_chars": {
+      "default": 80,
+      "description": "How long one filter line on a data-query citation's card may be, the ellipsis counted within it. The card lists what the cited query selected, one line per filtered dimension, such as * Country: United States, Germany; a longer line is cut to this length. The pill's link opens the whole selection, so a cut line loses nothing the reader cannot reach. Set it to what your client's citation card has room for.",
+      "minimum": 10,
+      "title": "Data Query Card Filter Max Line Chars",
+      "type": "integer",
+      "dial:meta": {
+        "dial:propertyKind": "server",
+        "dial:propertyOrder": 9
+      }
+    },
     "mcp_servers": {
       "description": "MCP servers the research agent connects to. At least one is required; server_name must be unique across the list.",
       "items": {
@@ -259,6 +270,19 @@
             "description": "Name of this server's tool listing the datasets this channel exposes. The application calls it when it delivers a report, to learn a cited dataset's name and the address of its page, so a dataset citation becomes a pill that opens that page. The tool takes no arguments and answers with the whole catalogue; the application selects the datasets the report cites. It stays available to the research agent, which uses the same listing to discover which datasets exist, so naming it here only adds a caller. Required on a statgpt server, and only a statgpt server may set it: without it every dataset citation is delivered as a bare URN in square brackets, which names nothing the reader can open.",
             "title": "Dataset Metadata Tool"
           },
+          "data_query_meta_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The key under which this server's tool results carry their data-query records in the MCP result's _meta, for example acme.example.org/client. The key is built from a namespace set in the dataset server's own channel configuration, so copy it from there; it is matched character for character. The application reads, from the payload under this key, the address that opens each query in the data explorer, so a [data_query <id>] citation becomes a pill that opens the cited data and its dataset is listed in the References section. The dataset server's channel must also enable that payload. Required on a statgpt server, and only a statgpt server may set it: without it every data-query citation is delivered as a bare id in square brackets.",
+            "title": "Data Query Meta Key"
+          },
           "references_table": {
             "description": "How this server's cited sources are listed in the report's References section: the sub-heading the table is written under, and its columns. The application builds that section itself from what the servers reported about the sources the report cites, so this is where a channel says what a row holds. Required on every server, whatever it serves: a server without a table is a server whose cited sources cannot be listed. The section is built for every report, and the report structure has no say in whether it is — it names only the sections the report writer writes.",
             "properties": {
@@ -319,7 +343,7 @@
       "type": "array",
       "dial:meta": {
         "dial:propertyKind": "server",
-        "dial:propertyOrder": 9
+        "dial:propertyOrder": 10
       }
     },
     "prompts": {
@@ -353,7 +377,7 @@
       "type": "object",
       "dial:meta": {
         "dial:propertyKind": "server",
-        "dial:propertyOrder": 10
+        "dial:propertyOrder": 11
       }
     }
   },

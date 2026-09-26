@@ -21,6 +21,7 @@ from dial_deep_research.utils.llm import (
     stream_drop_retry_middleware,
     with_stream_drop_retry,
 )
+from tests.citation_fakes import no_lookups
 
 
 @pytest.fixture(autouse=True)
@@ -106,6 +107,7 @@ def _make_report_node() -> Any:
         DEFAULT_REPORT_STRUCTURE,
         2750,
         "References",
+        lookups=no_lookups(),
         emit_revision_failed_stage=lambda _outcome: None,
         emit_activity=lambda _title: None,
     )

@@ -193,7 +193,10 @@ carries an identifier that means something only inside the server that issued it
   `document_metadata_resource` and `document_title_key`, which name the publication a pill stands
   for rather than its id;
 - a `statgpt` server names its `dataset_metadata_tool`, which gives a cited dataset its name and
-  the address of the page the citation opens.
+  the address of the page the citation opens, and its `data_query_meta_key`, the `_meta` key its
+  tool results carry data-query records under (such as `acme.example.org/client`), which gives a
+  cited data query the data explorer link its pill opens. The key's namespace comes from the
+  StatGPT channel's own configuration, and that channel must enable the payload.
 
 Each server is one of two modes:
 
@@ -262,17 +265,25 @@ make infra-cleanup    # down + remove volumes (destroys DIAL core data)
 ### Pre-commit leak check
 
 `scripts/check_sensitive_info.sh` asks Claude Code to judge the staged diff against
-[`no_sensitive_info.md`](no_sensitive_info.md) and refuses the commit when it finds a leak. It runs
-as the `sensitive-info` hook in `.pre-commit-config.yaml`, next to the formatting hooks, and needs
-the `claude` CLI and `jq` on your `PATH`. Enable once per clone:
+[`no_sensitive_info.md`](no_sensitive_info.md) and exits non-zero when it finds a leak. It needs
+the `claude` CLI and `jq` on your `PATH`, and makes one Sonnet call per run, so expect a pause of
+tens of seconds.
+
+**The check is not a pre-commit hook for now.** It does not work properly yet and needs further
+tuning, so `.pre-commit-config.yaml` keeps its `sensitive-info` hook commented out. Run the script
+by hand to judge what is staged:
+
+```sh
+scripts/check_sensitive_info.sh
+```
+
+The formatting hooks still run on every commit once installed. Install them once per clone:
 
 ```sh
 make install-precommit-hooks     # installs the dev dependencies, then writes .git/hooks/pre-commit
 ```
 
-It makes one Sonnet call per commit, so expect a pause of tens of seconds. Judge what is staged
-without committing with `poetry run pre-commit run sensitive-info`, and skip the checks for a
-single commit with `git commit --no-verify`.
+Skip them for a single commit with `git commit --no-verify`.
 
 ## Running the app in Docker (opt-in)
 

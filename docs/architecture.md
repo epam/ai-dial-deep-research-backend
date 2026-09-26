@@ -188,16 +188,20 @@ The rest of the loop, in brief — each item is specified in the linked specs:
 - **Report delivery** (`ResearchRunner._deliver_report`, `app/research/citations.py`,
   `app/research/references.py`, `app/research/file_sharing.py`,
   `app/research/document_metadata.py`,
-  `app/research/dataset_metadata.py`): the citation step, run once
-  per turn between the graph finishing
+  `app/research/dataset_metadata.py`, `app/research/citation_lookups.py`): the citation step,
+  run once per turn between the graph finishing
   and the report being appended. It makes three alterations to the settled draft, in this order:
   every hyperlink form goes (a link keeps its label, an image is dropped whole, an autolink or bare
   URL is deleted), then each convertible citation marker is replaced by an empty marker tag,
-  `<cit data-id="…"></cit>`, then the References section is built and appended. Each kind of citation has its own condition, and both are about
-  whether the reader can open what the pill points at: a `[doc <id>, page <ix>]` marker converts
-  when the file-sharing tool returned a PDF URL for that document, and a `[dataset <urn>]` marker
+  `<cit data-id="…"></cit>`, then the References section is built and appended. Each kind of
+  citation has its own condition, and each is about whether the reader can open what the pill points at: a `[doc <id>, page <ix>]` marker converts
+  when the file-sharing tool returned a PDF URL for that document, a `[dataset <urn>]` marker
   converts when the dataset-metadata tool reported that URN with an absolute `http` or `https`
-  URL. A marker whose condition fails keeps its text exactly as the writer wrote it. Markers
+  URL, and a `[data_query <id>]` marker converts when the turn captured, for exactly that query
+  id, a data explorer URL that is absolute `http` or `https` (see the data-query capture bullet
+  below). Whether the query returned data is not part of that condition, and a query without a
+  URL never falls back to its dataset's page. A marker whose condition fails keeps its text exactly
+  as the writer wrote it. Markers
   standing next to each other, separated
   only by spaces, commas or semicolons, share one tag and render as one pill, a document and a
   dataset among them. The post-processed
@@ -205,17 +209,25 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   One `custom_content.annotations` array follows the content, one entry per converted citation,
   each naming its tag's id. Every label is a leading part naming the source plus a fixed trailing
   part, the trailing part appended after any shortening: a document reads
-  `<publication title>, page <ix>`, a dataset reads `<dataset name> dataset`, and a lookup that
+  `<publication title>, page <ix>`, a dataset reads `<dataset name> dataset`, and a data query
+  reads the same as the dataset it ran against, the name coming from the catalogue record of the
+  query's structured `datasetUrn`. A lookup that
   resolved nothing changes only the leading part — `doc <id>` for a document, the URN for a
-  dataset — so no label says which citations fell back. The pill's copy of the leading part is
+  dataset — so no label says which citations fell back. A data query that reported no dataset URN
+  reads `data_query <id>`, unshortened. The pill's copy of the leading part is
   shortened to `max_pill_title_chars` where a channel sets it (null, the default, shows it whole),
   because the client does not trim an overflowing label; the card keeps it whole. One label that is never
   shortened is an unresolved document's, `doc <id>, page <ix>` being short by construction. A
   document annotation carries the cited page in a zero-size `pdf_bbox` selector, an
   `application/pdf` attachment type and no `body.quote`; a dataset annotation carries no selector,
   a `text/html` type — which is what makes the client's card offer "open in browser" rather than a
-  download — and a `body.quote` listing `* URN: <urn>` and, when the catalogue reported one,
-  `* Last update: <date>`. The payload is dumped with `exclude_none=True`, so a field that does not
+  download — and no `body.quote`, its card title going on to ` - last update <date>` when the
+  catalogue reported one. A data-query annotation is a dataset one with the data explorer URL in
+  place of the dataset's page and with a `body.quote`: one `* <dimension>: <value>, …` item per
+  `in` filter, in display names, each cut to `data_query_card_filter_max_line_chars` (80 by
+  default), then one `From … until …`, `From …` or `Until …` item from the requested period. Two
+  citations of one query id are one source and two query ids are two, even on one dataset. The
+  payload is dumped with `exclude_none=True`, so a field that does not
   apply is absent rather than null. No label carries a URL: a dataset's page is reached by
   clicking the pill and then the card's open-in-browser action, both of which belong to the client.
   The **References section is written by the app**, not by the report writer, from the metadata
@@ -228,8 +240,13 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   and the metadata key or catalogue field it reads. Every cited source gets a row whether or not
   its metadata resolved and whether or not its citations became pills; the first column names the
   source and falls back to `doc <id>` or the URN when its key resolves nothing, while every other
-  column is left blank, and nothing marks a row as degraded. A cell renders a string as written, a
-  number or boolean as its text and a list joined with `, `, escaping `|` and collapsing line
+  column is left blank, and nothing marks a row as degraded. The dataset table lists the datasets
+  cited either way: a `[data_query <id>]` citation of a query with an explorer link counts as a
+  citation of its dataset, at that marker's position, so a dataset cited both ways is one row at
+  its first citation, and it opens the dataset's page. Such a query that reported no dataset URN
+  gets a text row of its own reading `data_query <id>`; a query without an explorer link adds no
+  row, so a data-query citation is either a pill with a row or text with neither. A cell renders
+  a string as written, a number or boolean as its text and a list joined with `, `, escaping `|` and collapsing line
   breaks so a value cannot break the table. A row whose source can be opened — on the
   same condition its inline citations convert on — carries only a marker tag in its first cell, and
   an annotation of the row's own claims it, so the source's name is the pill. That annotation is an
@@ -264,9 +281,13 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   document URLs come from one call per turn to the tool named by `mcp_servers[].file_sharing_tool`,
   invoked tool-call-shaped so its structured result is reachable, and with the agent tools' error
   handling cleared so a failure reaches the app instead of arriving as result text. The dataset
-  names, page addresses and last-update dates come from one call per turn to the tool named by
-  `mcp_servers[].dataset_metadata_tool`, made with no arguments and answered with the channel's
-  whole catalogue, from which the app selects the cited URNs by exact string match. A `statgpt`
+  names, page addresses and last-update dates come from one successful call per turn to the tool
+  named by `mcp_servers[].dataset_metadata_tool`, made with no arguments and answered with the
+  channel's whole catalogue, from which the app selects the cited URNs — those of the dataset
+  markers and those of the cited queries with an explorer link — by exact string match. The
+  catalogue answer and the document metadata are read through one `CitationLookups` object per
+  request, which the report review's identifier checks fill first, so the delivery asks only for
+  what no check has looked up. A `statgpt`
   server must name that tool and only a `statgpt` server may, and it **stays in the research
   agent's tool list**, because a catalogue listing is how the agent discovers which datasets exist;
   its error handling therefore stays the agent's, and the reader takes a server error off the
@@ -277,8 +298,12 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   failure of the step's own passes — is one WARNING naming the kind, and none of them can fail the
   turn or withhold the report. A cited dataset the catalogue reports without a page URL is no
   failure at all, and reads only as the gap between the requested and resolved dataset counts.
-  Every record of the step carries counts and never a URL, a file name,
-  a document title, a dataset name, or a cited document's or dataset's id.
+  On a turn whose report cites a query id, the step also warns once when the turn captured no
+  data-query record at all, once when cited ids match no captured record (not both), and once when
+  tool results carried an unreadable payload; the (8c) event counts the query ids requested and
+  those with an explorer link beside the dataset counts, which cover `[dataset <urn>]` markers
+  only. Every record of the step carries counts and never a URL, a file name,
+  a document title, a dataset name, a filter value, or a cited document's, dataset's or query's id.
 - **Report structure**: `default_report_structure` (an application property) — an ordered list of
   `{name, description, protected}` sections, Overview → Key Findings → Detailed Analysis →
   Conclusion by default. Unknown fields are refused, so a stored entry still carrying the
@@ -309,16 +334,27 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   rewriting, never by truncation: no token cap is placed on the report call, and a shortening
   revision rewrites to fit instead of cutting, so the report ends at a clean boundary. A draft over
   the ceiling forces a revision deterministically, even when report-review approved it.
-- **App-checked rules** (`app/research/report_rules.py`): the three report rules the app decides
-  itself, over the draft text — the section structure (every configured section present, named
+- **App-checked rules** (`app/research/report_rules.py`): the report rules the app decides
+  itself — over the draft text, the section structure (every configured section present, named
   exactly as configured, in order, as a `##` heading), the word ceiling, and the absence of
   hyperlinks (no Markdown link or image, no reference-style link or its definition line, no raw
-  HTML anchor or image tag, no autolink, no bare URL). Each rule owns three things in one class:
+  HTML anchor or image tag, no autolink, no bare URL); over the draft and what the turn learned,
+  the cited identifiers. Every cited query id must be one the turn captured, of a query whose
+  structured result carries a `seriesCount` above zero, the explorer link playing no part; the
+  violation for an unknown id asks for the reported id, and the one for a query without data
+  redirects a statement about the dataset to `[dataset <urn>]` and any other to dropping the
+  citation or the statement. Every cited dataset URN must be in the catalogue, and every cited
+  document id known to the document-metadata resource; the cited page is not checked, and an id
+  whose lookup failed, or of a kind the channel has no server for, raises nothing. Report-review
+  first awaits `CitationLookups.prefetch(draft)` concurrently with its model call, since the rules
+  themselves are synchronous (the
+  [report-composition](../openspec/specs/report-composition/spec.md) spec owns the checks'
+  wording). Each rule owns three things in one class:
   the instruction rendered into the report writer's prompt, the check over the finished draft, and
   the wording of the violation a revision acts on, so the writer can never be told something
   different from what its draft is judged against. Their violations are prepended to
-  report-review's own, and report-review is told the app checks all three — leaving it what needs a
-  reader: a padded section, the protected-section rules, the banned annotations, valid Markdown,
+  report-review's own, and report-review is told the app checks all of them — leaving it what
+  needs a reader: a padded section, the protected-section rules, the banned annotations, valid Markdown,
   the citation format. The hyperlink rule's violation asks for the **sentence** to be rewritten
   rather than for the URL to be deleted, because only the report writer can produce a sentence that
   still reads well without it; the delivery step's removal is the guarantee behind it, for a draft
@@ -409,3 +445,14 @@ The rest of the loop, in brief — each item is specified in the linked specs:
 - **Image budget** (the [image-budget](../openspec/specs/image-budget/spec.md) spec): image-carrying
   tool results over the budget are substituted before each model call, so no request exceeds the
   provider's per-request image limit.
+- **Data-query capture** (`app/mcp_tools.py`, `app/research/data_queries.py`): the per-request MCP
+  client carries a tool-call interceptor on the `statgpt` server, because the MCP adapter drops a
+  tool result's `_meta` before any tool message exists. The interceptor awaits the call, and on a
+  successful result whose `_meta` carries the key named by `mcp_servers[].data_query_meta_key` it
+  keeps one record per query id: that query's element of the `_meta` payload and its element of the
+  structured result (or a candidate dataset's `query`), each whole, joined by `queryId`. It returns
+  the same result object, so what the agent reads is unchanged, and a payload it cannot read costs
+  that result's records alone. The records live on `LoadedMcpTools.data_queries` for the rest of
+  the request, outside graph state; the report review and the citation step read them. Only the
+  data explorer URL is read from `_meta`; the dataset URN, the series count, the filters and the
+  requested period are read from the structured element.

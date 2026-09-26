@@ -12,7 +12,11 @@ from __future__ import annotations
 import pytest
 
 from dial_deep_research.app.research.citations import remove_hyperlinks
+from dial_deep_research.app.research.data_queries import DataQueryRecord, DataQueryStore
 from dial_deep_research.app.research.report_rules import (
+    ReportDataQueryRule,
+    ReportDatasetIdRule,
+    ReportDocumentIdRule,
     ReportHyperlinkRule,
     ReportLengthRule,
     ReportStructureRule,
@@ -20,6 +24,7 @@ from dial_deep_research.app.research.report_rules import (
     render_writer_instructions,
 )
 from dial_deep_research.app_properties import ReportSection
+from tests.citation_fakes import no_lookups
 
 _SECTIONS = [
     ReportSection(name="Overview", description="The short answer.", protected=True),
@@ -249,7 +254,12 @@ def test_the_rule_shares_its_detection_with_the_delivery_step() -> None:
 
 def test_the_writer_instructions_carry_every_rule_in_order() -> None:
     instructions = render_writer_instructions(
-        build_report_rules(sections=_SECTIONS, max_words=2750, references_name=_REFERENCES_NAME)
+        build_report_rules(
+            sections=_SECTIONS,
+            max_words=2750,
+            references_name=_REFERENCES_NAME,
+            lookups=no_lookups(),
+        )
     )
 
     assert (
@@ -266,3 +276,133 @@ def test_the_writer_instructions_carry_every_rule_in_order() -> None:
     # The references section is named only to forbid writing it, never as a heading to copy.
     assert "## References" not in instructions
     assert 'Do not write a "References" section' in instructions
+
+
+# --- the data-query and identifier checks --------------------------------------------------------
+
+_EXPLORER_URL = "https://portal.example.org/explorer?urn=IMF:WEO(1.0.0)"
+
+
+def _record(query_id: str, *, series_count: int | None, url: str | None) -> DataQueryRecord:
+    meta = {"queryId": query_id, **({"dataExplorerUrl": url} if url else {})}
+    content = {
+        "queryId": query_id,
+        "datasetUrn": "IMF:WEO(1.0.0)",
+        **({"seriesCount": series_count} if series_count is not None else {}),
+    }
+    return DataQueryRecord.model_validate({"_meta": meta, "structured_content": content})
+
+
+def _data_query_violations(draft: str, **records: DataQueryRecord) -> list[str]:
+    return ReportDataQueryRule(data_queries=DataQueryStore(records=dict(records))).violations(draft)
+
+
+def test_the_writer_is_told_to_cite_only_queries_that_returned_data() -> None:
+    instructions = render_writer_instructions(
+        build_report_rules(
+            sections=_SECTIONS,
+            max_words=2750,
+            references_name=_REFERENCES_NAME,
+            lookups=no_lookups(),
+        )
+    )
+    flat = " ".join(instructions.split())
+    assert "Cite a data query only when it returned data" in flat
+    for kind in ("did not execute", "candidate dataset", "result was empty"):
+        assert kind in flat
+
+
+def test_a_mistyped_query_id_asks_for_the_reported_id() -> None:
+    [violation] = _data_query_violations(
+        "Growth [data_query dq_0123abcd46].",
+        dq_0123abcd45=_record("dq_0123abcd45", series_count=2, url=_EXPLORER_URL),
+    )
+    assert "dq_0123abcd46" in violation
+    assert "no tool reported a query" in violation
+    assert "exactly as the data-query tool reported it" in violation
+
+
+def test_a_candidate_query_asks_for_a_dataset_citation_or_a_drop() -> None:
+    candidate = DataQueryRecord(
+        structured_content={"queryId": "dq_c", "datasetUrn": "IMF:WEO(1.0.0)"}
+    )
+    [violation] = _data_query_violations("No data for Germany [data_query dq_c].", dq_c=candidate)
+    assert "dq_c" in violation
+    assert "only a data query that returned data may be cited" in violation
+    assert "`[dataset <urn>]`" in violation
+    assert "drop the citation, or drop the statement" in violation
+
+
+def test_a_query_that_ran_and_returned_nothing_asks_for_a_revision_despite_its_link() -> None:
+    [violation] = _data_query_violations(
+        "A value [data_query dq_1].", dq_1=_record("dq_1", series_count=None, url=_EXPLORER_URL)
+    )
+    assert "only a data query that returned data may be cited" in violation
+
+
+def test_a_query_that_returned_data_raises_nothing() -> None:
+    assert (
+        _data_query_violations(
+            "A value [data_query dq_1].", dq_1=_record("dq_1", series_count=3, url=_EXPLORER_URL)
+        )
+        == []
+    )
+
+
+def test_a_query_with_data_and_no_explorer_link_raises_nothing() -> None:
+    assert (
+        _data_query_violations(
+            "A value [data_query dq_1].", dq_1=_record("dq_1", series_count=3, url=None)
+        )
+        == []
+    )
+
+
+class _Lookups:
+    """Stands in for the turn's lookups: known ids, unknown ids, and the rest not looked up."""
+
+    def __init__(
+        self,
+        *,
+        datasets: dict[str, bool] | None = None,
+        documents: dict[int, bool] | None = None,
+    ) -> None:
+        self._datasets = datasets or {}
+        self._documents = documents or {}
+
+    def dataset_known(self, urn: str) -> bool | None:
+        return self._datasets.get(urn)
+
+    def document_known(self, document_id: int) -> bool | None:
+        return self._documents.get(document_id)
+
+
+def test_an_unknown_dataset_urn_asks_for_the_reported_urn() -> None:
+    lookups = _Lookups(datasets={"IMF:WEO(1.0.0)": True, "IMF:WEO(2.0.0)": False})
+    [violation] = ReportDatasetIdRule(lookups=lookups).violations(  # type: ignore[arg-type]
+        "A [dataset IMF:WEO(1.0.0)] and B [dataset IMF:WEO(2.0.0)]."
+    )
+    assert "IMF:WEO(2.0.0)" in violation
+    assert "exactly as the dataset tool reported it" in violation
+
+
+def test_an_unknown_document_id_is_reported_and_its_page_left_unchecked() -> None:
+    lookups = _Lookups(documents={207: True, 999: False})
+    [violation] = ReportDocumentIdRule(lookups=lookups).violations(  # type: ignore[arg-type]
+        "A [doc 207, page 1] and B [doc 999, page 2]."
+    )
+    assert "document 999" in violation
+    assert "page" not in violation
+
+
+def test_an_available_id_no_tool_response_mentioned_passes() -> None:
+    lookups = _Lookups(datasets={"IMF:WEO(1.0.0)": True})
+    rule = ReportDatasetIdRule(lookups=lookups)  # type: ignore[arg-type]
+    assert rule.violations("A [dataset IMF:WEO(1.0.0)].") == []
+
+
+def test_an_id_not_looked_up_raises_nothing() -> None:
+    """A failed lookup, or a channel without that server, leaves every id not looked up."""
+    lookups = no_lookups()
+    assert ReportDatasetIdRule(lookups=lookups).violations("A [dataset IMF:WEO(9.0.0)].") == []
+    assert ReportDocumentIdRule(lookups=lookups).violations("A [doc 999, page 2].") == []

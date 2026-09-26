@@ -17,6 +17,7 @@ from langgraph.graph import END, START, StateGraph
 
 from dial_deep_research.app_properties import ReportSection
 
+from .citation_lookups import CitationLookups
 from .nodes import (
     ActivityEmitter,
     ReportBudgetExhaustedEmitter,
@@ -45,6 +46,7 @@ def build_research_graph(
     max_report_words: int,
     max_report_versions: int,
     references_section_name: str,
+    citation_lookups: CitationLookups,
     emit_research_review_result_stage: ResearchReviewResultStageEmitter,
     emit_research_budget_exhausted: ResearchBudgetExhaustedEmitter,
     emit_report_review_result_stage: ReportReviewResultStageEmitter,
@@ -63,6 +65,9 @@ def build_research_graph(
     the work happened. `emit_activity` names the work a node is starting, and each node calls it
     first thing — the graph has no node-entry signal a stream consumer could read, since an
     `updates` part arrives only once a node has finished.
+
+    `citation_lookups` is the turn's shared lookups, which the report rules check cited ids
+    against; the runner reads the same object at delivery.
     """
     research_agent = build_research_agent(
         tools=tools,
@@ -90,6 +95,7 @@ def build_research_graph(
             sections=report_structure,
             max_words=max_report_words,
             references_name=references_section_name,
+            lookups=citation_lookups,
             emit_revision_failed_stage=emit_report_revision_failed,
             emit_activity=emit_activity,
         ),
@@ -101,6 +107,7 @@ def build_research_graph(
             sections=report_structure,
             max_words=max_report_words,
             references_name=references_section_name,
+            lookups=citation_lookups,
             emit_result_stage=emit_report_review_result_stage,
             emit_activity=emit_activity,
         ),

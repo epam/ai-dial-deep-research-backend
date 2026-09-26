@@ -145,6 +145,7 @@ def test_schema_endpoint_serves_unwrapped_schema(client: TestClient) -> None:
         "references_section_name",
         "references_section_empty_text",
         "max_pill_title_chars",
+        "data_query_card_filter_max_line_chars",
         "prompts",
         "mcp_servers",
     }

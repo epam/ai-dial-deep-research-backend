@@ -17,6 +17,7 @@ draft: the router turns its presence into an edge and the review node logs the s
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -51,6 +52,7 @@ from dial_deep_research.utils.llm import (
     with_stream_drop_retry,
 )
 
+from .citation_lookups import CitationLookups
 from .middleware import ForceToolChoiceMiddleware, IterationCounterMiddleware
 from .prompts import (
     REPORT_REQUEST,
@@ -416,6 +418,7 @@ def make_report_node(
     sections: Sequence[ReportSection],
     max_words: int,
     references_name: str,
+    lookups: CitationLookups,
     emit_revision_failed_stage: ReportRevisionFailureEmitter,
     emit_activity: ActivityEmitter,
 ) -> ReportNode:
@@ -437,6 +440,7 @@ def make_report_node(
                             sections=sections,
                             max_words=max_words,
                             references_name=references_name,
+                            lookups=lookups,
                         )
                     ),
                     protected_sections=render_protected_section_names(sections),
@@ -516,6 +520,7 @@ def make_report_review_node(
     sections: Sequence[ReportSection],
     max_words: int,
     references_name: str,
+    lookups: CitationLookups,
     emit_result_stage: ReportReviewResultStageEmitter,
     emit_activity: ActivityEmitter,
 ) -> ReportReviewNode:
@@ -526,9 +531,12 @@ def make_report_review_node(
     protected-section rules, citation format. It sees the draft, the configuration and the query
     and plan, never the research findings, which is why it cannot reopen evidence coverage. A
     failing call never fails the turn: the rules still run and their violations still stand.
+
+    The identifier rules need the cited ids looked up first, and the rules are synchronous, so
+    the lookups the draft needs run concurrently with the review call, before the rules.
     """
     rules = build_report_rules(
-        sections=sections, max_words=max_words, references_name=references_name
+        sections=sections, max_words=max_words, references_name=references_name, lookups=lookups
     )
 
     async def report_review(state: ResearchState) -> dict[str, Any]:
@@ -550,33 +558,41 @@ def make_report_review_node(
                 )
             ),
         ]
-        violations: list[str] = []
-        error: str | None = None
-        usage: UsageMetadata | None = None
-        llm_start = time.monotonic()
-        try:
-            llm = with_stream_drop_retry(
-                get_chat_model(LLMModelConfig()).with_structured_output(
-                    ReportReview, include_raw=True
+
+        async def review_call() -> tuple[list[str], str | None, UsageMetadata | None, float]:
+            """The review model's violations, the failure kind, the usage and the call's time."""
+            llm_start = time.monotonic()
+            try:
+                llm = with_stream_drop_retry(
+                    get_chat_model(LLMModelConfig()).with_structured_output(
+                        ReportReview, include_raw=True
+                    )
                 )
-            )
-            result: dict[str, Any] = await llm.ainvoke(review_messages)
-            llm_duration = time.monotonic() - llm_start
-            if result["parsing_error"] is not None:
-                raise result["parsing_error"]
-            review: ReportReview = result["parsed"]
-            usage = result["raw"].usage_metadata
-            violations = list(review.report_violations)
-        except Exception as exc:
-            # A failed review must not cost the report. The measured count still applies, so
-            # the loop can still shorten an over-long draft on its own instruction.
-            llm_duration = time.monotonic() - llm_start
-            error = type(exc).__name__
-            logger.warning(
-                "Report review failed, falling back to the measured length: draft=%d error=%s",
-                draft_number,
-                error,
-            )
+                result: dict[str, Any] = await llm.ainvoke(review_messages)
+                llm_duration = time.monotonic() - llm_start
+                if result["parsing_error"] is not None:
+                    raise result["parsing_error"]
+                review: ReportReview = result["parsed"]
+                return (
+                    list(review.report_violations),
+                    None,
+                    result["raw"].usage_metadata,
+                    llm_duration,
+                )
+            except Exception as exc:
+                # A failed review must not cost the report. The measured count still applies, so
+                # the loop can still shorten an over-long draft on its own instruction.
+                error = type(exc).__name__
+                logger.warning(
+                    "Report review failed, falling back to the measured length: draft=%d error=%s",
+                    draft_number,
+                    error,
+                )
+                return [], error, None, time.monotonic() - llm_start
+
+        (violations, error, usage, llm_duration), _ = await asyncio.gather(
+            review_call(), lookups.prefetch(draft)
+        )
 
         # The rules are the app's own, not the model's opinion: their violations join the list
         # whether the model reported any, reported none, or the call failed — so an approving

@@ -270,6 +270,19 @@ class MCPClientSettings(BaseModel):
         " reader can open.",
     )
 
+    data_query_meta_key: str | None = Field(
+        default=None,
+        description="The key under which this server's tool results carry their data-query"
+        " records in the MCP result's _meta, for example acme.example.org/client. The key is"
+        " built from a namespace set in the dataset server's own channel configuration, so copy it"
+        " from there; it is matched character for character. The application reads, from the"
+        " payload under this key, the address that opens each query in the data explorer, so a"
+        " [data_query <id>] citation becomes a pill that opens the cited data and its dataset is"
+        " listed in the References section. The dataset server's channel must also enable that"
+        " payload. Required on a statgpt server, and only a statgpt server may set it: without"
+        " it every data-query citation is delivered as a bare id in square brackets.",
+    )
+
     references_table: ReferencesTable = Field(
         description="How this server's cited sources are listed in the report's References section:"
         " the sub-heading the table is written under, and its columns. The application builds that"
@@ -434,6 +447,31 @@ class MCPClientSettings(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_data_query_meta_key(self) -> MCPClientSettings:
+        """The data-query meta key belongs to the dataset server, and it must name one.
+
+        A `[data_query <id>]` marker names no server, so a second server reporting query ids
+        would make a citation ambiguous — the reason only a `statgpt` server may set the key.
+
+        Required because the report writer cites every data-query fact by query id, and the
+        payload under this key is the only thing that turns such an id into a data explorer link
+        and a References row. A dataset server without it would deliver every such citation as a
+        bare id, so it is refused here rather than at every delivery.
+        """
+        if self.server_type == "statgpt" and not self.data_query_meta_key:
+            raise ValueError(
+                f"statgpt server {self.server_name!r} must name its data_query_meta_key: a"
+                " dataset server must name the key, because its data-query citations are"
+                " resolved through the payload its tool results carry under it"
+            )
+        if self.server_type != "statgpt" and self.data_query_meta_key:
+            raise ValueError(
+                f"server {self.server_name!r} is {self.server_type}, and only a statgpt server"
+                " may name a data-query meta key: data queries are what the dataset server runs"
+            )
+        return self
+
 
 class ReportSection(BaseModel):
     """One section of the report structure, which is one section the report writer writes.
@@ -468,6 +506,9 @@ class ReportSection(BaseModel):
         " its description. At least one section must be protected.",
     )
 
+
+# How long one filter item on a data-query citation's card may be when the channel sets nothing.
+DEFAULT_DATA_QUERY_CARD_FILTER_MAX_LINE_CHARS = 80
 
 # What the References section shows when the report cited nothing. It is the section's whole
 # content in that case, so it is written as prose a reader reads rather than as instructions.
@@ -598,6 +639,15 @@ class ApplicationProperties(BaseModel):
         " itself. What follows the leading part of an inline pill — a document's cited page, the"
         " word dataset — is appended after the shortening and is never lost to a long name, and"
         " the citation card keeps the name whole regardless of this value.",
+    )
+    data_query_card_filter_max_line_chars: int = Field(
+        default=DEFAULT_DATA_QUERY_CARD_FILTER_MAX_LINE_CHARS,
+        ge=10,
+        description="How long one filter line on a data-query citation's card may be, the ellipsis"
+        " counted within it. The card lists what the cited query selected, one line per filtered"
+        " dimension, such as * Country: United States, Germany; a longer line is cut to this"
+        " length. The pill's link opens the whole selection, so a cut line loses nothing the"
+        " reader cannot reach. Set it to what your client's citation card has room for.",
     )
     mcp_servers: list[MCPClientSettings] = Field(
         min_length=1,
@@ -749,6 +799,21 @@ class ApplicationProperties(BaseModel):
                 server.dataset_metadata_tool
                 for server in self.mcp_servers
                 if server.dataset_metadata_tool
+            ),
+            None,
+        )
+
+    @property
+    def data_query_meta_key(self) -> str | None:
+        """The configured data-query meta key, or `None` when no dataset server is configured.
+
+        At most one server can name one, for the reason `dataset_metadata_tool` gives.
+        """
+        return next(
+            (
+                server.data_query_meta_key
+                for server in self.mcp_servers
+                if server.data_query_meta_key
             ),
             None,
         )

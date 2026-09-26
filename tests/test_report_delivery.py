@@ -23,6 +23,8 @@ from langgraph.types import ValuesStreamPart
 
 from dial_deep_research.app.research import references as references_module
 from dial_deep_research.app.research import runner as runner_module
+from dial_deep_research.app.research.citation_lookups import CitationLookups
+from dial_deep_research.app.research.data_queries import DataQueryRecord, DataQueryStore
 from dial_deep_research.app.research.runner import CITATIONS_ACTIVITY, ResearchRunner
 from dial_deep_research.app_properties import (
     ApplicationProperties,
@@ -193,7 +195,10 @@ async def _deliver(
     metadata_source: DocumentMetadataSource | None = None,
     dataset_tool: BaseTool | None = None,
     configured_dataset_tool_name: str | None = None,
+    data_queries: DataQueryStore | None = None,
+    lookups: CitationLookups | None = None,
     pill_title_max_chars: int | None = 20,
+    filter_line_max_chars: int = 80,
     references_heading: str = _REFERENCES_HEADING,
     references_empty_text: str = _REFERENCES_EMPTY_TEXT,
     references_tables: tuple[ServerReferencesTable, ...] = (),
@@ -203,11 +208,16 @@ async def _deliver(
     await runner._deliver_report(
         file_sharing_tool=tool,
         configured_tool_name=configured_tool_name,
-        mcp_client=mcp_client or _MetadataClient(),
-        metadata_source=metadata_source,
-        dataset_metadata_tool=dataset_tool,
+        lookups=lookups
+        or CitationLookups(
+            dataset_tool=dataset_tool,
+            client=mcp_client or _MetadataClient(),
+            document_source=metadata_source,
+            data_queries=data_queries or DataQueryStore(),
+        ),
         configured_dataset_tool_name=configured_dataset_tool_name,
         pill_title_max_chars=pill_title_max_chars,
+        filter_line_max_chars=filter_line_max_chars,
         references_heading=references_heading,
         references_empty_text=references_empty_text,
         references_tables=references_tables,
@@ -761,10 +771,10 @@ async def test_a_cited_dataset_is_delivered_as_a_pill_opening_its_page() -> None
     assert f"[dataset {_URN}]" not in choice.content
     assert '<cit data-id="' in choice.content
     annotation = _dataset_annotations(choice)[0]
-    assert annotation["body"]["title"] == f"{_DATASET_NAME} dataset"
+    assert annotation["body"]["title"] == f"{_DATASET_NAME} dataset - last update 2025-04-30"
     assert annotation["body"]["source"]["attachment"]["url"] == _PORTAL_URL
     assert annotation["body"]["source"]["attachment"]["type"] == "text/html"
-    assert annotation["body"]["quote"] == f"* URN: {_URN}\n* Last update: 2025-04-30"
+    assert "quote" not in annotation["body"]
     assert "selector" not in annotation["body"]
 
 
@@ -781,7 +791,7 @@ async def test_a_document_and_a_dataset_citation_are_both_delivered() -> None:
 
     assert [a["body"]["title"] for a in _dataset_annotations(choice)] == [
         "doc 442, page 3",
-        f"{_DATASET_NAME} dataset",
+        f"{_DATASET_NAME} dataset - last update 2025-04-30",
     ]
 
 
@@ -1237,3 +1247,199 @@ async def test_a_built_section_is_recorded_nowhere_of_its_own(
 
     assert "## References" in choice.content
     assert "references" not in caplog.text.lower()
+
+
+# --- data-query citations -----------------------------------------------------------------------
+
+_QUERY_URL = "https://portal.example.org/explorer?urn=IMF:WEO(1.0.0)&filter=A.DE.GDP"
+
+
+def _captured(
+    query_id: str, *, url: str | None = _QUERY_URL, urn: str | None = _URN
+) -> DataQueryRecord:
+    meta = {"queryId": query_id, **({"dataExplorerUrl": url} if url else {})}
+    content: dict[str, Any] = {
+        "queryId": query_id,
+        "seriesCount": 2,
+        "filters": [
+            {
+                "dimensionId": "COUNTRY",
+                "dimensionName": "Country",
+                "operator": "in",
+                "values": [{"id": "DE", "name": "Germany"}],
+            }
+        ],
+        **({"datasetUrn": urn} if urn else {}),
+    }
+    return DataQueryRecord.model_validate({"_meta": meta, "structured_content": content})
+
+
+def _store(*records: DataQueryRecord, unreadable_payloads: int = 0) -> DataQueryStore:
+    return DataQueryStore(
+        records={record.meta["queryId"]: record for record in records if record.meta},
+        unreadable_payloads=unreadable_payloads,
+    )
+
+
+def _resolved_event(caplog: pytest.LogCaptureFixture) -> str:
+    return next(r.getMessage() for r in caplog.records if "Report citations resolved" in r.message)
+
+
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+
+
+async def test_a_report_citing_only_data_queries_lists_their_dataset_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runner, choice = _make_runner()
+    _settle(runner, "One [data_query dq_0000000001]. Two [data_query dq_0000000002].")
+    calls: list[dict[str, Any]] = []
+
+    with caplog.at_level(logging.INFO, logger=runner_module.logger.name):
+        await _deliver(
+            runner,
+            configured_tool_name=None,
+            dataset_tool=_catalogue_tool(datasets=[_RECORD], calls=calls),
+            configured_dataset_tool_name=_DATASET_TOOL_NAME,
+            data_queries=_store(_captured("dq_0000000001"), _captured("dq_0000000002")),
+            references_tables=(_DATASETS_TABLE,),
+        )
+
+    assert len(calls) == 1
+    inline = _dataset_annotations(choice)[:2]
+    assert [a["body"]["source"]["attachment"]["url"] for a in inline] == [_QUERY_URL, _QUERY_URL]
+    assert inline[0]["body"]["title"] == f"{_DATASET_NAME} dataset - last update 2025-04-30"
+    assert inline[0]["body"]["quote"] == "* Country: Germany"
+    # One References row, for the dataset both queries ran against, opening its page.
+    [row] = _dataset_annotations(choice)[2:]
+    assert row["body"]["source"]["attachment"]["url"] == _PORTAL_URL
+    assert choice.content.count("| 2025-04-30 |") == 1
+    event = _resolved_event(caplog)
+    assert "datasets_requested=0 datasets_resolved=0" in event
+    assert "data_queries_requested=2 data_queries_resolved=2" in event
+    assert _warnings(caplog) == []
+
+
+async def test_a_turn_that_captured_nothing_warns_once(caplog: pytest.LogCaptureFixture) -> None:
+    runner, _ = _make_runner()
+    _settle(runner, "One [data_query dq_0000000001]. Two [data_query dq_0000000002].")
+
+    with caplog.at_level(logging.INFO, logger=runner_module.logger.name):
+        await _deliver(runner, configured_tool_name=None, data_queries=DataQueryStore())
+
+    assert _warnings(caplog) == [
+        "Report cites data queries, but the turn captured no data-query records: cited_ids=2"
+    ]
+    assert "data_queries_requested=2 data_queries_resolved=0" in _resolved_event(caplog)
+
+
+async def test_ids_the_writer_invented_warn_once_with_their_count(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runner, _ = _make_runner()
+    _settle(runner, "A [data_query dq_1]. B [data_query dq_x]. C [data_query dq_y].")
+
+    with caplog.at_level(logging.INFO, logger=runner_module.logger.name):
+        await _deliver(runner, configured_tool_name=None, data_queries=_store(_captured("dq_1")))
+
+    assert _warnings(caplog) == [
+        "Report cites data query ids that match no captured query: unmatched_ids=2"
+    ]
+    assert "data_queries_requested=3 data_queries_resolved=1" in _resolved_event(caplog)
+
+
+async def test_a_captured_query_without_a_link_is_a_count_not_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runner, choice = _make_runner()
+    _settle(runner, "A [data_query dq_1]. B [data_query dq_2].")
+
+    with caplog.at_level(logging.INFO, logger=runner_module.logger.name):
+        await _deliver(
+            runner,
+            configured_tool_name=None,
+            data_queries=_store(_captured("dq_1"), _captured("dq_2", url=None)),
+        )
+
+    assert _warnings(caplog) == []
+    assert "[data_query dq_2]" in choice.content
+    assert "data_queries_requested=2 data_queries_resolved=1" in _resolved_event(caplog)
+
+
+async def test_unreadable_payloads_warn_with_their_count(caplog: pytest.LogCaptureFixture) -> None:
+    runner, _ = _make_runner()
+    _settle(runner, "A [data_query dq_1].")
+
+    with caplog.at_level(logging.INFO, logger=runner_module.logger.name):
+        await _deliver(
+            runner,
+            configured_tool_name=None,
+            data_queries=_store(_captured("dq_1"), unreadable_payloads=3),
+        )
+
+    assert _warnings(caplog) == [
+        "Tool results carried an unreadable data-query payload in _meta: tool_results=3"
+    ]
+
+
+async def test_no_record_of_the_step_carries_a_query_id_a_url_or_a_filter_value(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runner, _ = _make_runner()
+    _settle(runner, "A [data_query dq_0000000001]. B [data_query dq_ffffffffff].")
+
+    with caplog.at_level(logging.DEBUG):
+        await _deliver(
+            runner,
+            configured_tool_name=None,
+            dataset_tool=_catalogue_tool(datasets=[_RECORD]),
+            configured_dataset_tool_name=_DATASET_TOOL_NAME,
+            data_queries=_store(_captured("dq_0000000001"), unreadable_payloads=1),
+            references_tables=(_DATASETS_TABLE,),
+        )
+
+    for record in caplog.records:
+        message = record.getMessage()
+        for secret in ("dq_0000000001", "dq_ffffffffff", "portal.example.org", "Germany"):
+            assert secret not in message, message
+
+
+async def test_a_query_without_a_dataset_urn_gets_a_text_row(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    runner, choice = _make_runner()
+    _settle(runner, "A [data_query dq_0123abcd45].")
+
+    await _deliver(
+        runner,
+        configured_tool_name=None,
+        data_queries=_store(_captured("dq_0123abcd45", urn=None)),
+        references_tables=(_DATASETS_TABLE,),
+    )
+
+    [pill] = _dataset_annotations(choice)
+    assert pill["body"]["source"]["attachment"]["title"] == "data_query dq_0123abcd45"
+    assert "| data_query dq_0123abcd45 |  |" in choice.content
+
+
+async def test_a_catalogue_the_review_fetched_is_not_fetched_again_at_delivery() -> None:
+    runner, _ = _make_runner()
+    _settle(runner, f"A [dataset {_URN}].")
+    calls: list[dict[str, Any]] = []
+    lookups = CitationLookups(
+        dataset_tool=_catalogue_tool(datasets=[_RECORD], calls=calls),
+        client=_MetadataClient(),
+        document_source=None,
+        data_queries=DataQueryStore(),
+    )
+    await lookups.prefetch(f"A [dataset {_URN}].")
+
+    await _deliver(
+        runner,
+        configured_tool_name=None,
+        lookups=lookups,
+        configured_dataset_tool_name=_DATASET_TOOL_NAME,
+    )
+
+    assert len(calls) == 1

@@ -19,8 +19,12 @@ from dial_deep_research.app.research.citations import (
     ConvertibleDatasetCitation,
     ConvertibleDocumentCitation,
     DatasetSource,
+    DatasetTableEntry,
+    cited_dataset_entries,
+    cited_dataset_urns,
     find_hyperlinks,
 )
+from dial_deep_research.app.research.data_queries import DataQueryRecord
 from dial_deep_research.app.research.references import (
     ReferenceRow,
     ReferencesSection,
@@ -35,6 +39,10 @@ _URN = "IMF:WEO(1.0.0)"
 _TITLE = "Market Outlook 2025"
 _PDF_URL = "files/bucket/appdata/deep-research/report.pdf"
 _PORTAL_URL = "https://portal.example.org/datasets/imf-weo"
+
+
+def _entries(*urns: str) -> list[DatasetTableEntry]:
+    return [DatasetTableEntry(urn=urn) for urn in urns]
 
 
 def _columns(*pairs: tuple[str, str]) -> tuple[ReferenceColumn, ...]:
@@ -320,7 +328,7 @@ def test_a_dataset_row_opens_its_page_and_is_labelled_without_the_word_dataset()
     assert annotation.body.source.attachment.url == _PORTAL_URL
     assert annotation.body.title == "World Economic Outlook"
     assert annotation.body.source.attachment.title == "World Economic Outlook"
-    assert annotation.body.quote == f"* URN: {_URN}\n* Last update: 2025-04-30"
+    assert annotation.body.quote is None
     assert annotation.body.selector is None
 
 
@@ -483,7 +491,7 @@ def test_dataset_rows_follow_the_cited_order_and_keep_unresolved_urns() -> None:
     source = DatasetSource(
         name="World Economic Outlook", raw_fields={"name": "World Economic Outlook"}
     )
-    rows = dataset_rows([_URN, "ACME:OTHER"], sources={_URN: source})
+    rows = dataset_rows(_entries(_URN, "ACME:OTHER"), sources={_URN: source})
 
     assert [row.identifier for row in rows] == [_URN, "ACME:OTHER"]
     assert rows[0].fields == {"name": "World Economic Outlook"}
@@ -494,7 +502,7 @@ def test_a_dataset_row_opens_only_when_its_record_carries_a_web_url() -> None:
     with_url = DatasetSource(url=_PORTAL_URL)
     without_url = DatasetSource(name="Primary Commodity Prices")
     rows = dataset_rows(
-        [_URN, "IMF:PCPS", "ACME:OTHER"], sources={_URN: with_url, "IMF:PCPS": without_url}
+        _entries(_URN, "IMF:PCPS", "ACME:OTHER"), sources={_URN: with_url, "IMF:PCPS": without_url}
     )
 
     assert rows[0].target == ConvertibleDatasetCitation(
@@ -509,6 +517,69 @@ def test_a_dataset_row_whose_url_a_browser_cannot_open_stays_text() -> None:
     source = DatasetSource(
         url="files/bucket/appdata/deep-research/weo.html", name="World Economic Outlook"
     )
-    [row] = dataset_rows([_URN], sources={_URN: source})
+    [row] = dataset_rows(_entries(_URN), sources={_URN: source})
 
     assert row.target is None
+
+
+# --- datasets cited through data queries ---------------------------------------------------------
+
+_TRADE_URN = "IMF:DIRECTION_OF_TRADE_STATISTICS(1.0.0)"
+
+
+def _query(
+    query_id: str, *, urn: str | None, url: str | None = "https://x.example.org/e"
+) -> DataQueryRecord:
+    meta = {"queryId": query_id, **({"dataExplorerUrl": url} if url else {})}
+    content = {"queryId": query_id, **({"datasetUrn": urn} if urn else {})}
+    return DataQueryRecord.model_validate({"_meta": meta, "structured_content": content})
+
+
+def test_a_dataset_cited_only_through_queries_is_listed_once() -> None:
+    queries = {
+        "dq_0000000001": _query("dq_0000000001", urn=_URN),
+        "dq_0000000002": _query("dq_0000000002", urn=_URN),
+    }
+    text = "One [data_query dq_0000000001]. Two [data_query dq_0000000002]."
+
+    assert cited_dataset_entries(text, data_queries=queries) == _entries(_URN)
+    assert cited_dataset_urns(text, data_queries=queries) == [_URN]
+
+
+def test_a_dataset_cited_both_ways_is_listed_once_at_its_first_citation() -> None:
+    queries = {
+        "dq_0000000001": _query("dq_0000000001", urn=_URN),
+        "dq_0000000002": _query("dq_0000000002", urn=_TRADE_URN),
+    }
+    text = (
+        f"First [dataset {_TRADE_URN}]. Then [data_query dq_0000000001]."
+        " Then [data_query dq_0000000002]."
+    )
+
+    assert cited_dataset_entries(text, data_queries=queries) == _entries(_TRADE_URN, _URN)
+
+
+def test_an_uncaptured_id_and_a_query_without_a_link_add_no_row() -> None:
+    queries = {"dq_0000000001": _query("dq_0000000001", urn=_URN, url=None)}
+    text = "One [data_query dq_0000000001]. Two [data_query dq_ffffffffff]."
+
+    assert cited_dataset_entries(text, data_queries=queries) == []
+
+
+def test_a_query_without_a_dataset_urn_gets_a_text_row() -> None:
+    queries = {"dq_0123abcd45": _query("dq_0123abcd45", urn=None)}
+    entries = cited_dataset_entries("A [data_query dq_0123abcd45].", data_queries=queries)
+    rows = dataset_rows(entries, sources={})
+
+    assert [(row.identifier, row.fields, row.target) for row in rows] == [
+        ("data_query dq_0123abcd45", {}, None)
+    ]
+    built = _built(
+        ReferencesTableContent(
+            title="Datasets",
+            columns=_columns(("Dataset", "name"), ("Updated", "lastUpdated")),
+            rows=rows,
+        )
+    )
+    assert "| data_query dq_0123abcd45 |  |" in built.text
+    assert built.annotations == []

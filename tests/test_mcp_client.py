@@ -12,6 +12,7 @@ from pytest import MonkeyPatch
 
 import dial_deep_research.app.mcp_tools as tools_mod
 from dial_deep_research.app.mcp_tools import build_mcp_client, load_mcp_tools
+from dial_deep_research.app.research.data_queries import DataQueryCapture, DataQueryStore
 from dial_deep_research.app_properties import (
     MCPClientSettings,
     MCPServerType,
@@ -54,6 +55,7 @@ def _dataset_server(server_name: str = "datasets") -> MCPClientSettings:
         server_type="statgpt",
         deployment_id="statgpt-mcp",
         dataset_metadata_tool="list_datasets",
+        data_query_meta_key="acme.example.org/client",
         references_table=_table("Datasets", "name"),
     )
 
@@ -143,6 +145,22 @@ def test_every_connection_sets_its_own_timeouts(monkeypatch: MonkeyPatch) -> Non
     for server_name in ("rag", "datasets"):
         assert client.connections[server_name]["timeout"] == 5
         assert client.connections[server_name]["sse_read_timeout"] == 300
+
+
+def test_the_dataset_server_gets_the_data_query_capture(monkeypatch: MonkeyPatch) -> None:
+    """Only a server naming a data-query meta key is captured from, with its own key."""
+    monkeypatch.setattr(tools_mod.settings, "dial_url", HttpUrl("http://core:8080"))
+    store = DataQueryStore()
+
+    client = build_mcp_client(
+        [_deployment_server(server_name="rag"), _dataset_server()], data_queries=store
+    )
+
+    [capture] = client.tool_interceptors
+    assert isinstance(capture, DataQueryCapture)
+    assert capture._server_name == "datasets"
+    assert capture._meta_key == "acme.example.org/client"
+    assert capture._store is store
 
 
 def _adapter_error_handler(error: Exception) -> str:
@@ -299,6 +317,7 @@ def _dataset_metadata_server(
         deployment_id="statgpt-mcp",
         tools_to_include=tools_to_include or [],
         dataset_metadata_tool=tool_name,
+        data_query_meta_key="acme.example.org/client",
         references_table=_table("Datasets", "name"),
     )
 

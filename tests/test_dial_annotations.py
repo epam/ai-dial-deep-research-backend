@@ -81,8 +81,8 @@ def test_the_array_goes_out_as_one_delta_on_the_open_choice() -> None:
 
 
 def test_a_field_that_does_not_apply_is_absent_from_the_wire() -> None:
-    """A document citation sends no quote and a dataset citation no selector, and neither
-    travels as an explicit null — the shape the client's own model describes."""
+    """A document citation sends no quote and a dataset citation neither a selector nor a quote,
+    and neither travels as an explicit null — the shape the client's own model describes."""
     choice = ChoiceSpy()
     converted = convert_citations(
         "A claim. [doc 101, page 3] and a dataset. [dataset IMF:WEO(1.0.0)]",
@@ -101,7 +101,7 @@ def test_a_field_that_does_not_apply_is_absent_from_the_wire() -> None:
     document, dataset = choice.chunks[0]["choices"][0]["delta"]["custom_content"]["annotations"]
     assert "quote" not in document["body"]
     assert "selector" not in dataset["body"]
-    assert dataset["body"]["quote"] == "* URN: IMF:WEO(1.0.0)"
+    assert "quote" not in dataset["body"]
 
 
 def test_an_empty_array_is_still_a_well_formed_chunk() -> None:
