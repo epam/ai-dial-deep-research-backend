@@ -376,8 +376,10 @@ def test_the_writer_and_the_reviewer_share_the_terminology_wording() -> None:
         glossary_check=True,
         glossary_tool_results=[],
     )
-    assert GLOSSARY_TERMINOLOGY_RULE in writer
-    assert GLOSSARY_TERMINOLOGY_RULE in reviewer
+    # The reviewer's copy is indented as a list item, so the wording is compared, not the layout.
+    rule = " ".join(GLOSSARY_TERMINOLOGY_RULE.split())
+    assert rule in " ".join(writer.split())
+    assert rule in " ".join(reviewer.split())
     assert "may lack terms or definitions" in writer
     assert "`[glossary <term>]`" in writer
     assert "four citation forms" in writer

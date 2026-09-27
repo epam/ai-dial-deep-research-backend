@@ -721,10 +721,11 @@ _GLOSSARY_CITATION_FORMAT = """
      violation."""
 
 _GLOSSARY_CHECK = """
-7. **Glossary terminology.** {rule} The glossary is the `Glossary terms:` part of the data sources
-   below, together with the glossary tool results below when there are any. Report each passage
-   that names a glossary concept by another word, naming the passage and the glossary term to
-   use."""
+7. **Glossary terminology.**
+   {rule}
+   The glossary is the `Glossary terms:` part of the data sources below, together with the glossary
+   tool results below when there are any. Report each passage that names a glossary concept by
+   another word, naming the passage and the glossary term to use."""
 
 _GLOSSARY_TOOL_RESULTS = """
 The glossary terms and definitions the research obtained with its own glossary tool calls, which
@@ -755,7 +756,10 @@ def render_report_review_system_prompt(
         today_date=today_date,
         glossary_citation_format=_GLOSSARY_CITATION_FORMAT if glossary else "",
         glossary_check=(
-            _GLOSSARY_CHECK.format(rule=GLOSSARY_TERMINOLOGY_RULE) if glossary_check else ""
+            # The rule's continuation lines take the list item's indentation, like the check's own.
+            _GLOSSARY_CHECK.format(rule=GLOSSARY_TERMINOLOGY_RULE.replace("\n", "\n   "))
+            if glossary_check
+            else ""
         ),
         data_sources=data_sources,
         glossary_tool_results=(
