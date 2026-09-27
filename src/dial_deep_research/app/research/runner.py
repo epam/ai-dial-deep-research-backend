@@ -281,14 +281,16 @@ def _read_structured(
         return []
 
 
-def _count_markers(text: str) -> int:
+def _count_markers(text: str, *, glossary: bool) -> int:
     """How many citation markers the text still carries, for the step's own log event.
+
+    `glossary` also counts the `[glossary <term>]` form, which only a glossary channel cites with.
 
     Guarded, because the only path that reaches it is one where the marker parsing already
     failed once, and a count in a log record is not worth failing a delivered report over.
     """
     try:
-        return len(find_citation_markers(text))
+        return len(find_citation_markers(text, glossary=glossary))
     except Exception:
         return 0
 
@@ -513,7 +515,9 @@ class ResearchRunner:
             removal = remove_hyperlinks(draft)
         except Exception as error:
             self._warn_citation_failure(kind=_KIND_LINK_PASS_FAILED, error=error)
-            return _ReportDelivery(text=draft, markers_left=_count_markers(draft))
+            return _ReportDelivery(
+                text=draft, markers_left=_count_markers(draft, glossary=glossary is not None)
+            )
 
         delivery = _ReportDelivery(text=removal.text, hyperlinks_removed=removal.removed)
         metadata_source = lookups.document_source
@@ -602,7 +606,7 @@ class ResearchRunner:
             glossary_terms = cited_glossary_terms(removal.text) if glossary is not None else []
         except Exception as error:
             self._warn_citation_failure(kind=_KIND_CONVERSION_FAILED, error=error)
-            delivery.markers_left = _count_markers(delivery.text)
+            delivery.markers_left = _count_markers(delivery.text, glossary=glossary is not None)
             return delivery
 
         delivery.text = converted.text
