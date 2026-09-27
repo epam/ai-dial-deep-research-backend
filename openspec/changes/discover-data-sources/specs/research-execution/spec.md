@@ -17,7 +17,8 @@ is part of the contract, not an accident of implementation.
   rules that it is called at most once per assistant message, never as a message's only tool call,
   and never together with `finish_iteration`. When the glossary's list failed or some of its terms
   did not resolve, they also carry the instruction to repeat what the app's glossary fetch missed,
-  with at most three calls, each part only when its tool is bound. On a channel with a dataset server, they also
+  with at most three calls, each part only when its tool is bound. When the fetch obtained the
+  whole glossary, they instead tell the agent not to call the bound glossary tools. On a channel with a dataset server, they also
   carry the instruction that says, for each bound dataset tool, whether the app's own calls
   succeeded: the agent does not call a tool again for an answer the datasets section shows, and
   calls it when the app's calls failed, with at most three calls (see **data-sources-discovery**).

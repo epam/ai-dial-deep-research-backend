@@ -501,12 +501,13 @@ and its own instruction tells it to call the list-datasets tool when the app's l
 - **THEN** the preparation agent's system prompt SHALL NOT carry the instruction about a failed
   list
 
-### Requirement: An agent that can call the glossary tools repeats what the app's fetch missed
+### Requirement: An agent that can call the glossary tools is told which calls are done and which failed
 
 The system prompt of the research agent and of the playground agent SHALL tell the agent to repeat,
 with its own tool calls, the parts of the glossary fetch that failed after the app's retries. The
-agent's calls are the fallback for a failure the app's retries did not overcome. The instruction
-SHALL name each tool as the agent is offered it, and SHALL carry these parts:
+agent's calls are the fallback for a failure the app's retries did not overcome. When the fetch
+obtained the whole glossary, the research agent SHALL be told not to call the glossary tools. The
+instruction SHALL name each tool as the agent is offered it, and SHALL carry these parts:
 
 - **The list of terms failed**: the app could not obtain the glossary's terms, so the agent SHALL
   call the list-terms tool to obtain them, making **at most three** list-terms calls in the whole
@@ -514,6 +515,9 @@ SHALL name each tool as the agent is offered it, and SHALL carry these parts:
 - **Some terms have no definition**, or the list failed: the agent SHALL call the term-definitions
   tool for the terms that have no definition and whose names look relevant to the task, requesting
   each term's definition in **at most three** calls in the whole research.
+- **The glossary is complete**: the list of terms succeeded and every listed term resolved, so the
+  agent SHALL NOT call the list-terms tool or the term-definitions tool. The part SHALL name each of
+  the two tools that is bound, and SHALL appear only when at least one of them is bound.
 
 The limit of three calls is the same bound the research agent's failed-tool rule sets, one call and
 two repeats (see **research-execution**), so the agent's retries stay bounded when the server keeps
@@ -521,8 +525,12 @@ failing.
 
 The part about the list-terms tool SHALL appear only when the list failed and that tool is among
 the tools bound to the agent. The part about the term-definitions tool SHALL appear only when that
-tool is bound and the list failed or at least one listed term did not resolve. No other model call
-SHALL carry either part. Every other call sees an unresolved term only as a `null` definition, and
+tool is bound and the list failed or at least one listed term did not resolve.
+
+**The playground agent** SHALL carry only the parts about a failed call, and never the part about a
+complete glossary, because its user may ask it to call either tool whatever the fetch obtained.
+
+No other model call SHALL carry any part of the instruction. Every other call sees an unresolved term only as a `null` definition, and
 a failed list only as the failure text.
 
 **What the agent's retries reach.** A term or a definition the agent obtains is a tool result:
@@ -549,11 +557,17 @@ term's definition from them when the app's fetch did not resolve it (see **repor
   the 2 terms that look relevant, each in at most three calls, and SHALL NOT tell it to call the
   list-terms tool
 
-#### Scenario: A complete glossary gives no instruction
+#### Scenario: A complete glossary tells the research agent not to call the glossary tools
 
-- **WHEN** the glossary listed 25 terms and all 25 resolved
-- **THEN** neither the research agent's nor the playground agent's system prompt SHALL carry either
-  part of the instruction
+- **WHEN** the glossary listed 25 terms and all 25 resolved, and the research agent's tools include
+  the list-terms tool and the term-definitions tool
+- **THEN** the research agent's system prompt SHALL tell it not to call either tool, naming both,
+  and SHALL NOT tell it to call either tool
+
+#### Scenario: The playground is never told not to call a glossary tool
+
+- **WHEN** a playground turn runs on a channel whose glossary listed 25 terms and all 25 resolved
+- **THEN** the playground agent's system prompt SHALL carry no part of the glossary instruction
 
 #### Scenario: The tool is filtered out
 

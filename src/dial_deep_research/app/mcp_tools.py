@@ -6,7 +6,7 @@ added by the caller, not here.
 
 One `tools/list` fetch per server serves consumers with different needs: the agent's tools,
 which a model is offered, and the two tools the citation step calls — the file-sharing tool,
-which only application code calls, and the dataset-metadata tool, which both do (see the
+which only application code calls, and the list-datasets tool, which both do (see the
 report-citations capability).
 
 The client also carries the data-query capture: a tool-call interceptor that keeps the dataset
@@ -51,14 +51,14 @@ MCP_READ_TIMEOUT_SECONDS = 300.0
 class LoadedMcpTools(NamedTuple):
     """One turn's MCP tools, split by who may call them, and the client they came from.
 
-    `agent_tools` is what a model is offered. `file_sharing_tool` and `dataset_metadata_tool` are
+    `agent_tools` is what a model is offered. `file_sharing_tool` and `list_datasets_tool` are
     the tools the configuration named for the application to call at report delivery, each
     `None` when no server named one or the named tool is absent from what its server advertises
     — the caller tells those two apart by the configured name, and warns only for the second
     (see the report-citations capability).
 
     The two differ in what naming them does to the agent: the file-sharing tool is taken out of
-    `agent_tools`, while the dataset-metadata tool stays in it whenever the server's filter would
+    `agent_tools`, while the list-datasets tool stays in it whenever the server's filter would
     offer it, because a catalogue listing is how the agent discovers which datasets exist.
 
     `client` is the same per-request client the tools were fetched with, kept because the
@@ -72,7 +72,7 @@ class LoadedMcpTools(NamedTuple):
 
     agent_tools: list[BaseTool]
     file_sharing_tool: BaseTool | None
-    dataset_metadata_tool: BaseTool | None
+    list_datasets_tool: BaseTool | None
     client: MultiServerMCPClient
     data_queries: DataQueryStore
 
@@ -144,7 +144,7 @@ async def load_mcp_tools(
     filter includes all of that server's tools).
 
     A server whose configuration names a file-sharing tool has that tool taken out of the
-    agent's tools and returned separately. A server naming a dataset-metadata tool has it
+    agent's tools and returned separately. A server naming a list-datasets tool has it
     returned as well and **left with the agent**: the app calls it to label dataset citations,
     while the agent calls it to discover which datasets exist, and those are the same listing.
 
@@ -157,19 +157,19 @@ async def load_mcp_tools(
     mcp_client = build_mcp_client(mcp_servers, bearer_token=bearer_token, data_queries=data_queries)
     agent_tools: list[BaseTool] = []
     file_sharing_tool: BaseTool | None = None
-    dataset_metadata_tool: BaseTool | None = None
+    list_datasets_tool: BaseTool | None = None
     for server in mcp_servers:
         server_tools = await mcp_client.get_tools(server_name=server.server_name)
         available = [t.name for t in server_tools]
-        if server.dataset_metadata_tool:
-            dataset_metadata_tool = next(
-                (t for t in server_tools if t.name == server.dataset_metadata_tool), None
+        if server.list_datasets_tool:
+            list_datasets_tool = next(
+                (t for t in server_tools if t.name == server.list_datasets_tool), None
             )
             logger.info(
-                "MCP server '%s': dataset-metadata tool '%s' %s; it stays in the agent's tools",
+                "MCP server '%s': list-datasets tool '%s' %s; it stays in the agent's tools",
                 server.server_name,
-                server.dataset_metadata_tool,
-                "resolved" if dataset_metadata_tool is not None else "not advertised by the server",
+                server.list_datasets_tool,
+                "resolved" if list_datasets_tool is not None else "not advertised by the server",
             )
         if server.file_sharing_tool:
             file_sharing_tool = next(
@@ -236,13 +236,13 @@ async def load_mcp_tools(
         # handler on every tool it builds, which turns an MCP error into ordinary result
         # content. The app reads this tool's result itself and needs the failure to reach it.
         file_sharing_tool.handle_tool_error = False
-    # The dataset-metadata tool's error handling is deliberately left as the agent's, because it
+    # The list-datasets tool's error handling is deliberately left as the agent's, because it
     # is the same object the agent is offered and one setting cannot serve both callers. Its
     # reader takes the failure off the returned message's `status` instead.
     return LoadedMcpTools(
         agent_tools=agent_tools,
         file_sharing_tool=file_sharing_tool,
-        dataset_metadata_tool=dataset_metadata_tool,
+        list_datasets_tool=list_datasets_tool,
         client=mcp_client,
         data_queries=data_queries,
     )

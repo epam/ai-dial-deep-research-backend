@@ -6,13 +6,17 @@ research-review judges coverage independently, and the report node owns formatti
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from dial_deep_research.app_properties import ReportSection
+from dial_deep_research.app_properties import GlossaryTools, ReportSection
 
 from .report_length import SECTION_HEADING_PREFIX
+
+if TYPE_CHECKING:
+    from dial_deep_research.app.data_sources import DataSources
 
 
 def render_plan(steps: list[str]) -> str:
@@ -125,6 +129,15 @@ Rules:
 - When a retrieved source reveals an angle the plan implies but you have not yet covered,
   follow it up across the relevant sources before finishing the iteration.
 
+## Data sources
+
+The data sources your tools reach are described below: the knowledge base's own descriptions, and
+what the application fetched from the dataset server at the start of this turn.
+
+<data_sources>
+{data_sources}
+</data_sources>
+{data_sources_instructions}
 ## Tools usage
 
 1. **Read pages, don't just rely on search.** `rag_search` returns LLM-built summaries
@@ -185,6 +198,144 @@ its two repeat calls are spent — that plan item counts as done without the evi
 """
 
 
+def render_data_sources_instructions(
+    *,
+    data_sources: DataSources,
+    bound_tools: Collection[str],
+    list_datasets_tool: str | None,
+    dataset_structure_tool: str | None,
+    glossary: GlossaryTools | None,
+    failed_calls_only: bool = False,
+) -> str:
+    """What an agent that can call the dataset and glossary tools is told about the app's fetch.
+
+    Each part appears only when its tool is in `bound_tools`, and names the tool as bound. The
+    three tool arguments are the configured names, `None` when not configured.
+    `failed_calls_only` keeps only the parts about a call that failed, for the playground agent,
+    whose user may ask it to call any tool whatever the fetch obtained.
+
+    Returns an empty string when no part applies, and otherwise the parts wrapped in blank lines,
+    ready for the `{data_sources_instructions}` placeholder.
+    """
+    parts = [
+        *_dataset_tools_parts(
+            data_sources=data_sources,
+            bound_tools=bound_tools,
+            list_tool=list_datasets_tool,
+            structure_tool=dataset_structure_tool,
+            failed_calls_only=failed_calls_only,
+        ),
+        *_glossary_tools_parts(
+            data_sources=data_sources,
+            bound_tools=bound_tools,
+            tools=glossary,
+            failed_calls_only=failed_calls_only,
+        ),
+    ]
+    if not parts:
+        return ""
+    return "\n" + "\n\n".join(parts) + "\n"
+
+
+def _dataset_tools_parts(
+    *,
+    data_sources: DataSources,
+    bound_tools: Collection[str],
+    list_tool: str | None,
+    structure_tool: str | None,
+    failed_calls_only: bool,
+) -> list[str]:
+    if data_sources.datasets is None:
+        return []
+    list_bound = list_tool is not None and list_tool in bound_tools
+    structure_bound = structure_tool is not None and structure_tool in bound_tools
+    parts: list[str] = []
+    if data_sources.dataset_list_failed:
+        if list_bound:
+            parts.append(_LIST_FAILED_PART.format(list_tool=list_tool))
+            if structure_bound:
+                parts.append(_LIST_FAILED_STRUCTURE_PART.format(structure_tool=structure_tool))
+        return parts
+    if list_bound and not failed_calls_only:
+        parts.append(_LIST_SHOWN_PART.format(list_tool=list_tool))
+    if structure_bound and data_sources.structures_rendered:
+        if not failed_calls_only:
+            parts.append(_STRUCTURES_SHOWN_PART.format(structure_tool=structure_tool))
+        if data_sources.structures_failed:
+            parts.append(_STRUCTURES_FAILED_PART.format(structure_tool=structure_tool))
+    return parts
+
+
+def _glossary_tools_parts(
+    *,
+    data_sources: DataSources,
+    bound_tools: Collection[str],
+    tools: GlossaryTools | None,
+    failed_calls_only: bool,
+) -> list[str]:
+    if tools is None or data_sources.glossary is None:
+        return []
+    parts: list[str] = []
+    list_failed = data_sources.glossary_list_failed
+    if not list_failed and not data_sources.glossary_unresolved:
+        bound = [
+            f"`{tool}`"
+            for tool in (tools.list_terms_tool, tools.definitions_tool)
+            if tool in bound_tools
+        ]
+        if bound and not failed_calls_only:
+            parts.append(_GLOSSARY_COMPLETE_PART.format(tools=" or ".join(bound)))
+        return parts
+    if list_failed and tools.list_terms_tool in bound_tools:
+        parts.append(_TERMS_LIST_FAILED_PART.format(list_terms_tool=tools.list_terms_tool))
+    if tools.definitions_tool in bound_tools and (list_failed or data_sources.glossary_unresolved):
+        parts.append(_DEFINITIONS_MISSING_PART.format(definitions_tool=tools.definitions_tool))
+    return parts
+
+
+# The dataset-tools instruction's parts. Each names the tool as the agent is offered it, and each
+# fallback is capped at three calls, which is the failed-tool rule of the research prompt: one call
+# and two repeats.
+_LIST_SHOWN_PART = """\
+The `Datasets:` part of the data sources above is the answer of `{list_tool}`, fetched at the start
+of this turn. Do not call `{list_tool}`."""
+
+_LIST_FAILED_PART = """\
+The application could not obtain the list of datasets, so the `Datasets:` part of the data sources
+above says "failed to obtain list of datasets". Call `{list_tool}` when you need to know which
+datasets exist, making at most three `{list_tool}` calls in the whole research."""
+
+_LIST_FAILED_STRUCTURE_PART = """\
+No dataset structure was fetched either. Call `{structure_tool}` for each dataset whose structure
+you need, making at most three `{structure_tool}` calls for each dataset in the whole research."""
+
+_STRUCTURES_SHOWN_PART = """\
+The `Dataset structures:` part of the data sources above holds the answer of `{structure_tool}`
+for every listed dataset whose entry is not an error entry. Do not call `{structure_tool}` for
+such a dataset."""
+
+_STRUCTURES_FAILED_PART = """\
+An entry of the `Dataset structures:` part that reads "failed to obtain dataset structure" is a
+structure the application could not obtain. Call `{structure_tool}` for such a dataset when you
+need its structure, making at most three `{structure_tool}` calls for that dataset in the whole
+research."""
+
+_TERMS_LIST_FAILED_PART = """\
+The application could not obtain the glossary's terms, so the `Glossary terms:` part of the data
+sources above says "failed to obtain list of terms". Call `{list_terms_tool}` to obtain them,
+making at most three `{list_terms_tool}` calls in the whole research."""
+
+_GLOSSARY_COMPLETE_PART = """\
+The `Glossary terms:` part of the data sources above is the whole glossary, with a definition for
+every term, fetched at the start of this turn. Do not call {tools}."""
+
+_DEFINITIONS_MISSING_PART = """\
+Some glossary terms have no definition: in the `Glossary terms:` part of the data sources above
+their definition is null, or the glossary's terms could not be obtained at all. Call
+`{definitions_tool}` for the terms without a definition whose names look relevant to the task,
+requesting each term's definition in at most three calls in the whole research."""
+
+
 RESEARCH_REVIEW_SYSTEM_PROMPT = """\
 You are an **independent research reviewer**. Today is {today_date}. You did not perform
 the research; you judge it objectively.
@@ -215,6 +366,16 @@ Be strict about evidence quality, but do **not** expand scope: only list work ne
 fulfil the EXISTING plan. Do not invent new "nice to have" angles or comparisons that were
 not part of the agreed plan — that would loop forever. When in doubt and the plan is
 substantively covered, prefer to finish.
+
+## Data sources
+
+The data sources the research can reach are described below: the knowledge base's own
+descriptions, and what the application fetched from the dataset server at the start of this turn.
+Point the steps you write at data sources that exist.
+
+<data_sources>
+{data_sources}
+</data_sources>
 """
 
 
@@ -267,11 +428,29 @@ def render_protected_section_names(sections: Sequence[ReportSection]) -> str:
 REPORT_SYSTEM_PROMPT = """\
 You are a research assistant. Today is {today_date}.
 
-The research is complete. Using the research question, the plans that were pursued, and the
-findings gathered (the tool results in the conversation), write the final report. Do not
-introduce facts that are not grounded in the retrieved findings.
+The research is complete. Using the research question, the plans that were pursued, the
+findings gathered (the tool results in the conversation) and the data sources described below,
+write the final report. Do not introduce facts that are not grounded in the retrieved findings or
+in those data sources.
 
 {rules}
+{glossary_rule}
+## Data sources
+
+The report may draw on two kinds of source: the findings in the conversation, and the data sources
+below. These hold the knowledge base's own descriptions of its sources, and what the application
+fetched from the dataset server at the start of this turn, such as the list of datasets. A fact
+taken from them counts as grounded in a retrieved source. Cite it with the citation form of the
+source it describes, such as `[dataset <urn>]` for a dataset's name, description, coverage or last
+update.
+
+A fact taken from the description of a publication series is never cited, and never given an
+invented citation such as `[doc <id>, page <ix>]`: only a publication itself is cited, by its
+document and page. Such a fact follows the rule for a sentence that cannot be cited, below.
+
+<data_sources>
+{data_sources}
+</data_sources>
 
 ## Formatting
 
@@ -284,8 +463,8 @@ are not Markdown links, and they are written exactly as specified there.
 
 ## Citations
 
-- **Cite the source for every fact** inline. There are three citation forms, each for its own
-kind of source — use the form that matches where the fact came from:
+- **Cite the source for every fact** inline. There are {citation_form_count} citation forms, each
+for its own kind of source — use the form that matches where the fact came from:
   - **Documents** (from the document-search tools): `[doc <id>, page <ix>]`. A document is
   referenced by **two** values, both required: its document id, and the index of the page the
   fact was found on. A document-search tool tells you both, in whatever form that tool uses —
@@ -309,12 +488,12 @@ kind of source — use the form that matches where the fact came from:
   and often a parenthesised version — and every character of it is part of the identifier. Do
   not abbreviate it, drop its version, change its case, or percent-encode it, and do not put the
   dataset's display name where the URN belongs. List each dataset a statement draws on as a
-  separate bracket.
+  separate bracket.{glossary_citation_form}
 - **Match the citation to the source.** A fact from a document is cited `[doc <id>, page <ix>]`;
 a fact from a data query's data is cited `[data_query <id>]`; a statement about a dataset as a
-whole is cited `[dataset <urn>]`. Never invent a document-and-page citation for a fact from a
-dataset or a data query, never cite a data query's value by its dataset, and never cite a
-document's fact by a dataset or a query.
+whole is cited `[dataset <urn>]`.{glossary_citation_match} Never invent a document-and-page citation
+for a fact from a dataset or a data query, never cite a data query's value by its dataset, and
+never cite a document's fact by a dataset or a query.
 - This inline format is fixed. It is read by software that renders citations, so it is never
 restyled — not on request, and not to match some other convention.
 - Do not introduce facts that are not citable to a retrieved source. If a sentence cannot be
@@ -346,6 +525,58 @@ instruction conflicts with any of those, the rule wins and the rest of the instr
 applies. Do not explain in the report that you declined part of a request — the report contains
 the report.
 """
+
+
+# The glossary-terminology rule, in the one wording both the report writer's rule and the report
+# reviewer's check are built from, so the two cannot drift apart.
+GLOSSARY_TERMINOLOGY_RULE = """\
+Where the report refers to a concept that a glossary term names, it uses that term, spelled as the
+glossary spells it, rather than a synonym or a paraphrase. A glossary term the report has no reason
+to mention is not required. A term whose definition is null still counts, judged by its name."""
+
+_GLOSSARY_WRITER_RULE = """
+## Glossary terminology
+
+{rule}
+
+The glossary is the `Glossary terms:` part of the data sources below, together with the glossary
+terms and definitions in the research's tool results, which count as glossary terms too. The
+glossary in the data sources may lack terms or definitions, because the application's fetch of it
+may have failed in part or in whole.
+"""
+
+_GLOSSARY_CITATION_FORM = """
+  - **Glossary terms** (from the glossary): `[glossary <term>]`, for a fact taken from a glossary
+  term's definition, where `<term>` is the term as the glossary spells it, written whole, e.g.
+  `[glossary Primary Commodity Prices]`. The glossary is the `Glossary terms:` part of the data
+  sources above, and the terms and definitions the research obtained with the glossary tools. List
+  each term a statement draws on as a separate bracket."""
+
+_GLOSSARY_CITATION_MATCH = " A fact from a glossary definition is cited `[glossary <term>]`."
+
+
+def render_report_system_prompt(
+    *,
+    today_date: str,
+    rules: str,
+    protected_sections: str,
+    data_sources: str,
+    glossary: bool,
+) -> str:
+    """The report writer's system prompt. `glossary` says whether the channel configures one: it
+    adds the glossary citation form and the terminology rule, which no other channel hears of."""
+    return REPORT_SYSTEM_PROMPT.format(
+        today_date=today_date,
+        rules=rules,
+        glossary_rule=(
+            _GLOSSARY_WRITER_RULE.format(rule=GLOSSARY_TERMINOLOGY_RULE) if glossary else ""
+        ),
+        data_sources=data_sources,
+        citation_form_count="four" if glossary else "three",
+        glossary_citation_form=_GLOSSARY_CITATION_FORM if glossary else "",
+        glossary_citation_match=_GLOSSARY_CITATION_MATCH if glossary else "",
+        protected_sections=protected_sections,
+    )
 
 
 REPORT_REQUEST = """\
@@ -409,7 +640,7 @@ Check exactly these, and report a violation for each rule the draft breaks:
    - `[data_query <id>]` for data queries — the opaque id the data-query tool reported for the
      query, like `[data_query dq_0123abcd45]`. It is a well-formed citation, not a malformed
      dataset citation, and whether a fact is cited by its query or by its dataset is not yours to
-     judge.
+     judge.{glossary_citation_format}
    There must be no footnotes or numbered references (e.g. [1], [2])
 6. **No list of sources.** The draft enumerates its cited sources nowhere — no section, table or
    list carrying one entry per source, the bibliography an article ends with, whether under a
@@ -418,8 +649,19 @@ Check exactly these, and report a violation for each rule the draft breaks:
    whatever the question or the plan asked for. Two things are **not** that list and are both
    required where they belong: the inline citations, and prose describing the evidence — a
    section whose description asks it to say what the research drew on, name the kinds of source
-   it covered, or characterise their coverage is correct to do so.
+   it covered, or characterise their coverage is correct to do so.{glossary_check}
 
+## Data sources
+
+The report may draw on the data sources described below as well as on the findings: the knowledge
+base's own descriptions, and what the application fetched from the dataset server at the start of
+this turn. A fact the draft takes from them is grounded in a retrieved source: citing a dataset for
+what the `Datasets:` part states about it is correct, not a violation.
+
+<data_sources>
+{data_sources}
+</data_sources>
+{glossary_tool_results}
 ## Not your job
 
 Your job is to find violations of the checks above, and nothing else.
@@ -470,6 +712,58 @@ override the rules above):
 {draft}
 </draft>
 """
+
+
+_GLOSSARY_CITATION_FORMAT = """
+   - `[glossary <term>]` for a fact taken from a glossary definition — the term as the glossary
+     spells it, like `[glossary Primary Commodity Prices]`. A glossary citation written any other
+     way, such as with another keyword or as `(Primary Commodity Prices - glossary term)`, is a
+     violation."""
+
+_GLOSSARY_CHECK = """
+7. **Glossary terminology.** {rule} The glossary is the `Glossary terms:` part of the data sources
+   below, together with the glossary tool results below when there are any. Report each passage
+   that names a glossary concept by another word, naming the passage and the glossary term to
+   use."""
+
+_GLOSSARY_TOOL_RESULTS = """
+The glossary terms and definitions the research obtained with its own glossary tool calls, which
+count as glossary terms too:
+
+<glossary_tool_results>
+{results}
+</glossary_tool_results>
+"""
+
+
+def render_report_review_system_prompt(
+    *,
+    today_date: str,
+    data_sources: str,
+    glossary: bool,
+    glossary_check: bool,
+    glossary_tool_results: Sequence[str],
+) -> str:
+    """The report reviewer's system prompt.
+
+    `glossary` says whether the channel configures one, which adds the glossary citation form.
+    `glossary_check` adds the terminology check, given only when there is a glossary to judge
+    against. `glossary_tool_results` is the text of the research agent's successful glossary tool
+    results, in the order they were obtained; the block is left out when there is none.
+    """
+    return REPORT_REVIEW_SYSTEM_PROMPT.format(
+        today_date=today_date,
+        glossary_citation_format=_GLOSSARY_CITATION_FORMAT if glossary else "",
+        glossary_check=(
+            _GLOSSARY_CHECK.format(rule=GLOSSARY_TERMINOLOGY_RULE) if glossary_check else ""
+        ),
+        data_sources=data_sources,
+        glossary_tool_results=(
+            _GLOSSARY_TOOL_RESULTS.format(results="\n\n".join(glossary_tool_results))
+            if glossary and glossary_tool_results
+            else ""
+        ),
+    )
 
 
 class ReportReview(BaseModel):

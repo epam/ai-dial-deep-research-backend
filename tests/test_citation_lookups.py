@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool, StructuredTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from dial_deep_research.app.research.citation_lookups import CitationLookups
+from dial_deep_research.app.research.citations import DatasetSource
 from dial_deep_research.app.research.data_queries import DataQueryRecord, DataQueryStore
 from dial_deep_research.app_properties import DocumentMetadataSource
 
@@ -25,7 +26,7 @@ _SOURCE = DocumentMetadataSource(
 
 
 class _Catalogue:
-    """A dataset-metadata tool counting its calls, failing the first `fail_first` of them."""
+    """A list-datasets tool counting its calls, failing the first `fail_first` of them."""
 
     def __init__(self, *, fail_first: int = 0) -> None:
         self.calls = 0
@@ -68,12 +69,14 @@ def _lookups(
     catalogue: _Catalogue | None = None,
     resource: _Resource | None = None,
     data_queries: DataQueryStore | None = None,
+    seeded: dict[str, DatasetSource] | None = None,
 ) -> CitationLookups:
     return CitationLookups(
         dataset_tool=catalogue.tool() if catalogue is not None else None,
         client=cast(MultiServerMCPClient, resource or _Resource({})),
         document_source=_SOURCE,
         data_queries=data_queries or DataQueryStore(),
+        catalogue=seeded,
     )
 
 
@@ -89,6 +92,44 @@ async def test_one_catalogue_call_serves_every_draft_and_the_delivery() -> None:
     assert set(sources) == {_URN}
     assert lookups.dataset_known(_URN) is True
     assert lookups.dataset_known("IMF:WEO(2.0.0)") is False
+
+
+async def test_a_seeded_catalogue_serves_the_review_and_the_delivery_without_a_call() -> None:
+    """The turn-start fetch's catalogue is what the review and the delivery read."""
+    catalogue = _Catalogue()
+    lookups = _lookups(
+        catalogue=catalogue, seeded={_URN: DatasetSource(name="WEO", raw_fields={"id": _URN})}
+    )
+
+    await lookups.prefetch(f"First [dataset {_URN}] and [dataset IMF:WEO(2.0.0)].")
+    sources = await lookups.dataset_sources([_URN])
+
+    assert catalogue.calls == 0
+    assert set(sources) == {_URN}
+    assert lookups.dataset_known("IMF:WEO(2.0.0)") is False
+
+
+async def test_an_unseeded_catalogue_is_fetched_on_first_need() -> None:
+    """A failed turn-start list seeds nothing, and the review fetches the catalogue itself."""
+    catalogue = _Catalogue()
+    lookups = _lookups(catalogue=catalogue, seeded=None)
+
+    assert lookups.dataset_known(_URN) is None
+    await lookups.prefetch(f"A fact [dataset {_URN}].")
+
+    assert catalogue.calls == 1
+    assert lookups.dataset_known(_URN) is True
+
+
+def test_a_seeded_catalogue_is_available_without_the_tool() -> None:
+    lookups = CitationLookups(
+        dataset_tool=None,
+        client=cast(MultiServerMCPClient, None),
+        document_source=None,
+        data_queries=DataQueryStore(),
+        catalogue={_URN: DatasetSource()},
+    )
+    assert lookups.has_dataset_catalogue is True
 
 
 async def test_a_draft_citing_no_dataset_makes_no_call() -> None:

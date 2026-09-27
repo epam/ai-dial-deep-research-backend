@@ -23,6 +23,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+from dial_deep_research.app.data_sources import DataSources
 from dial_deep_research.app.history import PrepState, reconstruct_history
 from dial_deep_research.app_properties import Prompts
 from dial_deep_research.utils.content import extract_text_from_content
@@ -73,18 +74,21 @@ class PrepAgentRunner:
         dial: AsyncDial,
         prep_state: PrepState,
         prompts: Prompts,
+        data_sources: DataSources,
         opik_tracer: OpikTracer | None = None,
     ) -> list[BaseMessage]:
         """Run the preparation agent over `prep_state`, streaming output; return its messages.
 
         `prep_state` is the live holder the tools mutate, so after this returns it
         reflects the turn (including `research_started` if `start_research` fired).
+        `data_sources` is the turn's data-sources fetch, made by the caller.
         """
         history = await reconstruct_history(request, dial)
         agent = build_prep_agent(
             state=prep_state,
             today_date=datetime.now().date().isoformat(),
             prompts=prompts,
+            data_sources=data_sources,
         )
         config: dict[str, Any] = {"callbacks": [opik_tracer]} if opik_tracer is not None else {}
 

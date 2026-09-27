@@ -50,6 +50,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from dial_deep_research.app.glossary import normalize_term
 from dial_deep_research.app.research.data_queries import DataQueryRecord
 from dial_deep_research.app.research.web_urls import is_web_url
 from dial_deep_research.app_properties import DEFAULT_DATA_QUERY_CARD_FILTER_MAX_LINE_CHARS
@@ -101,6 +102,13 @@ _DATASET_MARKER = r"\[[ \t]*dataset[ \t]+(?P<dataset_id>[^\[\]\n]+?)[ \t]*\]"
 # it to one server's current spelling would make this parser depend on how that server names ids.
 _DATA_QUERY_MARKER = r"\[[ \t]*data_query[ \t]+(?P<data_query_id>[^\[\]\n]+?)[ \t]*\]"
 _MARKER_RE = re.compile(f"{_DOCUMENT_MARKER}|{_DATASET_MARKER}|{_DATA_QUERY_MARKER}", re.IGNORECASE)
+# The glossary form, read only on a channel that configures a glossary: elsewhere the same text is
+# no citation and is delivered as written. The term is read like a URN, anything but a bracket or a
+# newline, so a term containing a square bracket cannot be cited.
+_GLOSSARY_MARKER = r"\[[ \t]*glossary[ \t]+(?P<glossary_term>[^\[\]\n]+?)[ \t]*\]"
+_MARKER_WITH_GLOSSARY_RE = re.compile(
+    f"{_DOCUMENT_MARKER}|{_DATASET_MARKER}|{_DATA_QUERY_MARKER}|{_GLOSSARY_MARKER}", re.IGNORECASE
+)
 
 # What may stand between two markers of one run, matched in full. No newline: a citation on the
 # next line supports a different statement, as does one after a full stop or a word.
@@ -112,8 +120,8 @@ class CitationMarker(BaseModel):
 
     Which fields are filled says which form the marker was written in: a document marker
     carries the document id and the cited page, a dataset marker carries the URN alone — a
-    dataset citation names no location inside what it cites — and a data-query marker carries
-    the query id alone.
+    dataset citation names no location inside what it cites — a data-query marker carries
+    the query id alone, and a glossary marker the term, its surrounding whitespace trimmed.
     """
 
     start: int
@@ -123,6 +131,7 @@ class CitationMarker(BaseModel):
     page: int | None = None
     dataset_id: str | None = None
     data_query_id: str | None = None
+    glossary_term: str | None = None
 
 
 class DatasetSource(BaseModel):
@@ -332,12 +341,18 @@ class HyperlinkRemoval(BaseModel):
         return len(self.hyperlinks)
 
 
-def find_citation_markers(text: str) -> list[CitationMarker]:
-    """Every citation marker in the text, in the order it appears."""
+def find_citation_markers(text: str, *, glossary: bool = False) -> list[CitationMarker]:
+    """Every citation marker in the text, in the order it appears.
+
+    `glossary` also reads the `[glossary <term>]` form, which only a channel that configures a
+    glossary cites with.
+    """
     markers: list[CitationMarker] = []
-    for match in _MARKER_RE.finditer(text):
+    pattern = _MARKER_WITH_GLOSSARY_RE if glossary else _MARKER_RE
+    for match in pattern.finditer(text):
         if _sits_in_another_bracket(text, match):
             continue
+        term = match.groupdict().get("glossary_term")
         doc_id = match.group("doc_id")
         markers.append(
             CitationMarker(
@@ -350,9 +365,40 @@ def find_citation_markers(text: str) -> list[CitationMarker]:
                 # the query id against the captured records.
                 dataset_id=match.group("dataset_id"),
                 data_query_id=match.group("data_query_id"),
+                glossary_term=term.strip() if term is not None else None,
             )
         )
     return markers
+
+
+def cited_glossary_terms(text: str) -> list[str]:
+    """The distinct glossary terms the text cites, in report order, each as first written.
+
+    Two markers whose terms match once trimmed and case-folded are one cited term.
+    """
+    terms: dict[str, str] = {}
+    for marker in find_citation_markers(text, glossary=True):
+        if marker.glossary_term is not None:
+            terms.setdefault(normalize_term(marker.glossary_term), marker.glossary_term)
+    return list(terms.values())
+
+
+def glossary_group(terms: Sequence[str]) -> str:
+    """The readable form one run's glossary citations are delivered in, `""` for no term.
+
+    `(<term> - glossary term)` for one distinct term, and `("<term 1>", "<term 2>" - glossary
+    terms)` for several, in the order the run cited them.
+    """
+    distinct: dict[str, str] = {}
+    for term in terms:
+        distinct.setdefault(normalize_term(term), term)
+    names = list(distinct.values())
+    if not names:
+        return ""
+    if len(names) == 1:
+        return f"({names[0]} - glossary term)"
+    quoted = ", ".join(f'"{name}"' for name in names)
+    return f"({quoted} - glossary terms)"
 
 
 def _sits_in_another_bracket(text: str, match: re.Match[str]) -> bool:
@@ -480,8 +526,14 @@ def convert_citations(
     pill_title_max_chars: int | None = None,
     filter_line_max_chars: int = DEFAULT_DATA_QUERY_CARD_FILTER_MAX_LINE_CHARS,
     make_tag_id: Callable[[], str] = new_tag_id,
+    glossary: bool = False,
 ) -> CitationConversion:
     """Replace every convertible citation with its marker tag, and build the annotations.
+
+    On a channel that configures a glossary (`glossary`), each run's glossary markers leave their
+    place, so the run's other markers fold exactly as if they were absent, and one readable group
+    ends the run (`glossary_group`). The group carries no tag and no annotation: a glossary term has
+    no page to open.
 
     Args:
         text: the settled draft, with its hyperlinks already removed.
@@ -508,7 +560,7 @@ def convert_citations(
     titles = document_titles or {}
     datasets = dataset_sources or {}
     queries = data_queries or {}
-    markers = find_citation_markers(text)
+    markers = find_citation_markers(text, glossary=glossary)
 
     pieces: list[str] = []
     annotations: list[Annotation] = []
@@ -516,9 +568,13 @@ def convert_citations(
     cursor = 0
 
     for run in _group_into_runs(markers, text=text):
+        group = glossary_group(
+            [marker.glossary_term for marker in run if marker.glossary_term is not None]
+        )
+        others = [marker for marker in run if marker.glossary_term is None]
         convertible: list[ConvertibleCitation] = []
         kept_as_text: list[CitationMarker] = []
-        for marker in run:
+        for marker in others:
             citation = _convertible_citation(
                 marker,
                 document_urls=document_urls,
@@ -531,8 +587,16 @@ def convert_citations(
                 convertible.append(citation)
 
         if not convertible:
-            # Nothing folds here, so the run's own text — separators included — is left alone.
-            markers_left += len(run)
+            markers_left += len(others)
+            if not group:
+                # Nothing folds here, so the run's own text — separators included — is left alone.
+                continue
+            # The run's other markers keep their text and the separators that followed each one;
+            # only the glossary markers leave, for the group at the run's end.
+            pieces.append(text[cursor : run[0].start])
+            kept_text = _run_text_without_glossary(run, text=text)
+            pieces.append(f"{kept_text} {group}" if kept_text else group)
+            cursor = run[-1].end
             continue
 
         pieces.append(text[cursor : run[0].start])
@@ -561,6 +625,8 @@ def convert_citations(
         for marker in kept_as_text:
             pieces.append(f" {marker.text}")
         markers_left += len(kept_as_text)
+        if group:
+            pieces.append(f" {group}")
         cursor = run[-1].end
 
     pieces.append(text[cursor:])
@@ -944,6 +1010,21 @@ def is_pdf_url(url: str) -> bool:
     """
     path = url.split("#", 1)[0].split("?", 1)[0]
     return path.lower().endswith(".pdf")
+
+
+def _run_text_without_glossary(run: Sequence[CitationMarker], *, text: str) -> str:
+    """The run's non-glossary markers as written, each after the separator that followed the
+    marker before it."""
+    parts: list[str] = []
+    previous: int | None = None
+    for position, marker in enumerate(run):
+        if marker.glossary_term is not None:
+            continue
+        if previous is not None:
+            parts.append(text[run[previous].end : run[previous + 1].start])
+        parts.append(marker.text)
+        previous = position
+    return "".join(parts)
 
 
 def _group_into_runs(markers: Sequence[CitationMarker], *, text: str) -> list[list[CitationMarker]]:

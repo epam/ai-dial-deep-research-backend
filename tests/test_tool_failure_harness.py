@@ -175,6 +175,8 @@ class _Harness:
                 tools=[*tools, build_finish_iteration_tool()],
                 today_date="2026-09-22",
                 client_name="ACME",
+                data_sources="The topics map.",
+                data_sources_instructions="",
             )
             # `research_iteration` is the research graph's channel the agent's iteration counter
             # increments; the agent runs here without that graph around it.

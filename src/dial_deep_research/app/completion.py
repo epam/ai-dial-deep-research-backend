@@ -5,6 +5,7 @@ from aidial_client import AsyncDial
 from aidial_sdk.chat_completion import ChatCompletion, Choice, Request, Response
 from langchain_core.messages import BaseMessage
 
+from dial_deep_research.app.data_sources import fetch_data_sources
 from dial_deep_research.app.error_resolution import ResearchAlreadyHandedOffError
 from dial_deep_research.app.history import (
     PrepState,
@@ -64,6 +65,11 @@ class DeepResearchCompletion(ChatCompletion):
             # Research already ran on an earlier turn; nothing to do this turn.
             raise ResearchAlreadyHandedOffError()
 
+        # One fetch serves the whole turn: preparation plans with it, and research, when it starts
+        # in this turn, researches and writes with the same data sources. The bearer token gives
+        # the fetch the same per-user access as the turn's other MCP traffic.
+        data_sources = await fetch_data_sources(properties, bearer_token=request.bearer_token)
+
         prep_started_at = time.monotonic()
         prep_runner = PrepAgentRunner(choice)
         prep_messages = await prep_runner.run(
@@ -71,6 +77,7 @@ class DeepResearchCompletion(ChatCompletion):
             dial=dial,
             prep_state=prep_state,
             prompts=properties.prompts,
+            data_sources=data_sources,
             opik_tracer=opik_tracer,
         )
         messages: list[BaseMessage] = list(prep_messages)
@@ -92,6 +99,7 @@ class DeepResearchCompletion(ChatCompletion):
             ).run(
                 prep_state,
                 properties=properties,
+                data_sources=data_sources,
                 opik_tracer=opik_tracer,
                 bearer_token=request.bearer_token,
             )

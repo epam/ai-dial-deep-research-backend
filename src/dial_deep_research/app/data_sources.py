@@ -1,0 +1,320 @@
+"""The data-sources fetch: what the channel's dataset server reports, fetched once per turn.
+
+On a channel with a `statgpt` server the turn starts by fetching two parts concurrently:
+
+- **the datasets**: the list-datasets tool's answer, and, when a `dataset_structure_tool` is
+  configured, the structure of every listed dataset, one call per dataset, all at once;
+- **the glossary**, when the server configures one (see `glossary.py`).
+
+Each list call and each structure call gets up to three attempts (see `data_source_calls.py`).
+What the models see is the **data-sources string**: the channel's hand-written
+`data_sources_descriptions`, then the datasets section, then the glossary, each after a blank line.
+The string goes to every model call that plans, researches or writes the report, and `DataSources`
+also carries what the rest of the turn reads: the catalogue the citations resolve against, and what
+the agents' instructions depend on (see the data-sources-discovery capability).
+
+No failure of the fetch fails the turn: a failed list becomes its failure text, and a structure
+that was not obtained becomes a failure entry. Cancellation propagates.
+
+The log records carry counts and failure kinds only: the catalogue is the client's content.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from collections.abc import Sequence
+from typing import Any
+
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from pydantic import BaseModel, Field
+
+from dial_deep_research.app.data_source_calls import (
+    InvalidResultError,
+    call_with_attempts,
+)
+from dial_deep_research.app.glossary import GlossaryFetch, fetch_glossary
+from dial_deep_research.app.mcp_tools import build_mcp_client
+from dial_deep_research.app.research.citations import DatasetSource
+from dial_deep_research.app.research.dataset_metadata import (
+    DatasetMetadataError,
+    parse_catalogue,
+)
+from dial_deep_research.app_properties import ApplicationProperties, MCPClientSettings
+
+logger = logging.getLogger(__name__)
+
+DATASETS_HEADING = "Datasets:"
+STRUCTURES_HEADING = "Dataset structures:"
+DATASETS_LIST_FAILED_TEXT = "failed to obtain list of datasets"
+STRUCTURE_FAILED_TEXT = "failed to obtain dataset structure"
+
+# The argument the dataset-structure tool takes, which also keys a failure entry: the app does not
+# know which key the server's own answer names the dataset under.
+STRUCTURE_ARGUMENT = "dataset_id"
+
+
+class DatasetsFetch(BaseModel):
+    """The datasets part's result: the rendered section, and what the rest of the turn reads.
+
+    `catalogue` is `None` when the list failed. `structures_rendered` says whether the section
+    carries a structures block, and `structures_failed` how many of its entries are failure
+    entries.
+    """
+
+    section: str
+    catalogue: dict[str, DatasetSource] | None
+    structures_rendered: bool = False
+    structures_failed: int = 0
+
+
+class DataSources(BaseModel):
+    """One turn's data sources: the string every planning, research and report call receives,
+    and what the fetch learned that the turn's other steps depend on.
+
+    `datasets` is `None` on a channel without a dataset server, and `glossary` on a channel that
+    configures no glossary; neither part was fetched then.
+    """
+
+    text: str
+    datasets: DatasetsFetch | None = None
+    glossary: GlossaryFetch | None = None
+
+    @property
+    def catalogue(self) -> dict[str, DatasetSource] | None:
+        """The catalogue the list call obtained, or `None` when there is none to seed from."""
+        return self.datasets.catalogue if self.datasets is not None else None
+
+    @property
+    def dataset_list_failed(self) -> bool:
+        """Whether the channel has a dataset server whose list call failed three times."""
+        return self.datasets is not None and self.datasets.catalogue is None
+
+    @property
+    def structures_rendered(self) -> bool:
+        return self.datasets is not None and self.datasets.structures_rendered
+
+    @property
+    def structures_failed(self) -> int:
+        return self.datasets.structures_failed if self.datasets is not None else 0
+
+    @property
+    def glossary_listed(self) -> int | None:
+        """How many terms the glossary listed, or `None` when it failed or is not configured."""
+        return self.glossary.listed if self.glossary is not None else None
+
+    @property
+    def glossary_unresolved(self) -> int:
+        return self.glossary.unresolved if self.glossary is not None else 0
+
+    @property
+    def glossary_list_failed(self) -> bool:
+        return self.glossary is not None and self.glossary.records is None
+
+
+class _ListedDatasets(BaseModel):
+    """A successful list answer: the structured result as sent, and the catalogue parsed from it."""
+
+    raw: dict[str, Any]
+    catalogue: dict[str, DatasetSource] = Field(default_factory=dict)
+
+
+def _read_list(structured: Any) -> _ListedDatasets:
+    """Accept a list answer carrying a `datasets` array, the shape report-citations requires."""
+    try:
+        catalogue = parse_catalogue(structured)
+    except DatasetMetadataError as error:
+        raise InvalidResultError() from error
+    return _ListedDatasets(raw=structured, catalogue=catalogue)
+
+
+def _read_structure(structured: Any) -> dict[str, Any]:
+    """Accept any structure answer that is a JSON object: the app reads nothing inside it."""
+    if not isinstance(structured, dict):
+        raise InvalidResultError()
+    return structured
+
+
+def _listed_ids(raw: dict[str, Any]) -> list[str]:
+    """The distinct string `id`s of the listed datasets, in list order."""
+    ids: list[str] = []
+    for record in raw.get("datasets") or []:
+        if (
+            isinstance(record, dict)
+            and isinstance(record.get("id"), str)
+            and record["id"] not in ids
+        ):
+            ids.append(record["id"])
+    return ids
+
+
+def _dumps(value: Any) -> str:
+    """One-line JSON with non-ASCII characters kept as themselves."""
+    return json.dumps(value, ensure_ascii=False)
+
+
+def render_datasets_section(
+    listed: dict[str, Any] | None,
+    *,
+    structures: Sequence[tuple[str, dict[str, Any] | None]] | None,
+) -> str:
+    """The datasets section: the list answer, then the structures block when structures were
+    requested, or the failure text for a failed list.
+
+    `structures` pairs each requested dataset id, in list order, with its structure answer or
+    `None` when it was not obtained; `None` itself means no structures block.
+    """
+    if listed is None:
+        return f"{DATASETS_HEADING}\n{DATASETS_LIST_FAILED_TEXT}"
+    section = f"{DATASETS_HEADING}\n{_dumps(listed)}"
+    if structures is None:
+        return section
+    entries = [
+        (
+            answer
+            if answer is not None
+            else {STRUCTURE_ARGUMENT: dataset_id, "error": STRUCTURE_FAILED_TEXT}
+        )
+        for dataset_id, answer in structures
+    ]
+    return f"{section}\n\n{STRUCTURES_HEADING}\n{_dumps(entries)}"
+
+
+async def fetch_datasets(
+    client: MultiServerMCPClient, *, server: MCPClientSettings
+) -> DatasetsFetch:
+    """Fetch and render the datasets part. No failure raises; cancellation propagates."""
+    started_at = time.monotonic()
+    server_name = server.server_name
+    # A statgpt server must name the list tool, so validation has already guaranteed it.
+    assert server.list_datasets_tool is not None
+    listing = await call_with_attempts(
+        client,
+        server_name=server_name,
+        tool_name=server.list_datasets_tool,
+        arguments={},
+        read=_read_list,
+    )
+    if listing.value is None:
+        logger.warning(
+            "Dataset list could not be fetched: server=%s failure=%s attempts=%d",
+            server_name,
+            listing.failure_kind,
+            listing.attempts,
+        )
+        _log_fetched(
+            server_name=server_name,
+            list_attempts=listing.attempts,
+            datasets=None,
+            requested=0,
+            obtained=0,
+            started_at=started_at,
+        )
+        return DatasetsFetch(section=render_datasets_section(None, structures=None), catalogue=None)
+
+    raw = listing.value.raw
+    ids = _listed_ids(raw)
+    structures: list[tuple[str, dict[str, Any] | None]] | None = None
+    if server.dataset_structure_tool is not None and ids:
+        tool_name = server.dataset_structure_tool
+        answers = await asyncio.gather(
+            *(
+                call_with_attempts(
+                    client,
+                    server_name=server_name,
+                    tool_name=tool_name,
+                    arguments={STRUCTURE_ARGUMENT: dataset_id},
+                    read=_read_structure,
+                )
+                for dataset_id in ids
+            )
+        )
+        structures = [
+            (dataset_id, answer.value) for dataset_id, answer in zip(ids, answers, strict=True)
+        ]
+
+    obtained = sum(1 for _, answer in structures or [] if answer is not None)
+    failed = len(structures or []) - obtained
+    if failed:
+        logger.warning(
+            "Dataset structures could not be fetched: server=%s structures_failed=%d",
+            server_name,
+            failed,
+        )
+    _log_fetched(
+        server_name=server_name,
+        list_attempts=listing.attempts,
+        datasets=len(raw.get("datasets") or []),
+        requested=len(structures or []),
+        obtained=obtained,
+        started_at=started_at,
+    )
+    return DatasetsFetch(
+        section=render_datasets_section(raw, structures=structures),
+        catalogue=listing.value.catalogue,
+        structures_rendered=structures is not None,
+        structures_failed=failed,
+    )
+
+
+def _log_fetched(
+    *,
+    server_name: str,
+    list_attempts: int,
+    datasets: int | None,
+    requested: int,
+    obtained: int,
+    started_at: float,
+) -> None:
+    logger.info(
+        "Datasets fetched: server=%s list_attempts=%d datasets=%s structures_requested=%d "
+        "structures_obtained=%d structures_failed=%d duration=%.1fs",
+        server_name,
+        list_attempts,
+        datasets,
+        requested,
+        obtained,
+        requested - obtained,
+        time.monotonic() - started_at,
+    )
+
+
+def join_data_sources(descriptions: str, *parts: str | None) -> str:
+    """The data-sources string: the hand-written descriptions, then each fetched part present,
+    each after a blank line."""
+    return "\n\n".join([descriptions, *(part for part in parts if part is not None)])
+
+
+async def fetch_data_sources(
+    properties: ApplicationProperties, *, bearer_token: str | None = None
+) -> DataSources:
+    """Run the turn's data-sources fetch, or make no call on a channel without a dataset server.
+
+    The client is built for this fetch alone, with the same connection and credentials as the
+    turn's other MCP traffic to the server. The datasets part and the glossary part run
+    concurrently, so the turn waits for the slower of the two rather than for their sum.
+    """
+    descriptions = properties.prompts.data_sources_descriptions
+    server = properties.dataset_server
+    if server is None:
+        return DataSources(text=descriptions)
+    client = build_mcp_client([server], bearer_token=bearer_token)
+    glossary_tools = server.glossary
+
+    async def glossary_part() -> GlossaryFetch | None:
+        if glossary_tools is None:
+            return None
+        return await fetch_glossary(client, server_name=server.server_name, tools=glossary_tools)
+
+    datasets, glossary = await asyncio.gather(
+        fetch_datasets(client, server=server), glossary_part()
+    )
+    return DataSources(
+        text=join_data_sources(
+            descriptions, datasets.section, glossary.text if glossary is not None else None
+        ),
+        datasets=datasets,
+        glossary=glossary,
+    )

@@ -36,7 +36,7 @@ The state of the code this design builds on:
   dataset's URN. An unknown id raises a `ToolError`, which reaches the client as an error result.
 - **The answers are small for a small catalogue.** A dataset's record in the list answer is on the
   order of 200 tokens, and its structure answer on the order of 450 tokens, counted with
-  `tiktoken`'s `o200k_base` encoding. `tiktoken` has no entry for `gpt-5.6-terra`, so the token
+  `tiktoken`'s `o200k_base` encoding. `tiktoken` has no entry for the configured model, so the token
   counts are estimates. A structure lists at most 10 sample values per dimension, so a dimension
   with more values, such as a country dimension, is not listed in full. The server picks those 10 at
   random on every call (`statgpt/app/utils/formatters/dataset_detailed.py`,
@@ -529,7 +529,13 @@ the list failed or some terms did not resolve, to request the missing definition
 terms. Each is capped at three calls in the whole research, which matches the failed-tool rule the
 research prompt already states (one call and two repeats), so a server that keeps failing costs a
 bounded number of agent steps. Each part appears only when its tool is bound. The playground agent
-gets the same instruction.
+gets the same failed-call parts.
+
+When the fetch listed the terms and every term resolved, the research agent is told not to call
+the bound glossary tools, as a successful list means "do not call the list-datasets tool" (D16).
+Without this part, the agent requested definitions its context already held. The playground agent
+never gets this part, for the reason D16 gives: its user may ask it to call any tool whatever the
+fetch obtained.
 
 The agent's results are ordinary tool results, so research-review and the report writer see them.
 The report writer gets the terminology rule on every turn of a channel that configures a glossary,

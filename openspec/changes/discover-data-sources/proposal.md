@@ -69,7 +69,8 @@ server already exposes.
   its rendering, and the terminology rule for the report writer and its check for the report
   reviewer, as planned before. The research agent and the playground agent are told to repeat what
   the app's glossary fetch missed, a failed list of terms or missing definitions, with at most three
-  calls each. Research-review and the report writer see the results of those calls in the
+  calls each, and the research agent is told not to call the glossary tools when the fetch obtained
+  the whole glossary. Research-review and the report writer see the results of those calls in the
   transcript, and the report reviewer receives the successful ones, which the app selects by the
   configured glossary tool names.
 - **The References tables come in a fixed order**: datasets, then documents, then the glossary,

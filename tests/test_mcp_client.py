@@ -49,12 +49,12 @@ def _deployment_server(
 
 
 def _dataset_server(server_name: str = "datasets") -> MCPClientSettings:
-    """A dataset server, which names its dataset-metadata tool and no file-sharing tool."""
+    """A dataset server, which names its list-datasets tool and no file-sharing tool."""
     return MCPClientSettings(
         server_name=server_name,
         server_type="statgpt",
         deployment_id="statgpt-mcp",
-        dataset_metadata_tool="list_datasets",
+        list_datasets_tool="list_datasets",
         data_query_meta_key="acme.example.org/client",
         references_table=_table("Datasets", "name"),
     )
@@ -316,13 +316,13 @@ def _dataset_metadata_server(
         server_type="statgpt",
         deployment_id="statgpt-mcp",
         tools_to_include=tools_to_include or [],
-        dataset_metadata_tool=tool_name,
+        list_datasets_tool=tool_name,
         data_query_meta_key="acme.example.org/client",
         references_table=_table("Datasets", "name"),
     )
 
 
-async def test_naming_the_dataset_metadata_tool_does_not_hide_it_from_the_agent(
+async def test_naming_the_list_datasets_tool_does_not_hide_it_from_the_agent(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """A catalogue listing is how the agent discovers which datasets exist."""
@@ -333,11 +333,11 @@ async def test_naming_the_dataset_metadata_tool_does_not_hide_it_from_the_agent(
     loaded = await load_mcp_tools([_dataset_metadata_server()])
 
     assert [t.name for t in loaded.agent_tools] == ["list_datasets", "query_datasets"]
-    assert loaded.dataset_metadata_tool is not None
-    assert loaded.dataset_metadata_tool.name == "list_datasets"
+    assert loaded.list_datasets_tool is not None
+    assert loaded.list_datasets_tool.name == "list_datasets"
 
 
-async def test_a_filter_omitting_the_dataset_metadata_tool_still_finds_it_for_the_app(
+async def test_a_filter_omitting_the_list_datasets_tool_still_finds_it_for_the_app(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """`tools_to_include` says what the agent may call, not what the app may call."""
@@ -348,11 +348,11 @@ async def test_a_filter_omitting_the_dataset_metadata_tool_still_finds_it_for_th
     loaded = await load_mcp_tools([_dataset_metadata_server(tools_to_include=["query_datasets"])])
 
     assert [t.name for t in loaded.agent_tools] == ["query_datasets"]
-    assert loaded.dataset_metadata_tool is not None
-    assert loaded.dataset_metadata_tool.name == "list_datasets"
+    assert loaded.list_datasets_tool is not None
+    assert loaded.list_datasets_tool.name == "list_datasets"
 
 
-async def test_the_dataset_metadata_tool_keeps_the_agents_error_handling(
+async def test_the_list_datasets_tool_keeps_the_agents_error_handling(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """It is the object the agent is offered, so its reader takes failures off the message."""
@@ -360,8 +360,8 @@ async def test_the_dataset_metadata_tool_keeps_the_agents_error_handling(
 
     loaded = await load_mcp_tools([_dataset_metadata_server()])
 
-    assert loaded.dataset_metadata_tool is not None
-    assert loaded.dataset_metadata_tool.handle_tool_error is _adapter_error_handler
+    assert loaded.list_datasets_tool is not None
+    assert loaded.list_datasets_tool.handle_tool_error is _adapter_error_handler
 
 
 async def test_a_configured_dataset_tool_the_server_does_not_advertise_is_reported_as_absent(
@@ -371,11 +371,11 @@ async def test_a_configured_dataset_tool_the_server_does_not_advertise_is_report
 
     loaded = await load_mcp_tools([_dataset_metadata_server(tool_name="catalogue")])
 
-    assert loaded.dataset_metadata_tool is None
+    assert loaded.list_datasets_tool is None
     assert [t.name for t in loaded.agent_tools] == ["query_datasets"]
 
 
-async def test_a_channel_serving_no_datasets_has_no_dataset_metadata_tool(
+async def test_a_channel_serving_no_datasets_has_no_list_datasets_tool(
     monkeypatch: MonkeyPatch,
 ) -> None:
     """A dataset server must name the tool, so the app sees none only where none is configured."""
@@ -383,5 +383,5 @@ async def test_a_channel_serving_no_datasets_has_no_dataset_metadata_tool(
 
     loaded = await load_mcp_tools([_file_sharing_server()])
 
-    assert loaded.dataset_metadata_tool is None
+    assert loaded.list_datasets_tool is None
     assert [t.name for t in loaded.agent_tools] == ["search"]

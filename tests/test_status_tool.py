@@ -106,6 +106,8 @@ def test_the_correction_repeats_the_wording_the_prompt_showed() -> None:
     prompt = RESEARCH_AGENT_SYSTEM_PROMPT.format(
         today_date="2026-08-14",
         client_name="ACME",
+        data_sources="The topics map.",
+        data_sources_instructions="",
         rule_once_per_turn=RULE_ONCE_PER_TURN,
         rule_never_alone=RULE_NEVER_ALONE,
         verdict_retry_now=RetryVerdict.RETRY_NOW,

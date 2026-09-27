@@ -108,6 +108,8 @@ def _make_report_node() -> Any:
         2750,
         "References",
         lookups=no_lookups(),
+        data_sources="The topics map.",
+        glossary=None,
         emit_revision_failed_stage=lambda _outcome: None,
         emit_activity=lambda _title: None,
     )

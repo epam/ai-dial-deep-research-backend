@@ -1,4 +1,4 @@
-"""Calling the dataset-metadata tool and reading the catalogue it answers with.
+"""Calling the list-datasets tool and reading the catalogue it answers with.
 
 The tools here are real LangChain `StructuredTool`s built the way `langchain-mcp-adapters`
 builds them — `response_format="content_and_artifact"`, the structured result in the artifact —
@@ -18,6 +18,7 @@ from dial_deep_research.app.research.dataset_metadata import (
     KIND_DATASET_NO_STRUCTURED_RESULT,
     KIND_DATASET_UNREADABLE_RESULT,
     DatasetMetadataError,
+    parse_catalogue,
     read_dataset_sources,
 )
 
@@ -278,3 +279,19 @@ async def test_a_record_whose_id_is_not_a_string_is_skipped_rather_than_fatal() 
     sources = await read_dataset_sources(tool=tool, dataset_ids=[_URN])
 
     assert list(sources) == [_URN]
+
+
+def test_the_parser_reads_a_structured_result_given_as_a_dict() -> None:
+    """The turn-start fetch reads the MCP result directly and hands the parser a dict."""
+    sources = parse_catalogue({"datasets": [{"id": _URN, "name": _NAME, "url": _URL}]})
+
+    assert sources[_URN].name == _NAME
+    assert sources[_URN].url == _URL
+    assert sources[_URN].raw_fields == {"id": _URN, "name": _NAME, "url": _URL}
+
+
+@pytest.mark.parametrize("structured", [None, [], {"datasets": "none"}, {"items": []}])
+def test_the_parser_refuses_a_result_without_a_datasets_array(structured: Any) -> None:
+    with pytest.raises(DatasetMetadataError) as excinfo:
+        parse_catalogue(structured)
+    assert excinfo.value.kind == KIND_DATASET_UNREADABLE_RESULT

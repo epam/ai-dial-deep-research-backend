@@ -114,6 +114,26 @@ When the user asks where data might come from, answer from this list only.
 <data_sources>
 {data_sources_descriptions}
 </data_sources>
+{dataset_list_failed_instruction}"""
+
+# Filled into `PREP_AGENT_SYSTEM` only when the turn's list of datasets failed. Preparation has no
+# MCP tools, so nothing here asks the agent to call one: the plan item carries the gap into
+# research, whose own instruction tells it to call the list-datasets tool.
+DATASET_LIST_FAILED_INSTRUCTION = """
+## When the list of datasets could not be obtained
+
+The list of datasets could not be obtained at the moment: the `Datasets:` part of the data sources
+above says "failed to obtain list of datasets". This does not hold up clarification or the plan.
+
+- Go on clarifying the query and aligning the plan as usual. Do not ask the user to wait, to
+  retry, or to choose datasets you cannot name.
+- When the query needs data the datasets would hold, add a plan item that asks research to search
+  the available datasets for that data, and that says no specific dataset can be suggested yet.
+  For example: "Search the available datasets for GDP growth forecasts. The list of datasets could
+  not be obtained at the moment, so no specific datasets can be suggested yet."
+- The rule that the plan MUST name any data source that plausibly covers the query topic does not
+  apply to the datasets, whose listing failed: the search item takes the place of the named
+  datasets. The rule still applies to every other data source.
 """
 
 QUERY_REVIEW_SYSTEM = """\

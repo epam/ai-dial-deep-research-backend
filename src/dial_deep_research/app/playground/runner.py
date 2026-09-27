@@ -22,7 +22,9 @@ from langchain_core.messages import (
     ToolMessage,
 )
 
+from dial_deep_research.app.data_sources import fetch_data_sources
 from dial_deep_research.app.mcp_tools import load_mcp_tools
+from dial_deep_research.app.research.prompts import render_data_sources_instructions
 from dial_deep_research.app_properties import ApplicationProperties
 from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.dial_stages import (
@@ -80,16 +82,33 @@ class PlaygroundRunner:
 
         The per-request bearer token (when present) is forwarded to the MCP servers for
         per-user access; the api-key is handled by header propagation.
+
+        The playground has a completion of its own, so it runs its own data-sources fetch, once
+        per turn before the agent's first model call.
         """
+        data_sources = await fetch_data_sources(properties, bearer_token=bearer_token)
         history = reconstruct_plain_history(request)
         # Only the agent's half of what the servers advertise: a tool the application calls
         # itself, such as the file-sharing tool, reaches no model's tool list — the playground's
         # included.
         loaded = await load_mcp_tools(mcp_servers=properties.mcp_servers, bearer_token=bearer_token)
+        structure_tool = properties.dataset_structure_tool
+        glossary = properties.glossary
         agent = build_playground_agent(
             tools=loaded.agent_tools,
             prompts=properties.prompts,
             today_date=datetime.now().date().isoformat(),
+            data_sources=data_sources.text,
+            # Only the parts about a failed call: the playground exists to exercise the tools, so
+            # nothing may tell it not to call one its user asks for.
+            data_sources_instructions=render_data_sources_instructions(
+                data_sources=data_sources,
+                bound_tools={tool.name for tool in loaded.agent_tools},
+                list_datasets_tool=properties.list_datasets_tool,
+                dataset_structure_tool=structure_tool.tool_name if structure_tool else None,
+                glossary=glossary.tools if glossary is not None else None,
+                failed_calls_only=True,
+            ),
         )
         config: dict[str, Any] = {"callbacks": [opik_tracer]} if opik_tracer is not None else {}
 
