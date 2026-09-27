@@ -52,13 +52,13 @@ features (long-lived sessions, `Mcp-Session-Id`, `Last-Event-ID` resumability,
 `notifications/tools/list_changed`, `notifications/resources/*`,
 `notifications/prompts/list_changed`) are out of scope for this capability.
 
-A turn on a channel whose dataset server configures a glossary SHALL also construct a per-turn MCP
-client **before the preparation agent runs**, to fetch the glossary (see **glossary-prefetch**). The
-rules above apply to it: it is not cached across requests and keeps no session. It calls the two
-configured glossary tools by name and does not poll `tools/list`, because it offers no tool to a
-model. The glossary tools are not application-called tools in the sense above: the app calls them,
-but they stay in the agent's tools whenever the server's `tools_to_include` filter offers them, the
-way the dataset-metadata tool does.
+A turn on a channel with a dataset server SHALL also construct a per-turn MCP client **before the
+preparation agent runs**, for the data-sources fetch (see **data-sources-discovery**). The rules
+above apply to it: it is not cached across requests and keeps no session. It calls the configured
+list-datasets, dataset-structure and glossary tools by name and does not poll `tools/list` to
+discover tools, because it offers no tool to a model. These tools are not application-called tools in the sense above: the
+app calls them, but they stay in the agent's tools whenever the server's `tools_to_include` filter
+offers them, the way the list-datasets tool does at the citation step.
 
 #### Scenario: research-agent invokes an MCP tool
 
@@ -68,7 +68,7 @@ way the dataset-metadata tool does.
 #### Scenario: research-agent is run only after plan approval
 
 - **WHEN** a chat completion request is processed and no plan has been approved yet
-- **THEN** the research-agent node SHALL NOT run and no MCP client SHALL be constructed for research; the turn SHALL produce only preparation output. A client constructed to fetch the glossary before preparation is not constructed for research
+- **THEN** the research-agent node SHALL NOT run and no MCP client SHALL be constructed for research; the turn SHALL produce only preparation output. A client constructed for the data-sources fetch before preparation is not constructed for research
 
 #### Scenario: Per-request agent and MCP scoping
 
@@ -90,15 +90,16 @@ way the dataset-metadata tool does.
 - **WHEN** the app loads tools for a server that advertises search tools and a file-sharing tool
 - **THEN** the server's advertised tool list SHALL be fetched for that turn and split into the agent's tools and the application-called tool, without a second `tools/list` round trip for the same server
 
-#### Scenario: A preparation-only turn fetches the glossary
+#### Scenario: A preparation-only turn fetches the data sources
 
-- **WHEN** a turn on a channel with a glossary ends in preparation, without starting research
-- **THEN** the app SHALL have constructed one per-turn MCP client to fetch the glossary, SHALL NOT
-  have polled `tools/list`, and SHALL NOT reuse that client in a later request
+- **WHEN** a turn on a channel with a dataset server ends in preparation, without starting research
+- **THEN** the app SHALL have constructed one per-turn MCP client for the data-sources fetch, SHALL
+  NOT have polled `tools/list` to discover tools, and SHALL NOT reuse that client in a later
+  request
 
-#### Scenario: The glossary tools stay with the agent when the filter offers them
+#### Scenario: The fetched tools stay with the agent when the filter offers them
 
-- **WHEN** a channel configures a glossary and its `tools_to_include` names the term-definitions
-  tool
-- **THEN** research-agent SHALL be offered that tool, and the app SHALL still call it itself in the
-  glossary fetch
+- **WHEN** a channel names a dataset-structure tool and configures a glossary, and its
+  `tools_to_include` names the dataset-structure tool and the term-definitions tool
+- **THEN** research-agent SHALL be offered both tools, and the app SHALL still call them itself in
+  the data-sources fetch

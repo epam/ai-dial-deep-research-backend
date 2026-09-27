@@ -9,9 +9,12 @@ updating this requirement.
 **1. The preparation agent's model call** (one per agent step)
 
 - System prompt: the preparation instructions, filled with the instance's `agent_name`, today's
-  date, and the turn's data-sources string: `data_sources_descriptions`, followed by the rendered
-  glossary when the channel configures one (see **glossary-prefetch**). It carries no instruction
-  to request missing definitions, because this agent has no MCP tools.
+  date, and the turn's data-sources string: `data_sources_descriptions`, followed by the datasets
+  section when the channel has a dataset server and by the rendered glossary when the channel
+  configures one (see **data-sources-discovery**). When the list of datasets failed, it also
+  carries the instruction to plan around the failure (see **data-sources-discovery**). It carries
+  neither the instruction to request missing definitions nor the instruction about the dataset
+  tools, because this agent has no MCP tools.
 - Messages: the **full** conversation history reconstructed from the DIAL request — every user
   message as text, and for every prior assistant turn the persisted message slice (its
   `AIMessage`s and `ToolMessage`s) with image blocks rehydrated to base64 — followed by the
@@ -25,7 +28,8 @@ updating this requirement.
 **2. The query clarity check** (one per `update_query` call)
 
 - System prompt: the intake-check instructions, filled with today's date and the turn's
-  data-sources string, the same one the preparation agent receives.
+  data-sources string, the same one the preparation agent receives, with no instruction about a
+  failed list of datasets.
 - Messages: one human message carrying the rendered conversation so far and the candidate query.
   The rendering SHALL include only natural-language user and assistant text; tool calls, tool
   results, and system messages SHALL be dropped. No image content SHALL be included.
@@ -35,7 +39,7 @@ updating this requirement.
 **3. The plan approval check** (one per `approve_plan` call)
 
 - System prompt: the plan-approval instructions, filled with today's date only — no data-source
-  descriptions and no glossary.
+  descriptions, no datasets section and no glossary.
 - Messages: one human message carrying the recorded plan as a numbered list and the rendered
   conversation, filtered exactly as in the clarity check. No image content.
 - Output: a structured `PlanReviewResponse` — the assessment, whether the recorded plan matches
@@ -60,3 +64,10 @@ updating this requirement.
 - **THEN** the preparation agent's system prompt and the clarity check's system prompt SHALL carry
   the same data-sources string ending in the rendered glossary, and the approval check's system
   prompt SHALL carry neither the data-sources descriptions nor the glossary
+
+#### Scenario: The agent and the clarity check see the datasets section
+
+- **WHEN** a preparation turn runs on a channel whose dataset server names a dataset-structure tool
+- **THEN** the preparation agent's system prompt and the clarity check's system prompt SHALL carry
+  the same data-sources string, including the datasets section with its structures block, and the
+  approval check's system prompt SHALL carry no part of it
