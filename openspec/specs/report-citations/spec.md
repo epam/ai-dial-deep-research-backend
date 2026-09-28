@@ -276,11 +276,11 @@ emitted for it — on one condition: **the cited dataset resolved a URL that a b
 **A dataset's identifier is called its URN throughout this capability**, and the marker's `<id>`
 slot carries it: the report's citation form is `[dataset <id>]`, owned by **research-execution**, but
 what fills it for every supported dataset server is a URN such as `IMF:WEO(1.0.0)`. The wire
-field the dataset-metadata tool reports it under is `id`, which is the server's key and is not
+field the list-datasets tool reports it under is `id`, which is the server's key and is not
 renamed here; every user-visible mention of it — the fallback labels — reads
 `URN`, because that is what the value is and what the dataset server's own documentation calls it.
 
-The dataset-metadata tool must have reported a record for that URN carrying a URL, and that
+The list-datasets tool must have reported a record for that URN carrying a URL, and that
 URL must be **absolute and `http` or `https`**. The app SHALL decide this from the URL itself,
 treating any other form — a storage-relative `files/…` path, a scheme it does not recognise, a value
 that is not a URL at all — as not convertible. The direction is conservative for the same reason the
@@ -311,7 +311,7 @@ emphasis span alike, and SHALL classify no Markdown block.
 #### Scenario: A cited dataset with a portal URL becomes a pill
 
 - **WHEN** a paragraph reads `…rose by 2.1% [dataset IMF:WEO(1.0.0)] over the period.` and the
-  dataset-metadata tool reported that id with the URL `https://portal.example.org/datasets/imf-weo`
+  list-datasets tool reported that id with the URL `https://portal.example.org/datasets/imf-weo`
 - **THEN** the marker SHALL be replaced by a marker tag, and one annotation SHALL be emitted naming
   that tag and carrying the portal URL
 
@@ -319,7 +319,7 @@ emphasis span alike, and SHALL classify no Markdown block.
 
 - **WHEN** a reader clicks a converted dataset citation's pill and then its open-in-browser action
 - **THEN** the page at `body.source.attachment.url` SHALL open in a new browser tab, and that URL
-  SHALL be the string the dataset-metadata tool reported, unchanged
+  SHALL be the string the list-datasets tool reported, unchanged
 
 #### Scenario: A dataset the catalogue does not report keeps its text
 
@@ -601,22 +601,22 @@ agent's tools for this to hold.
 - **THEN** the configuration SHALL be rejected (see **application-config-schema**), so no turn is
   ever served with document citations labelled from their markers by configuration
 
-### Requirement: Cited datasets are named and linked through a contracted dataset-metadata tool
+### Requirement: Cited datasets are named and linked through a contracted list-datasets tool
 
 A dataset citation needs three things the app does not hold: the dataset's human name, which labels
 the pill and the card and leads its References row; the address of its page, which no label shows and
 which the reader reaches through the card's open-in-browser action; and its last-update date, which
 the card's title carries when the server knows one. All come from **one MCP tool**, the
-**dataset-metadata tool**, and the app SHALL depend on nothing about it beyond the contract stated
+**list-datasets tool**, and the app SHALL depend on nothing about it beyond the contract stated
 here. Which server provides it, what that server names it, and where it keeps the catalogue are all
 outside the contract, and the app SHALL behave identically for any server that satisfies it.
 
 **The name comes from configuration.** Each MCP server entry in the application properties SHALL be
-able to name that server's dataset-metadata tool, and the app SHALL call exactly the tool that entry
+able to name that server's list-datasets tool, and the app SHALL call exactly the tool that entry
 names (**application-config-schema** owns the field). There SHALL be no default name and no
 discovery by convention: the app SHALL NOT infer the tool from a server's advertised tool list, from
 a tool's description, or from any naming pattern. Only a **dataset** server may name one, and at
-most one dataset server may be configured, so at most one configured server names a dataset-metadata
+most one dataset server may be configured, so at most one configured server names a list-datasets
 tool — which is what makes asking that server about an id correct, since a `[dataset <id>]` marker
 names no server.
 
@@ -627,10 +627,10 @@ rule lives in **application-config-schema**, which also records what it costs �
 dataset server advertises no catalogue tool cannot be configured.
 
 A channel that configures **no dataset server at all** remains ordinary: nothing names a
-dataset-metadata tool, no call is made, and a dataset marker in a delivered report keeps its text.
+list-datasets tool, no call is made, and a dataset marker in a delivered report keeps its text.
 That is the case recorded at DEBUG rather than warned about on every turn (see **logging-policy**).
 
-**The contract.** A tool named as a server's dataset-metadata tool SHALL satisfy all of the
+**The contract.** A tool named as a server's list-datasets tool SHALL satisfy all of the
 following. These are requirements on the server, not observations of any one implementation: a named
 tool that breaks any of them is a misconfiguration, and it SHALL fail the way the delivery-failure
 requirement below prescribes rather than degrade the report.
@@ -666,12 +666,14 @@ requirement below prescribes rather than degrade the report.
 - **Idempotent and read-only**: the app calls the tool once per turn, and repeated calls across
   turns SHALL be safe and SHALL change nothing on the server.
 
-The app SHALL call the tool **once per turn** when it succeeds, and only on a turn where a reviewed
-draft or the delivered report cites at least one dataset. The first draft the report review checks
-that cites a dataset makes the call; every later draft's check and the delivery reuse that answer
-(see the requirement on looking cited identifiers up once per turn). A failed call is not reused,
-so the next check or the delivery calls again. It SHALL NOT call the tool once per cited dataset,
-and SHALL NOT call it for a dataset that research touched but no draft cites.
+The app SHALL call the tool **once per turn** when it succeeds. The call SHALL be made at the start
+of every turn, before the preparation agent's first model call, by the data-sources fetch, which
+also shows the answer to the models (see **data-sources-discovery**). On a turn that reaches
+research, that answer is the catalogue the report review and the delivery read: every draft's check
+and the delivery reuse it (see the requirement on looking cited identifiers up once per turn). When
+that fetch failed, the answer is not reused and no catalogue is held, so the first check of a draft
+that cites a dataset calls the tool again, and a failure there is again not reused, so the next
+check or the delivery calls again. It SHALL NOT call the tool once per cited dataset.
 
 The app SHALL select from the answer **every** record whose `id` equals a cited id, and SHALL ignore
 every other record. Selection SHALL NOT depend on what a record carries: a record with no usable page
@@ -682,15 +684,25 @@ many datasets the report cites.
 
 #### Scenario: One call serves every cited dataset
 
-- **WHEN** three reviewed drafts and the delivered report cite four datasets, and research queried
-  three more that no draft cites
-- **THEN** the app SHALL call the dataset-metadata tool exactly once, with no arguments, during the
-  review of the first draft, and SHALL read the four cited ids out of that one answer
+- **WHEN** three reviewed drafts and the delivered report cite four datasets, research queried
+  three more that no draft cites, and the data-sources fetch's first list-datasets attempt
+  succeeds
+- **THEN** the app SHALL call the list-datasets tool exactly once, with no arguments, in the
+  data-sources fetch at the start of the turn, and SHALL read the four cited ids out of that one
+  answer
 
 #### Scenario: A report citing no dataset makes no call
 
 - **WHEN** every reviewed draft and the delivered report cite documents only
-- **THEN** the app SHALL NOT call the dataset-metadata tool
+- **THEN** the report review and the delivery SHALL NOT call the list-datasets tool, and every
+  list-datasets call of the turn SHALL be one the data-sources fetch made at its start
+
+#### Scenario: A failed turn-start call is made again for a cited dataset
+
+- **WHEN** every attempt of the data-sources fetch's list-datasets call failed, and the first
+  reviewed draft cites a dataset
+- **THEN** the review of that draft SHALL call the list-datasets tool, and a successful answer SHALL
+  serve every later check and the delivery
 
 #### Scenario: A record with no page URL is still selected
 
@@ -711,14 +723,15 @@ many datasets the report cites.
 - **THEN** the call SHALL be treated as failed, every dataset citation SHALL keep its marker text,
   and the report SHALL be delivered
 
-### Requirement: The dataset-metadata tool is called by the app and stays available to the agent
+### Requirement: The list-datasets tool is called by the app and stays available to the agent
 
-The app SHALL find the dataset-metadata tool in its server's **full advertised tool list**,
+At the citation step, when the turn-start fetch did not obtain the catalogue, the app SHALL find
+the list-datasets tool in its server's **full advertised tool list**,
 independently of that server's `tools_to_include` filter, because that filter states what the
 research agent may call rather than what the app may call. A configuration whose filter omits the
 tool SHALL still leave the app able to call it at the citation step.
 
-The dataset-metadata tool SHALL, however, **remain available to the research agent** whenever that
+The list-datasets tool SHALL, however, **remain available to the research agent** whenever that
 server's filter would otherwise offer it. This is the one point on which it differs from the
 file-sharing tool, which the app removes from every tool list bound to a model, and the difference
 is deliberate: a catalogue listing is how a research agent discovers which datasets exist before it
@@ -727,15 +740,15 @@ change only who else calls it, never whether the agent still can.
 
 #### Scenario: Naming the tool does not hide it from the agent
 
-- **WHEN** a server names its dataset-metadata tool and that tool passes the server's
+- **WHEN** a server names its list-datasets tool and that tool passes the server's
   `tools_to_include` filter
 - **THEN** the tools bound to the research agent SHALL still include it
 
 #### Scenario: A filter that omits it does not hide it from the app
 
-- **WHEN** a server's `tools_to_include` names only its data-query tool, and its dataset-metadata
+- **WHEN** a server's `tools_to_include` names only its data-query tool, and its list-datasets
   tool is configured
-- **THEN** the app SHALL still be able to call the dataset-metadata tool at the citation step, and
+- **THEN** the app SHALL still be able to call the list-datasets tool at the citation step, and
   the agent SHALL NOT be offered it
 
 ### Requirement: A converted citation is a marker tag in the text and an annotation that names it
@@ -775,7 +788,7 @@ carries:
   <ix>`**, the text the marker carried, when none did. In a run's popup these labels are what tells
   the sources apart, and the page belongs in the label because a document server attributes at page
   level: two pages of one publication are two sources and must read as two entries. A **dataset**
-  citation's label SHALL read **`<name> dataset`** when the dataset-metadata tool reported a usable
+  citation's label SHALL read **`<name> dataset`** when the list-datasets tool reported a usable
   name, and **`<urn> dataset`** — the URN the marker carried — when it did not. When the tool
   reported a last-update date for the dataset, the card's label SHALL go on to
   **` - last update <date>`**, as in `World Economic Outlook dataset - last update 2025-04-30`;
@@ -799,7 +812,7 @@ carries:
 
   **The type SHALL be stated explicitly and SHALL say what is cited**: `application/pdf` for a
   document citation, whose URL is the DIAL file URL the file-sharing tool returned, and `text/html`
-  for a dataset citation, whose URL is the page the dataset-metadata tool returned. The type is
+  for a dataset citation, whose URL is the page the list-datasets tool returned. The type is
   load-bearing rather than decorative, because the client branches on it twice: it opens a citation
   into its document viewer only for `application/pdf`, and it offers the reader an open-in-browser
   action — the one action that reaches a page on the web — only for an HTML type. A dataset citation
@@ -814,7 +827,7 @@ carries:
   card's switcher is showing, so a dataset cited beside a document is reached by stepping to its
   entry first.
 
-  The app SHALL carry the URL into this field exactly as the dataset-metadata tool reported it,
+  The app SHALL carry the URL into this field exactly as the list-datasets tool reported it,
   decoding nothing and re-encoding nothing, for the reason the file-sharing URL is carried verbatim:
   the client resolves it, and any rewriting risks an address that no longer names the page.
 
@@ -998,7 +1011,7 @@ when the message finishes rather than as the report streams.
 
 #### Scenario: A dataset citation carries a web source and no page
 
-- **WHEN** the step converts `[dataset IMF:WEO(1.0.0)]`, the dataset-metadata tool reported the
+- **WHEN** the step converts `[dataset IMF:WEO(1.0.0)]`, the list-datasets tool reported the
   name `World Economic Outlook`, the URL `https://portal.example.org/datasets/imf-weo` and no
   last-update date
 - **THEN** the annotation's `body.source.attachment.type` SHALL be `text/html`, its `url` SHALL be
@@ -1031,7 +1044,7 @@ when the message finishes rather than as the report streams.
 
 #### Scenario: A dataset whose last-update date is unknown has no date in its title
 
-- **WHEN** the dataset-metadata tool reports the cited dataset with an id, a name and a URL but no
+- **WHEN** the list-datasets tool reports the cited dataset with an id, a name and a URL but no
   last-update date
 - **THEN** `body.title` SHALL read `<name> dataset` and end there, with no dash, no empty date and no
   placeholder text, and `body.quote` SHALL be absent
@@ -1057,12 +1070,16 @@ reason the section moves into the app.
 
 **What the section contains.** The section SHALL open with a `##` heading carrying
 `references_section_name`. It SHALL then carry **one table per configured MCP server whose sources the delivered
-report cites**, in the order the servers are configured. Each table SHALL open with a `###`
+report cites**, in a fixed order by the kind of source a table lists: the **dataset** table first,
+then the **document** table, whatever order the servers are configured in. Each table SHALL open with a `###`
 sub-heading carrying that server's configured table title, and its header row SHALL be the columns
-that server's `references_table` configures, in the configured order.
+that server's `references_table` configures, in the configured order. After the server tables, the
+section SHALL carry the **glossary table** when the channel configures a glossary and the delivered
+report cites at least one glossary term (see the requirement on listing cited glossary terms).
 
-A server whose sources the report does not cite SHALL contribute no table at all. Where the report
-cites no source of any kind, the section SHALL carry no table and SHALL carry
+A server whose sources the report does not cite SHALL contribute no table at all. A glossary
+citation counts as a cited source here. Where the report cites no source of any kind, the section
+SHALL carry no table and SHALL carry
 `references_section_empty_text` instead, so a report with nothing to cite says so rather than
 showing a bare heading.
 
@@ -1100,7 +1117,7 @@ another.
 
 **A row whose source can be opened carries a pill in its first cell.** A row SHALL be openable on
 exactly the condition an inline citation of its source is converted: a document row when the
-file-sharing tool returned a PDF URL for that document, and a dataset row when the dataset-metadata
+file-sharing tool returned a PDF URL for that document, and a dataset row when the list-datasets
 tool reported a URL a browser can open for that dataset. The first cell of an openable row SHALL
 carry one empty marker tag, `<cit data-id="…"></cit>`, **in place of** the text it would otherwise
 carry, and one annotation of its own SHALL claim that tag, so the client renders the source's name as
@@ -1174,6 +1191,13 @@ a row lists is one the delivered report cites.
 - **THEN** the built section SHALL carry a documents table of three rows and a datasets table of two
   rows, each row ordered by where its source is first cited
 
+#### Scenario: The tables follow a fixed order
+
+- **WHEN** the channel configures its document server before its dataset server, configures a
+  glossary, and the report cites a document, a dataset and a glossary term
+- **THEN** the section SHALL carry the dataset table first, the document table second and the
+  glossary table last
+
 #### Scenario: A source whose metadata did not resolve keeps its row
 
 - **WHEN** the metadata answer omits one cited document, and the catalogue omits one cited dataset
@@ -1191,7 +1215,7 @@ a row lists is one the delivered report cites.
 
 #### Scenario: A report citing nothing carries the configured text
 
-- **WHEN** a delivered report cites no document and no dataset
+- **WHEN** a delivered report cites no document, no dataset and no glossary term
 - **THEN** the section SHALL be present, SHALL carry no table, and SHALL carry
   `references_section_empty_text`
 
@@ -1235,7 +1259,7 @@ a row lists is one the delivered report cites.
 
 #### Scenario: A dataset row with a portal URL opens its page
 
-- **WHEN** a delivered report cites `IMF:WEO(1.0.0)`, and the dataset-metadata tool reported the name
+- **WHEN** a delivered report cites `IMF:WEO(1.0.0)`, and the list-datasets tool reported the name
   `World Economic Outlook` and the URL `https://portal.example.org/datasets/imf-weo`
 - **THEN** that row's first cell SHALL carry one marker tag, and its annotation SHALL carry type
   `text/html`, that URL unchanged, no `body.quote`, no selector, and both labels reading
@@ -1424,19 +1448,19 @@ than warning on each report. The other
 five SHALL each be a WARNING — an id missing from an otherwise valid response included, since it
 costs the reader a pill the report was written to offer.
 
-**A failure of the dataset-metadata call costs the dataset citations their pills**, and is graded
+**A failure of the list-datasets call costs the dataset citations their pills**, and is graded
 exactly as the file-sharing failures are, for the same reason: it is the one resolution that makes a
 dataset citation convertible. On any of the following the app SHALL deliver the report with every
 dataset marker left as text, and SHALL convert whatever document citations it otherwise would:
 
-- no dataset server configured, and so no dataset-metadata tool;
+- no dataset server configured, and so no list-datasets tool;
 - the configured tool is absent from the server's advertised tools;
 - the tool call raises, times out, or reports an error;
 - the tool returns no structured result;
 - the structured result cannot be read as a list of dataset records;
 - a cited dataset id is missing from an otherwise valid answer, or its record carries no usable URL.
 
-**No configured dataset-metadata tool is not a failure** and SHALL be recorded at DEBUG, for the
+**No configured list-datasets tool is not a failure** and SHALL be recorded at DEBUG, for the
 reason the absent file-sharing tool is: a dataset server must name the tool, so only a deployment
 with no dataset server can be configured that way, and such a channel cites no dataset — warning on
 every report it delivers would report its configuration as a fault. The other five SHALL each be a
@@ -1578,6 +1602,7 @@ turn.
   be emitted, and the delivered text SHALL carry no marker tag — differing from the settled draft
   only where the link pass removed something and where the References section says that nothing was
   cited
+
 ### Requirement: Data-query records are captured from the turn's tool results
 
 A data-query citation needs four things the report does not hold: the address that opens the cited
@@ -1677,7 +1702,7 @@ and each is decided by one field:
   greater than zero. This term decides the report review: only such a query may be cited
   (**report-composition**).
 - **The query's dataset** is the dataset whose URN the record's structured element carries as
-  `datasetUrn`. Its name, its last-update date and its page URL are what the dataset-metadata tool
+  `datasetUrn`. Its name, its last-update date and its page URL are what the list-datasets tool
   reports for that URN.
 
 The first two terms are independent of each other. A query that returned data may lack an explorer
@@ -1834,12 +1859,12 @@ is not known, and in its `body.quote`:
 - **`body.source.attachment.type`** SHALL be `text/html`, because the URL is a page on the web, and
   that type is what makes the client's card offer the open-in-browser action.
 - **`body.source.attachment.url`** SHALL be the captured data explorer URL, carried verbatim. The
-  dataset's page URL SHALL NOT be used by a data-query annotation, even when the dataset-metadata
+  dataset's page URL SHALL NOT be used by a data-query annotation, even when the list-datasets
   tool reports one: the page belongs to a `[dataset <urn>]` citation and to the dataset's References
   row.
 - **`body.source.attachment.title`**, the pill, names the query's dataset, and falls back
   through three forms:
-  1. **`<name> dataset`**, where the name is the one the dataset-metadata tool reported for the
+  1. **`<name> dataset`**, where the name is the one the list-datasets tool reported for the
      query's dataset URN;
   2. **`<urn> dataset`**, the structured element's `datasetUrn`, when the tool reported no name for
      it — the catalogue carries no record for the URN, or the call failed;
@@ -1855,7 +1880,7 @@ is not known, and in its `body.quote`:
   pill and every References row.
 - **`body.title`**, the card's title, SHALL carry the pill's leading part whole. After a dataset
   name or a URN it goes on with ` dataset`, and then with **` - last update <date>`** when the
-  dataset-metadata tool reported a last-update date for the query's dataset URN, as in
+  list-datasets tool reported a last-update date for the query's dataset URN, as in
   `World Economic Outlook dataset - last update 2025-04-30`. Without a date it SHALL read
   `<name> dataset` or `<urn> dataset` alone. Where the pill reads `data_query <id>`, so does the
   card title.
@@ -1937,7 +1962,7 @@ sources, one opening the data and one opening the dataset's page.
 #### Scenario: A catalogue failure costs only the name and the date
 
 - **WHEN** a cited query was captured with a data explorer URL and a `datasetUrn`, and the
-  dataset-metadata call fails
+  list-datasets call fails
 - **THEN** the citation SHALL still become a pill, labelled `<urn> dataset`, and its card title SHALL
   read `<urn> dataset` with no last-update part
 
@@ -1969,9 +1994,10 @@ citation of a **query with an explorer link** whose record names **the query's d
 capture requirement defines both terms) SHALL count as a citation of that dataset, at the position
 of that marker. This covers exactly two things:
 
-- **The dataset-metadata call.** The app SHALL call the dataset-metadata tool on a turn whose report
-  cites at least one dataset directly or through such a query, and SHALL select the catalogue
-  records of both sets of URNs, still in one call.
+- **The catalogue records.** The app SHALL select, from the turn's one catalogue answer, the
+  records of the URNs cited either way. The answer is the one the data-sources fetch obtained at
+  the start of the turn, or, when that fetch's list call failed, the one the first check or the
+  delivery obtained (see the requirement on looking cited identifiers up once per turn).
 - **The References section.** The dataset table SHALL carry one row for each distinct dataset cited
   either way, ordered by where the dataset is first cited in either form. The row is the row a
   `[dataset <urn>]` citation of the same dataset produces: its cells read the catalogue record, its
@@ -2003,8 +2029,9 @@ a query without one is a query the report should not have cited.
 - **WHEN** the report cites `[data_query dq_0000000001]` and `[data_query dq_0000000002]`, both
   captured with a data explorer URL and the `datasetUrn` `IMF:WEO(1.0.0)`, and never cites
   `[dataset IMF:WEO(1.0.0)]`
-- **THEN** the dataset-metadata tool SHALL be called once, and the dataset table SHALL carry exactly
-  one row for `IMF:WEO(1.0.0)`, opening the dataset's page when the catalogue reported one
+- **THEN** the list-datasets tool SHALL have been called once in the turn, and the dataset table
+  SHALL carry exactly one row for `IMF:WEO(1.0.0)`, opening the dataset's page when the catalogue
+  reported one
 
 #### Scenario: A dataset cited both ways is listed once
 
@@ -2018,15 +2045,15 @@ a query without one is a query the report should not have cited.
 
 - **WHEN** the report's only dataset-server citation is `[data_query dq_ffffffffff]`, which the turn
   never captured
-- **THEN** the dataset-metadata tool SHALL NOT be called, and the section SHALL carry no dataset
-  table
+- **THEN** the delivery SHALL NOT call the list-datasets tool, and the section SHALL carry no
+  dataset table
 
 #### Scenario: A query without an explorer link contributes no row
 
 - **WHEN** the report's only dataset-server citation is a query captured with the `datasetUrn`
   `IMF:WEO(1.0.0)` and no data explorer URL
-- **THEN** the dataset-metadata tool SHALL NOT be called, and the section SHALL carry no dataset
-  table
+- **THEN** the delivery SHALL NOT call the list-datasets tool, and the section SHALL carry no
+  dataset table
 
 #### Scenario: A query without a dataset URN gets a text row
 
@@ -2039,12 +2066,14 @@ a query without one is a query the report should not have cited.
 
 The report review checks that every dataset and document a draft cites is one its server knows
 (**report-composition** owns the checks and their wording). It learns that from the same two
-surfaces the delivery reads — the dataset-metadata tool and the document-metadata resource — and
+surfaces the delivery reads — the list-datasets tool and the document-metadata resource — and
 the two SHALL share one set of lookups per turn rather than ask the servers twice:
 
-- **The catalogue** is fetched by the first check of a draft that cites a dataset, directly or
-  through a cited query with an explorer link and a dataset URN, and a successful answer serves
-  every later check and the delivery.
+- **The catalogue** is the answer of the data-sources fetch at the start of the turn (see
+  **data-sources-discovery**), when that fetch's list-datasets call succeeded, and it serves every
+  check and the delivery. When that call failed, the catalogue is fetched by the first check of a
+  draft that cites a dataset, directly or through a cited query with an explorer link and a
+  dataset URN, and a successful answer serves every later check and the delivery.
 - **Document metadata** is read, per check, for the cited document ids not yet looked up, in one
   resource read per check. An id's answer, including its absence from the answer, serves every
   later check and the delivery; the delivery reads only ids no check has looked up.
@@ -2081,5 +2110,114 @@ Page indices are **not** checked: whether a cited page exists in a document is d
 
 #### Scenario: A failed catalogue call flags nothing
 
-- **WHEN** a reviewed draft cites `[dataset IMF:WEO(1.0.0)]` and the dataset-metadata call fails
+- **WHEN** a reviewed draft cites `[dataset IMF:WEO(1.0.0)]` and the list-datasets call fails
 - **THEN** the review SHALL report no dataset as unknown, and the delivery SHALL call the tool again
+
+### Requirement: Cited glossary terms are listed in a glossary table
+
+On a channel that configures a glossary (see **application-config-schema**), the References section
+SHALL list every glossary term the delivered report cites in a table of its own, after the server
+tables. The table SHALL be built by the app, like every other References table.
+
+**Finding and rewriting the citations.** The app SHALL find every glossary marker in the settled
+draft: `[glossary <term>]`, the form **research-execution** defines, with the keyword read
+case-insensitively and spaces allowed around it and around the term, the way the other markers are
+read. The term is the text after the keyword, with surrounding whitespace trimmed. Two markers whose
+terms match after trimming and case-folding SHALL be one cited term.
+
+The citation conversion SHALL rewrite glossary markers into a readable form, run by run. A **run**
+is what the requirement on adjacent citations defines: markers separated only by spaces, commas or
+semicolons, and a glossary marker counts as a marker of the run it stands in. A glossary marker
+standing alone is a run of its own.
+
+- **The glossary markers leave their place in the run**, so they never split it: the run's other
+  markers fold into one tag, and keep their marker text where they fail, exactly as if the glossary
+  markers were absent.
+- **One readable group ends the run**, after the tag and after any marker text the run keeps,
+  separated from them by one space. With one distinct term it reads `(<term> - glossary term)`.
+  With several it reads `("<term 1>", "<term 2>" - glossary terms)`, the terms in the order the run
+  cited them, each in double quotes, separated by a comma and a space. Two markers in one run whose
+  terms match after trimming and case-folding are one term, written as the first one wrote it.
+- The group produces no marker tag, no annotation and no pill: a glossary term has no page to open.
+ When the
+conversion fails, the rule that a failed conversion delivers every citation marker in place applies,
+and the glossary markers are delivered as the writer wrote them.
+
+**The table.** It SHALL open with a `###` sub-heading carrying the glossary's configured table
+title, and its header row SHALL be the columns the glossary's `references_table` configures, in the
+configured order. It SHALL carry one row per distinct cited term, ordered by where the term is first
+cited. Each cell SHALL read, from the term's record, the field its column's key names. The first
+column SHALL fall back to the term as the report wrote it when its key resolves nothing, and every
+other cell SHALL be empty when its key resolves nothing.
+
+**The term's record.** The app SHALL take the record of a cited term, matched by the same trimmed,
+case-folded name, from the first of these sources that holds it:
+
+1. the app's own glossary fetch: a resolved term's record in the term-definitions answer, or an
+   unresolved term's record in the list-terms answer (see **data-sources-discovery**);
+2. the research agent's successful term-definitions results in the turn's transcript, selected by
+   the configured term-definitions tool name and read with the same shape rules the fetch applies;
+3. the research agent's successful list-terms results, selected and read the same way.
+
+A record that carries a `definition` SHALL be preferred over one that does not, whichever source it
+comes from. A cited term found in none of them SHALL still get a row, carrying the term as written
+in its first cell: every cited source gets a row.
+
+A channel without a glossary SHALL NOT parse glossary citations and SHALL carry no glossary table. A
+report that cites no glossary term SHALL carry no glossary table.
+
+A failure while building the table SHALL cost the table and nothing else, as the rule that a
+citation failure costs the citations and never the report requires.
+
+#### Scenario: Two cited terms are listed with their definitions
+
+- **WHEN** the glossary table's columns are `Term` reading `term` and `Definition` reading
+  `definition`, and the report cites `[glossary World Economic Outlook]` and later
+  `[glossary Primary Commodity Prices]`, both resolved by the app's fetch
+- **THEN** the glossary table SHALL carry two rows, World Economic Outlook first, each with its
+  definition
+
+#### Scenario: A term only the agent resolved takes the agent's definition
+
+- **WHEN** the app's fetch left `Primary Commodity Prices` unresolved, the research agent's
+  term-definitions call returned its definition, and the report cites it
+- **THEN** its row SHALL carry the definition from the agent's result
+
+#### Scenario: A term found nowhere still gets a row
+
+- **WHEN** the report cites `[glossary Market Outlook 2025]` and no glossary record matches it
+- **THEN** the glossary table SHALL carry a row whose first cell reads `Market Outlook 2025` and whose
+  other cells are empty
+
+#### Scenario: A glossary marker is delivered in the readable form
+
+- **WHEN** the settled draft cites `[glossary World Economic Outlook]`
+- **THEN** the delivered text SHALL carry `(World Economic Outlook - glossary term)` in its place,
+  and no annotation SHALL be emitted for it
+
+#### Scenario: A glossary marker inside a run does not split the pill
+
+- **WHEN** a sentence ends `… 2.9% [dataset IMF:WEO(1.0.0)] [glossary Primary Commodity Prices]
+  [dataset IMF:DIRECTION_OF_TRADE_STATISTICS(1.0.0)].` and both datasets resolve a page URL
+- **THEN** the two dataset citations SHALL fold into one tag, and the delivered text SHALL read
+  `… 2.9% <tag> (Primary Commodity Prices - glossary term).`
+
+#### Scenario: Several glossary terms in one run form one group
+
+- **WHEN** a run holds `[glossary World Economic Outlook]` and then
+  `[glossary Primary Commodity Prices]`
+- **THEN** the delivered text SHALL carry
+  `("World Economic Outlook", "Primary Commodity Prices" - glossary terms)` at the end of the run
+
+#### Scenario: The keyword is read case-insensitively
+
+- **WHEN** the settled draft cites `[Glossary  World Economic Outlook ]`
+- **THEN** the app SHALL read it as a citation of `World Economic Outlook` and deliver
+  `(World Economic Outlook - glossary term)`
+
+#### Scenario: No glossary means no table
+
+- **WHEN** a channel configures no glossary and the report happens to contain the text
+  `[glossary World Economic Outlook]`
+- **THEN** the text SHALL be delivered as written, and the References section SHALL carry no
+  glossary table
