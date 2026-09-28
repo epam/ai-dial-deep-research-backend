@@ -19,6 +19,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.types import ValuesStreamPart
 from pytest import MonkeyPatch
 
+from dial_deep_research.app.data_sources import DataSources
 from dial_deep_research.app.history import Plan, PrepState
 from dial_deep_research.app.mcp_tools import LoadedMcpTools
 from dial_deep_research.app.research import runner as runner_module
@@ -62,6 +63,8 @@ async def _deliver(runner: ResearchRunner) -> None:
         references_heading="References",
         references_empty_text="This report cites no source.",
         references_tables=(),
+        glossary=None,
+        data_sources=DataSources(text="The topics map."),
     )
 
 
@@ -235,7 +238,7 @@ def _stub_graph_build(monkeypatch: MonkeyPatch, captured: dict[str, Any]) -> Non
         return LoadedMcpTools(
             agent_tools=[],
             file_sharing_tool=None,
-            dataset_metadata_tool=None,
+            list_datasets_tool=None,
             client=None,
             data_queries=DataQueryStore(),
         )
@@ -249,7 +252,11 @@ async def test_step_budget_comes_from_the_channel_properties(monkeypatch: Monkey
     _stub_graph_build(monkeypatch, captured)
     runner, _ = _make_runner()
 
-    await runner.run(_approved_prep_state(), properties=_properties(max_research_graph_steps=42))
+    await runner.run(
+        _approved_prep_state(),
+        properties=_properties(max_research_graph_steps=42),
+        data_sources=DataSources(text="The topics map."),
+    )
 
     assert captured["config"]["recursion_limit"] == 42
 
@@ -259,7 +266,11 @@ async def test_step_budget_defaults_to_500(monkeypatch: MonkeyPatch) -> None:
     _stub_graph_build(monkeypatch, captured)
     runner, _ = _make_runner()
 
-    await runner.run(_approved_prep_state(), properties=_properties())
+    await runner.run(
+        _approved_prep_state(),
+        properties=_properties(),
+        data_sources=DataSources(text="The topics map."),
+    )
 
     assert captured["config"]["recursion_limit"] == 500
 

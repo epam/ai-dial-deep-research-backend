@@ -81,7 +81,11 @@ the call resolves; only token usage is unavailable.
 
 At INFO level the service SHALL emit a metadata-only request lifecycle skeleton, each event a
 stable message prefix plus `key=value` fields: (1) request received — deployment, message count,
-owned by the chat completion; (2) preparation completed — duration, `research_started`, plan
+owned by the chat completion; (1a) datasets fetched — server name, list-datasets attempts, dataset
+count (absent when the list failed), structures requested, obtained and not obtained, and duration, owned
+by the data-sources fetch and fired on every turn of a channel with a dataset server; (1b) glossary
+fetched — the fields **data-sources-discovery** lists for it, owned by the same fetch and fired on
+every turn of a channel that configures a glossary; (2) preparation completed — duration, `research_started`, plan
 step count, outstanding question count, owned by `DeepResearchCompletion`; (3) model call
 completed — agent name, duration, message count, finish kind, requested tool names, content
 length, token usage when available including the cached-input-token count, owned by a model-call
@@ -116,7 +120,7 @@ the number of distinct document ids the step requested, which is the documents c
 can be drawn rather than every document the report names, the number of those the file-sharing
 tool returned a URL for, the number of those a publication title resolved for through the
 document-metadata resource, the number of distinct dataset ids the step requested and the number of
-those the dataset-metadata tool reported a usable page URL for, the number of distinct query ids the
+those the list-datasets tool reported a usable page URL for, the number of distinct query ids the
 step requested and the number of those the turn captured as queries with an explorer link — a
 usable data explorer URL — the number of citations converted
 into annotations — which leaves out the annotations of References rows that became pills, since a
@@ -174,10 +178,10 @@ document citations to convert, so this is a routine expected outcome of every tu
 recorded at DEBUG (see **report-citations**).
 
 A **dataset that could not be resolved** is recorded the way an unresolved document is, because it
-costs the same thing — a pill. The dataset-metadata call raising, an answer carrying no structured
+costs the same thing — a pill. The list-datasets call raising, an answer carrying no structured
 result, and an answer that cannot be read as a list of dataset records SHALL each be one WARNING
 naming the failure kind, beside the (8c) event. A channel that configures **no dataset server**, and so no
-dataset-metadata tool, SHALL be recorded at DEBUG, for the reason the absent file-sharing tool is:
+list-datasets tool, SHALL be recorded at DEBUG, for the reason the absent file-sharing tool is:
 such a channel cites no dataset, so warning on every report it delivers would report its
 configuration as a fault. A
 **dataset the catalogue reports without a page URL** SHALL NOT warn at all — whether a dataset has a
@@ -348,21 +352,21 @@ every record, and how many ids a response omitted says everything a reader of th
 #### Scenario: A turn citing datasets reads the dataset counts in the skeleton
 
 - **WHEN** a turn delivers a report citing two documents and three datasets, the file-sharing tool
-  resolves both documents, and the dataset-metadata tool reports a page URL for two of the three
+  resolves both documents, and the list-datasets tool reports a page URL for two of the three
   datasets
 - **THEN** the (8c) event SHALL state three dataset ids requested and two resolved, beside the
   document counts, and SHALL carry no dataset name, no page URL and no dataset id
 
 #### Scenario: A channel serving no datasets does not warn on every turn
 
-- **WHEN** an instance configured with no dataset server — and so with no dataset-metadata tool —
+- **WHEN** an instance configured with no dataset server — and so with no list-datasets tool —
   delivers a report that carries a dataset citation marker all the same
 - **THEN** the (8c) event SHALL fire with zero datasets resolved, the record naming the absent
   configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
 
 #### Scenario: A dataset with no portal page is not a warning
 
-- **WHEN** the dataset-metadata tool answers with a record for every cited dataset, one of which
+- **WHEN** the list-datasets tool answers with a record for every cited dataset, one of which
   carries no URL
 - **THEN** no WARNING SHALL be emitted for that dataset, and the gap between the requested and
   resolved dataset counts on the (8c) event SHALL be the only record of it
@@ -449,7 +453,7 @@ the citation step, naming the failure kind, beside the (8c) event, which fires e
 It is a WARNING rather than an ERROR because it costs the section and nothing else: the report is
 delivered, every pill the conversion earned is delivered with it, and no citation is lost. It is a
 WARNING rather than a DEBUG because, unlike an absent file-sharing tool or an absent
-dataset-metadata tool, it is never a configuration a deployment chose — the build reads data the
+list-datasets tool, it is never a configuration a deployment chose — the build reads data the
 step already holds, so a failure in it is a fault in this application.
 
 The record SHALL carry the failure kind and nothing drawn from a source: a row's cell values are

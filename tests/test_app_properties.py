@@ -359,7 +359,7 @@ def test_one_server_of_each_type_is_accepted() -> None:
                     "columns": [{"heading": "Datasets", "key": "name"}],
                 },
                 "deployment_id": "b",
-                "dataset_metadata_tool": "list_datasets",
+                "list_datasets_tool": "list_datasets",
                 "data_query_meta_key": "acme.example.org/client",
             },
         ],
@@ -424,7 +424,7 @@ def test_two_dataset_servers_are_rejected_too() -> None:
                     "columns": [{"heading": "Datasets", "key": "name"}],
                 },
                 "deployment_id": "a",
-                "dataset_metadata_tool": "list_datasets",
+                "list_datasets_tool": "list_datasets",
                 "data_query_meta_key": "acme.example.org/client",
             },
             {
@@ -435,7 +435,7 @@ def test_two_dataset_servers_are_rejected_too() -> None:
                     "columns": [{"heading": "Datasets", "key": "name"}],
                 },
                 "deployment_id": "b",
-                "dataset_metadata_tool": "list_datasets",
+                "list_datasets_tool": "list_datasets",
                 "data_query_meta_key": "acme.example.org/client",
             },
         ],
@@ -470,7 +470,7 @@ def test_a_dataset_server_may_leave_the_file_sharing_tool_unset() -> None:
                 "columns": [{"heading": "Datasets", "key": "name"}],
             },
             "deployment_id": "x",
-            "dataset_metadata_tool": "list_datasets",
+            "list_datasets_tool": "list_datasets",
             "data_query_meta_key": "acme.example.org/client",
         }
     )
@@ -514,7 +514,7 @@ def test_one_server_may_name_a_file_sharing_tool() -> None:
                     "columns": [{"heading": "Datasets", "key": "name"}],
                 },
                 "deployment_id": "b",
-                "dataset_metadata_tool": "list_datasets",
+                "list_datasets_tool": "list_datasets",
                 "data_query_meta_key": "acme.example.org/client",
             },
         ],
@@ -536,7 +536,7 @@ def test_no_server_naming_one_switches_inline_citations_off() -> None:
                     "columns": [{"heading": "Datasets", "key": "name"}],
                 },
                 "deployment_id": "a",
-                "dataset_metadata_tool": "list_datasets",
+                "list_datasets_tool": "list_datasets",
                 "data_query_meta_key": "acme.example.org/client",
             }
         ],
@@ -626,7 +626,7 @@ def test_duplicate_server_names_are_rejected() -> None:
                     "columns": [{"heading": "Datasets", "key": "name"}],
                 },
                 "deployment_id": "b",
-                "dataset_metadata_tool": "list_datasets",
+                "list_datasets_tool": "list_datasets",
                 "data_query_meta_key": "acme.example.org/client",
             },
         ],
@@ -957,7 +957,7 @@ def test_properties_expose_the_one_configured_title_source() -> None:
                     "columns": [{"heading": "Datasets", "key": "name"}],
                 },
                 "deployment_id": "b",
-                "dataset_metadata_tool": "list_datasets",
+                "list_datasets_tool": "list_datasets",
                 "data_query_meta_key": "acme.example.org/client",
             },
         ],
@@ -995,7 +995,7 @@ def test_a_pill_title_budget_too_small_to_be_useful_is_rejected() -> None:
         ApplicationProperties.model_validate({**VALID_PROPERTIES, "max_pill_title_chars": 3})
 
 
-# --- the dataset-metadata tool ------------------------------------------------------------------
+# --- the list-datasets tool ------------------------------------------------------------------
 
 
 def _dataset_server(**overrides: object) -> dict[str, object]:
@@ -1007,20 +1007,18 @@ def _dataset_server(**overrides: object) -> dict[str, object]:
             "columns": [{"heading": "Datasets", "key": "name"}],
         },
         "deployment_id": "b",
-        "dataset_metadata_tool": "list_datasets",
+        "list_datasets_tool": "list_datasets",
         "data_query_meta_key": "acme.example.org/client",
         **overrides,
     }
 
 
-def test_a_dataset_server_may_name_its_dataset_metadata_tool() -> None:
-    server = MCPClientSettings.model_validate(
-        _dataset_server(dataset_metadata_tool="list_datasets")
-    )
-    assert server.dataset_metadata_tool == "list_datasets"
+def test_a_dataset_server_may_name_its_list_datasets_tool() -> None:
+    server = MCPClientSettings.model_validate(_dataset_server(list_datasets_tool="list_datasets"))
+    assert server.list_datasets_tool == "list_datasets"
 
 
-def test_a_dataset_server_naming_no_dataset_metadata_tool_is_rejected() -> None:
+def test_a_dataset_server_naming_no_list_datasets_tool_is_rejected() -> None:
     """Without the tool every dataset citation ships as a bare URN, which opens nothing."""
     with pytest.raises(ValidationError) as excinfo:
         MCPClientSettings.model_validate(
@@ -1031,31 +1029,124 @@ def test_a_dataset_server_naming_no_dataset_metadata_tool_is_rejected() -> None:
                 "references_table": _DATASETS_TABLE,
             }
         )
-    assert "must name its dataset_metadata_tool" in str(excinfo.value)
+    assert "must name its list_datasets_tool" in str(excinfo.value)
 
 
-def test_only_a_dataset_server_may_name_a_dataset_metadata_tool() -> None:
+def test_only_a_dataset_server_may_name_a_list_datasets_tool() -> None:
     """A document server serves no datasets, so a tool named there would never be called."""
     with pytest.raises(ValidationError) as excinfo:
-        MCPClientSettings.model_validate(_document_server(dataset_metadata_tool="list_datasets"))
-    assert "only a statgpt server may set dataset_metadata_tool" in str(excinfo.value)
+        MCPClientSettings.model_validate(_document_server(list_datasets_tool="list_datasets"))
+    assert "only a statgpt server may set list_datasets_tool" in str(excinfo.value)
 
 
-def test_properties_expose_the_one_configured_dataset_metadata_tool() -> None:
+def test_properties_expose_the_one_configured_list_datasets_tool() -> None:
     data = {
         **VALID_PROPERTIES,
         "mcp_servers": [
             _document_server(),
-            _dataset_server(dataset_metadata_tool="list_datasets"),
+            _dataset_server(list_datasets_tool="list_datasets"),
         ],
     }
-    assert ApplicationProperties.model_validate(data).dataset_metadata_tool == "list_datasets"
+    assert ApplicationProperties.model_validate(data).list_datasets_tool == "list_datasets"
 
 
-def test_properties_expose_no_dataset_metadata_tool_when_no_dataset_server_is_configured() -> None:
+def test_properties_expose_no_list_datasets_tool_when_no_dataset_server_is_configured() -> None:
     """A dataset server must name one, so `None` means this channel serves no datasets."""
     data = {**VALID_PROPERTIES, "mcp_servers": [_document_server()]}
-    assert ApplicationProperties.model_validate(data).dataset_metadata_tool is None
+    assert ApplicationProperties.model_validate(data).list_datasets_tool is None
+
+
+# --- the dataset-structure tool ------------------------------------------------------------------
+
+
+def test_a_dataset_server_may_name_a_dataset_structure_tool() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "mcp_servers": [_dataset_server(dataset_structure_tool="describe_dataset")],
+    }
+    tool = ApplicationProperties.model_validate(data).dataset_structure_tool
+    assert tool is not None
+    assert (tool.server_name, tool.tool_name) == ("datasets", "describe_dataset")
+
+
+def test_a_dataset_server_without_a_dataset_structure_tool_is_valid() -> None:
+    data = {**VALID_PROPERTIES, "mcp_servers": [_dataset_server()]}
+    assert ApplicationProperties.model_validate(data).dataset_structure_tool is None
+
+
+def test_only_a_dataset_server_may_name_a_dataset_structure_tool() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(
+            _document_server(server_name="docs", dataset_structure_tool="describe_dataset")
+        )
+    message = str(excinfo.value)
+    assert "'docs'" in message
+    assert "only a statgpt server may name a dataset_structure_tool" in message
+
+
+# --- the glossary --------------------------------------------------------------------------------
+
+_GLOSSARY: dict = {
+    "list_terms_tool": "list_terms",
+    "definitions_tool": "define_terms",
+    "max_terms_per_definitions_call": 10,
+    "references_table": {
+        "title": "Glossary",
+        "columns": [
+            {"heading": "Term", "key": "term"},
+            {"heading": "Definition", "key": "definition"},
+        ],
+    },
+}
+
+
+def test_a_dataset_server_may_declare_a_glossary() -> None:
+    data = {**VALID_PROPERTIES, "mcp_servers": [_dataset_server(glossary=_GLOSSARY)]}
+    glossary = ApplicationProperties.model_validate(data).glossary
+    assert glossary is not None
+    assert glossary.server_name == "datasets"
+    assert glossary.tools.list_terms_tool == "list_terms"
+    assert glossary.tools.max_terms_per_definitions_call == 10
+    assert glossary.tools.references_table.title == "Glossary"
+
+
+def test_a_dataset_server_without_a_glossary_is_valid() -> None:
+    data = {**VALID_PROPERTIES, "mcp_servers": [_dataset_server()]}
+    assert ApplicationProperties.model_validate(data).glossary is None
+
+
+def test_only_a_dataset_server_may_declare_a_glossary() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(_document_server(server_name="docs", glossary=_GLOSSARY))
+    message = str(excinfo.value)
+    assert "'docs'" in message
+    assert "only a statgpt server may declare a glossary" in message
+
+
+@pytest.mark.parametrize(
+    ("change", "field"),
+    [
+        ({"max_terms_per_definitions_call": None}, "max_terms_per_definitions_call"),
+        ({"references_table": None}, "references_table"),
+        ({"max_terms_per_definitions_call": 0}, "max_terms_per_definitions_call"),
+        ({"list_terms_tool": ""}, "list_terms_tool"),
+        ({"unknown_field": "x"}, "unknown_field"),
+    ],
+)
+def test_an_incomplete_glossary_is_rejected(change: dict, field: str) -> None:
+    """A missing field, a limit of 0, an empty name and a misspelled field all fail validation."""
+    glossary = {**_GLOSSARY, **change}
+    glossary = {key: value for key, value in glossary.items() if value is not None}
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(_dataset_server(glossary=glossary))
+    assert field in str(excinfo.value)
+
+
+def test_a_glossary_naming_one_tool_for_both_roles_is_rejected() -> None:
+    glossary = {**_GLOSSARY, "definitions_tool": _GLOSSARY["list_terms_tool"]}
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(_dataset_server(glossary=glossary))
+    assert "list_terms_tool and definitions_tool both name the same tool" in str(excinfo.value)
 
 
 # --- the data-query meta key ---------------------------------------------------------------------
@@ -1219,7 +1310,7 @@ def test_the_references_tables_follow_the_configured_server_order() -> None:
                 "server_name": "datasets",
                 "server_type": "statgpt",
                 "deployment_id": "statgpt-mcp",
-                "dataset_metadata_tool": "list_datasets",
+                "list_datasets_tool": "list_datasets",
                 "data_query_meta_key": "acme.example.org/client",
                 "references_table": _DATASETS_TABLE,
             },

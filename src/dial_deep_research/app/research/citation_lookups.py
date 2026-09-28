@@ -2,10 +2,11 @@
 
 The report review checks that every dataset URN and document id a draft cites is one its server
 knows, and the delivery labels and lists the same sources. Both ask the same two surfaces — the
-dataset-metadata tool and the document-metadata resource — so one object per request holds what
+list-datasets tool and the document-metadata resource — so one object per request holds what
 they answered, and neither surface is asked twice about the same thing:
 
-- the catalogue, fetched once and cached only after a successful call;
+- the catalogue, taken from the data-sources fetch at the start of the turn when its list call
+  succeeded, and otherwise fetched once and cached only after a successful call;
 - each document id's metadata, where an id absent from a successful answer is recorded as unknown.
 
 A failed lookup caches nothing, so the ids it was asked about stay "not looked up": no check
@@ -46,10 +47,14 @@ logger = logging.getLogger(__name__)
 class CitationLookups:
     """The catalogue and the document metadata this turn has looked up, and the means to ask.
 
-    `dataset_tool` is the dataset-metadata tool the server advertised, and `document_source` the
+    `dataset_tool` is the list-datasets tool the server advertised, and `document_source` the
     configured document-metadata resource; either is `None` on a channel without that server, and
     then every id of its kind stays not looked up. `data_queries` is read to find the dataset a
     cited query ran against.
+
+    `catalogue` is the catalogue the data-sources fetch obtained at the start of the turn, or
+    `None` when that fetch's list call failed; the tool is then called the first time a catalogue
+    is needed.
     """
 
     def __init__(
@@ -59,18 +64,20 @@ class CitationLookups:
         client: MultiServerMCPClient,
         document_source: DocumentMetadataSource | None,
         data_queries: DataQueryStore,
+        catalogue: dict[str, DatasetSource] | None = None,
     ) -> None:
         self._dataset_tool = dataset_tool
         self._client = client
         self._document_source = document_source
         self._data_queries = data_queries
-        self._catalogue: dict[str, DatasetSource] | None = None
+        self._catalogue = catalogue
         # `None` for an id a successful answer omitted, which is what "unknown" means.
         self._documents: dict[int, dict[str, Any] | None] = {}
 
     @property
-    def has_dataset_tool(self) -> bool:
-        return self._dataset_tool is not None
+    def has_dataset_catalogue(self) -> bool:
+        """Whether a catalogue is held or can be fetched: a seeded one, or the tool to call."""
+        return self._catalogue is not None or self._dataset_tool is not None
 
     @property
     def document_source(self) -> DocumentMetadataSource | None:
@@ -87,7 +94,7 @@ class CitationLookups:
         """
         if self._catalogue is None:
             if self._dataset_tool is None:
-                raise ValueError("no dataset-metadata tool is available")
+                raise ValueError("no list-datasets tool is available")
             self._catalogue = await read_catalogue(tool=self._dataset_tool)
         return select_cited(self._catalogue, dataset_ids=dataset_ids)
 

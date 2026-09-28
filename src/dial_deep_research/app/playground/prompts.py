@@ -27,5 +27,7 @@ don't repeat the disclaimer.
 ## Data sources
 
 Your tools give you access to the following data sources:
+<data_sources>
 {data_sources_descriptions}
-"""
+</data_sources>
+{data_sources_instructions}"""

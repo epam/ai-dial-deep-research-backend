@@ -71,7 +71,12 @@ SHALL expose:
   demanded. The last permitted version is delivered without another review. `1` disables the
   review: the first draft is delivered unreviewed.
 - `prompts` — a nested required model with three required, non-empty (`min_length=1`) string
-  fields: `client_name`, `agent_name`, `data_sources_descriptions`.
+  fields: `client_name`, `agent_name`, `data_sources_descriptions`. The field description of
+  `data_sources_descriptions` SHALL tell the admin to write in it only what the app does not fetch
+  from the servers itself, and SHALL name what the app fetches: the list of datasets, their
+  structures when a dataset-structure tool is configured, and the glossary when one is configured
+  (see **data-sources-discovery**). The app appends what it fetched after this text, so a channel
+  that also describes its datasets here shows the models each dataset twice.
 
 The model SHALL NOT carry a deployment id (`channel_name` is dropped — instance identity
 lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
@@ -280,7 +285,7 @@ attributes its results differently, with documents that have no pages or with we
 files, cannot be expressed in the citation format at all, so admitting it is a change to that
 format and to its parser rather than a configuration entry. Naming the supported servers is
 therefore the honest statement of what this application works with; the open contracts are the
-file-sharing tool and the dataset-metadata tool below, whose **names** any server may choose.
+file-sharing tool and the list-datasets tool below, whose **names** any server may choose.
 
 `ApplicationProperties` SHALL reject a configuration carrying **more than one** server of the same
 type, with a validation error naming the type and the offending servers. Each server numbers its
@@ -448,7 +453,7 @@ resource.
 
 **A `generic_rag` server SHALL name both**, and a configuration where one names neither SHALL be
 rejected with a validation error naming that server. The rule is the `file_sharing_tool` rule, for
-the same reason it is the `dataset_metadata_tool` rule: a document citation carries an integer id
+the same reason it is the `list_datasets_tool` rule: a document citation carries an integer id
 that means something only inside the server that issued it, so a channel with no metadata resource
 labels every pill `doc <id>, page <ix>` — a number the reader cannot place against any publication
 they know. A document server is in a deployment to have its publications cited, and a citation
@@ -521,19 +526,22 @@ than a validation error — what a server serves is known only when it is read, 
 - **WHEN** a configuration carries a `statgpt` server and no `generic_rag` server
 - **THEN** validation SHALL pass, and no document-metadata resource SHALL be configured
 
-### Requirement: MCP server declares its dataset-metadata tool
+### Requirement: MCP server declares its list-datasets tool
 
-`MCPClientSettings` SHALL expose one string field, `dataset_metadata_tool`, naming the tool this
-server advertises for the app to call in order to learn a cited dataset's name and the address of
-its page. The **report-citations** capability owns what that tool must do; this field carries only
-its name, and the name is the only thing the app knows about the tool before calling it.
+`MCPClientSettings` SHALL expose one string field, `list_datasets_tool`, naming the tool this
+server advertises for the app to call in order to list the channel's datasets. The app calls it
+at the start of every turn, to show the models which datasets exist, and reads the same answer to
+learn a cited dataset's name and the address of its page. The **report-citations** capability
+owns what that tool must do, and **data-sources-discovery** owns how its answer reaches the models;
+this field carries only its name, and the name is the only thing the app knows about the tool
+before calling it.
 
 **Only a `statgpt` server may set it**, and a configuration where any other server type does SHALL
 be rejected with a validation error naming the offending server. Datasets are what a dataset server
 serves, and a `[dataset <id>]` marker names no server, so a second server answering about dataset
 ids would make a citation ambiguous — the same reason `file_sharing_tool` belongs to the document
 server alone. Since at most one server of each type may be configured, at most one configured server
-names a dataset-metadata tool, and that is a consequence of the two rules rather than a third check.
+names a list-datasets tool, and that is a consequence of the two rules rather than a third check.
 
 **A `statgpt` server SHALL name it**, and a configuration where one does not SHALL be rejected
 with a validation error naming that server. The rule is the `file_sharing_tool` rule, for the same
@@ -560,22 +568,23 @@ govern it.
 
 `dial_conf/core/applications-template.json` SHALL set, on every server entry it carries, exactly
 what that entry's `server_type` is required to set — so a dataset server entry there names a
-dataset-metadata tool, and a contributor's seeded channel validates as it stands.
+list-datasets tool, and a contributor's seeded channel validates as it stands.
 
 #### Scenario: A statgpt server names the tool
 
-- **WHEN** a `statgpt` server entry sets `dataset_metadata_tool` to the name of a tool it advertises
-- **THEN** validation SHALL pass and the app SHALL call exactly that tool at the citation step
+- **WHEN** a `statgpt` server entry sets `list_datasets_tool` to the name of a tool it advertises
+- **THEN** validation SHALL pass, and the app SHALL call exactly that tool in the data-sources
+  fetch at the start of every turn
 
 #### Scenario: A generic_rag server naming it is rejected
 
-- **WHEN** a `generic_rag` server entry sets `dataset_metadata_tool`
+- **WHEN** a `generic_rag` server entry sets `list_datasets_tool`
 - **THEN** validation SHALL fail with an error naming that server and stating that only a `statgpt`
-  server may name a dataset-metadata tool
+  server may name a list-datasets tool
 
 #### Scenario: A statgpt server without the field is rejected
 
-- **WHEN** a `statgpt` server entry sets no `dataset_metadata_tool`
+- **WHEN** a `statgpt` server entry sets no `list_datasets_tool`
 - **THEN** validation SHALL fail with an error naming that server and saying that a dataset server
   must name the tool, because its datasets are cited by URN and nothing else turns a URN into a
   page the reader can open
@@ -583,7 +592,7 @@ dataset-metadata tool, and a contributor's seeded channel validates as it stands
 #### Scenario: A channel serving no datasets needs no such tool
 
 - **WHEN** a configuration carries a `generic_rag` server and no `statgpt` server
-- **THEN** validation SHALL pass, no dataset-metadata tool SHALL be configured, and a dataset
+- **THEN** validation SHALL pass, no list-datasets tool SHALL be configured, and a dataset
   marker in a delivered report SHALL keep its text
 
 #### Scenario: The committed template names what each server type requires
@@ -621,7 +630,7 @@ than an object keyed by heading: the order is behavior, not presentation.
 **Every server entry SHALL carry one**, whatever its `server_type`. Every supported server type
 serves sources a report cites, so a server without a table is a server whose cited sources cannot be
 listed — the same reason a `generic_rag` server must name its file-sharing tool and a `statgpt`
-server its dataset-metadata tool. The report structure has no say in it: the References section is
+server its list-datasets tool. The report structure has no say in it: the References section is
 built for every report a channel delivers.
 
 **Requiring it is a breaking configuration change**: an instance whose server entries do not carry a
@@ -757,7 +766,7 @@ let one channel's setting drift away from the server it describes.
 **Only a `statgpt` server may set it**, and a configuration where any other server type does SHALL
 be rejected with a validation error naming the offending server. Data queries are what a dataset
 server runs, and a `[data_query <id>]` marker names no server, so a second server reporting query
-ids would make a citation ambiguous — the same reason `dataset_metadata_tool` belongs to the
+ids would make a citation ambiguous — the same reason `list_datasets_tool` belongs to the
 dataset server alone.
 
 **A `statgpt` server SHALL name it**, and a configuration where one does not SHALL be rejected with
@@ -767,7 +776,7 @@ such an id into a page the reader can open and into the dataset the References s
 dataset server without it would deliver every data-query citation as a bare id in square brackets
 and list none of the datasets those citations drew on.
 
-The cost is the one `dataset_metadata_tool` pays, paid at configuration: an existing channel with a
+The cost is the one `list_datasets_tool` pays, paid at configuration: an existing channel with a
 `statgpt` server that has not set the field fails validation until it does, which the rule on
 invalid properties delivers to the user as "application not configured".
 
@@ -777,7 +786,7 @@ known only once its tools have been called: every data-query citation then keeps
 and the citation step records it (see **logging-policy**).
 
 `dial_conf/core/applications-template.json` SHALL keep setting exactly what each of its server
-entries' types requires, which the dataset-metadata-tool requirement already states. The template
+entries' types requires, which the list-datasets-tool requirement already states. The template
 carries no `statgpt` server, so this field adds nothing to it.
 
 #### Scenario: A statgpt server names its key
@@ -794,7 +803,7 @@ carries no `statgpt` server, so this field adds nothing to it.
 
 #### Scenario: A statgpt server without the key is rejected
 
-- **WHEN** a `statgpt` server entry sets `dataset_metadata_tool` and no `data_query_meta_key`
+- **WHEN** a `statgpt` server entry sets `list_datasets_tool` and no `data_query_meta_key`
 - **THEN** validation SHALL fail with an error naming that server and saying that a dataset server
   must name the key, because its data-query citations are resolved through it
 
@@ -834,3 +843,136 @@ It has a default, so `dial_conf/core/applications-template.json` SHALL NOT set i
 
 - **WHEN** a channel sets `data_query_card_filter_max_line_chars` to `5`, or to null
 - **THEN** validation SHALL raise a pydantic `ValidationError`
+
+### Requirement: A statgpt MCP server may declare its glossary tools
+
+`MCPClientSettings` SHALL expose one optional field, `glossary`, with no default value. When set,
+it SHALL be a nested object with four required fields, and it SHALL reject unknown fields, so a
+misspelled field fails validation instead of being ignored:
+
+- `list_terms_tool: str`, non-empty: the name of the server's tool that lists the glossary's
+  terms.
+- `definitions_tool: str`, non-empty: the name of the server's tool that returns the definitions
+  of named terms.
+- `max_terms_per_definitions_call: int`, constrained `ge=1`: the largest number of terms one call
+  of the definitions tool may request.
+- `references_table`: a `ReferencesTable`, the model a server's References table uses, with a title
+  and columns keyed by fields of a glossary term's record, such as `term` and `definition`. It
+  configures the glossary table of the References section (see **report-citations**). A reader
+  sees the title and the headings, so a channel writes them in the language its readers read. The
+  field descriptions of `ReferencesTable` and `ReferenceColumn` SHALL cover the glossary table
+  too: a column's key can be a field of a glossary term's record, and the first column falls back to
+  the cited term.
+
+The two tool names SHALL name different tools, and a `glossary` object whose `list_terms_tool` and
+`definitions_tool` are equal SHALL be rejected with a validation error stating that both fields name
+the same tool. The app calls the list tool with no arguments and the definitions tool with
+`{"terms": [...]}`, and the References glossary table tells the research agent's results of the two
+tools apart by name, so one tool configured as both would be called and read with the wrong shape.
+
+The field's description SHALL tell the admin to set the `glossary` object whenever the server
+exposes glossary tools that the research agent would be offered anyway, which is when the server's
+`tools_to_include` is empty or already names the glossary tools. Without the object the app neither
+fetches the glossary, nor gives the report writer the terminology rule and the glossary citation
+form, nor lists cited terms in the References section.
+
+The limit SHALL be configured rather than discovered, because the server states it only as prose in
+the tool's argument description, and a request over it fails whole. The **data-sources-discovery**
+capability owns how the app uses the three values.
+
+**Only a `statgpt` server may set it**, and a configuration where any other server type does SHALL
+be rejected with a validation error naming the offending server. The glossary is served by the
+dataset server. Since at most one server of each type may be configured, at most one configured
+server names a glossary, which follows from the two rules rather than needing a third check.
+
+A `statgpt` server is **not** required to set it: a channel whose server exposes no glossary is a
+valid channel.
+
+Naming a tool the server does not advertise SHALL NOT be a validation error, because the advertised
+tool list is only known at request time. It SHALL surface as failed glossary calls, which
+**data-sources-discovery** turns into the failure text without failing the turn.
+
+The two tool names SHALL NOT need to appear in `tools_to_include`. That filter states which tools a
+model is offered, and the app makes the glossary calls itself. Whether the definitions tool is
+offered to the research agent remains the filter's decision.
+
+Because the field is optional, `dial_conf/core/applications-template.json` SHALL NOT set it.
+
+#### Scenario: A statgpt server declares a glossary
+
+- **WHEN** a `statgpt` server entry sets `glossary` with the two tool names and a limit of 10
+- **THEN** validation SHALL pass, and the app SHALL fetch the glossary through exactly those tools
+  in batches of at most 10 terms
+
+#### Scenario: A generic_rag server declaring a glossary is rejected
+
+- **WHEN** a `generic_rag` server entry sets `glossary`
+- **THEN** validation SHALL fail with an error naming that server and stating that only a `statgpt`
+  server may declare a glossary
+
+#### Scenario: An incomplete glossary is rejected
+
+- **WHEN** a `glossary` object omits `max_terms_per_definitions_call` or `references_table`, or sets
+  `max_terms_per_definitions_call` to 0
+- **THEN** validation SHALL fail with an error identifying that field
+
+#### Scenario: A glossary naming one tool for both roles is rejected
+
+- **WHEN** a `glossary` object sets `list_terms_tool` and `definitions_tool` to the same name
+- **THEN** validation SHALL fail with an error stating that both fields name the same tool
+
+#### Scenario: A statgpt server without a glossary is valid
+
+- **WHEN** a `statgpt` server entry sets no `glossary`
+- **THEN** validation SHALL pass, and no glossary call SHALL be made for that channel
+
+### Requirement: A statgpt MCP server may declare its dataset-structure tool
+
+`MCPClientSettings` SHALL expose one optional string field, `dataset_structure_tool`, with no
+default value, naming the server's tool that returns the structure of one dataset. When it is set,
+the app fetches the structure of every dataset the list-datasets tool reported, at the start of
+every turn, and shows the structures to the models. The **data-sources-discovery** capability
+owns the tool's contract and how the app uses it.
+
+**Only a `statgpt` server may set it**, and a configuration where any other server type does SHALL
+be rejected with a validation error naming the offending server. The structures describe the
+datasets the list-datasets tool reports, and only a `statgpt` server names that tool. Since at
+most one server of each type may be configured, at most one configured server names a
+dataset-structure tool.
+
+A `statgpt` server is **not** required to set it. Without it the models see the list of datasets
+and no structures, and the research agent can still call the structure tool itself when the
+server's `tools_to_include` filter offers it.
+
+The field's description SHALL say that showing the datasets to the models is designed for a
+channel whose catalogue holds on the order of ten datasets, because the whole list and every
+structure reach every call that receives the data-sources string, and that leaving the field unset
+shows the list without the structures.
+
+Naming a tool the server does not advertise SHALL NOT be a validation error, because the advertised
+tool list is only known at request time. It SHALL surface as failed structure calls, which
+**data-sources-discovery** turns into failure entries without failing the turn.
+
+The name SHALL NOT need to appear in `tools_to_include`. That filter states which tools a model is
+offered, and the app makes the structure calls itself. Whether the structure tool is offered to
+the research agent remains the filter's decision.
+
+Because the field is optional, `dial_conf/core/applications-template.json` SHALL NOT set it.
+
+#### Scenario: A statgpt server declares a dataset-structure tool
+
+- **WHEN** a `statgpt` server entry sets `dataset_structure_tool` to the name of a tool it
+  advertises
+- **THEN** validation SHALL pass, and the app SHALL call exactly that tool once for every dataset
+  the list-datasets tool reported
+
+#### Scenario: A generic_rag server declaring a dataset-structure tool is rejected
+
+- **WHEN** a `generic_rag` server entry sets `dataset_structure_tool`
+- **THEN** validation SHALL fail with an error naming that server and stating that only a `statgpt`
+  server may name a dataset-structure tool
+
+#### Scenario: A statgpt server without a dataset-structure tool is valid
+
+- **WHEN** a `statgpt` server entry sets no `dataset_structure_tool`
+- **THEN** validation SHALL pass, and no structure call SHALL be made by the app for that channel

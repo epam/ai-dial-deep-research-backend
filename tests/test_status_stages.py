@@ -16,6 +16,7 @@ from aidial_sdk.chat_completion import Status
 from langchain_core.messages import AIMessage, ToolMessage
 from pytest import MonkeyPatch
 
+from dial_deep_research.app.data_sources import DataSources
 from dial_deep_research.app.history import Plan, PrepState
 from dial_deep_research.app.mcp_tools import LoadedMcpTools
 from dial_deep_research.app.research import nodes
@@ -256,7 +257,7 @@ def _stub_graph(monkeypatch: MonkeyPatch, graph: Any) -> None:
         return LoadedMcpTools(
             agent_tools=[],
             file_sharing_tool=None,
-            dataset_metadata_tool=None,
+            list_datasets_tool=None,
             client=None,
             data_queries=DataQueryStore(),
         )
@@ -270,7 +271,11 @@ async def test_a_stage_is_open_before_the_graph_runs(monkeypatch: MonkeyPatch) -
     _stub_graph(monkeypatch, _EmptyGraph())
     runner, choice = _make_runner()
 
-    await runner.run(_approved_prep_state(), properties=_properties())
+    await runner.run(
+        _approved_prep_state(),
+        properties=_properties(),
+        data_sources=DataSources(text="The topics map."),
+    )
 
     assert choice.stage_titles == [_INITIAL_ACTIVITY]
 
@@ -279,7 +284,11 @@ async def test_a_finished_run_leaves_no_stage_open(monkeypatch: MonkeyPatch) -> 
     _stub_graph(monkeypatch, _EmptyGraph())
     runner, choice = _make_runner()
 
-    await runner.run(_approved_prep_state(), properties=_properties())
+    await runner.run(
+        _approved_prep_state(),
+        properties=_properties(),
+        data_sources=DataSources(text="The topics map."),
+    )
 
     assert choice.open_stages == []
     assert choice.stages[0].status is Status.COMPLETED
@@ -291,7 +300,11 @@ async def test_a_failing_run_closes_the_stage_and_keeps_the_error(monkeypatch: M
     runner, choice = _make_runner()
 
     with pytest.raises(RuntimeError, match="the graph blew up"):
-        await runner.run(_approved_prep_state(), properties=_properties())
+        await runner.run(
+            _approved_prep_state(),
+            properties=_properties(),
+            data_sources=DataSources(text="The topics map."),
+        )
 
     assert choice.open_stages == []
     assert choice.stages[0].status is Status.FAILED
@@ -318,6 +331,7 @@ async def test_research_review_names_its_work_before_calling_a_model(
     node = nodes.make_research_review_node(
         today_date="2026-08-14",
         max_research_iterations=10,
+        data_sources="The topics map.",
         emit_result_stage=lambda _outcome: None,
         emit_activity=seen.append,
     )
@@ -339,6 +353,8 @@ async def test_the_report_node_names_its_work_before_calling_a_model(
         max_words=2750,
         references_name="References",
         lookups=no_lookups(),
+        data_sources="The topics map.",
+        glossary=None,
         emit_revision_failed_stage=lambda _outcome: None,
         emit_activity=seen.append,
     )
@@ -360,6 +376,9 @@ async def test_report_review_names_its_work_before_calling_a_model(
         max_words=2750,
         references_name="References",
         lookups=no_lookups(),
+        data_sources="The topics map.",
+        glossary=None,
+        glossary_fetch_listed_terms=False,
         emit_result_stage=lambda _outcome: None,
         emit_activity=seen.append,
     )

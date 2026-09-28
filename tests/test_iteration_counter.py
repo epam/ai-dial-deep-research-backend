@@ -43,7 +43,11 @@ def _one_iteration_graph(monkeypatch: pytest.MonkeyPatch) -> Any:
         lambda model_config: _FakeToolCallingModel(messages=_finish_immediately()),
     )
     agent = nodes.build_research_agent(
-        tools=[build_finish_iteration_tool()], today_date="2026-07-16", client_name="ACME"
+        tools=[build_finish_iteration_tool()],
+        today_date="2026-07-16",
+        client_name="ACME",
+        data_sources="The topics map.",
+        data_sources_instructions="",
     )
     builder = StateGraph(ResearchState)
     builder.add_node(node="research-agent", action=agent)

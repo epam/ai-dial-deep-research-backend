@@ -12,7 +12,8 @@ the other sections only.
 What a row holds is configuration rather than code: each MCP server declares the table its sources
 are listed in, as a title and an ordered list of columns, each column a heading a reader sees and
 the key it reads (see `ReferencesTable`). The caller pairs each table with the rows of its kind;
-this module never learns which server serves what.
+this module never learns which server serves what. The glossary table is configured the same way,
+by the glossary's own `references_table`, and its rows are the cited terms.
 
 Two rules carry most of the behaviour:
 
@@ -45,6 +46,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from dial_deep_research.app.glossary import normalize_term
 from dial_deep_research.app_properties import ReferenceColumn
 
 from .citations import (
@@ -123,8 +125,8 @@ def build_references_section(
         heading: `references_section_name`, written as a `##` heading.
         empty_text: `references_section_empty_text`, what the section says when no source was cited
             at all, which is the only prose an app-built section holds.
-        tables: one per configured server, in the order the tables are written. A table with no
-            rows contributes nothing.
+        tables: one per configured server, then the glossary table, in the order the tables are
+            written. A table with no rows contributes nothing.
         first_index: the `index` of the first row annotation. The row annotations join the array
             after the inline citations' ones, so this is how many of those there are.
         pill_title_max_chars: the channel's pill budget, which a row's pill obeys like any pill.
@@ -292,4 +294,33 @@ def dataset_rows(
                 target=convertible_dataset(dataset_id=entry.urn, dataset_sources=sources),
             )
         )
+    return rows
+
+
+def glossary_rows(
+    terms: Sequence[str], *, sources: Sequence[Sequence[Mapping[str, Any]]]
+) -> list[ReferenceRow]:
+    """One row per cited glossary term, in the order the report first cites them.
+
+    `sources` are the places a term's record may come from, in precedence order: the app's own
+    glossary fetch, then the research agent's term-definitions results, then its list-terms
+    results. A term is matched by its trimmed, case-folded name, and a record that carries a
+    definition wins over one that does not, whichever source it comes from. A term found nowhere
+    keeps its row, its first cell reading the term as the report wrote it. A glossary row opens
+    nothing: a term has no page.
+    """
+    rows: list[ReferenceRow] = []
+    for term in terms:
+        wanted = normalize_term(term)
+        candidates = [
+            record
+            for source in sources
+            for record in source
+            if isinstance(record.get("term"), str) and normalize_term(record["term"]) == wanted
+        ]
+        chosen = next(
+            (record for record in candidates if _plain_value(record.get("definition"))),
+            candidates[0] if candidates else None,
+        )
+        rows.append(ReferenceRow(identifier=term, fields=dict(chosen or {})))
     return rows

@@ -40,10 +40,10 @@ from dial_deep_research.app.research.citation_lookups import CitationLookups
 from dial_deep_research.app.research.data_queries import DataQueryStore
 from dial_deep_research.app.research.nodes import ReportReviewOutcome
 from dial_deep_research.app.research.prompts import (
-    REPORT_SYSTEM_PROMPT,
     ReportReview,
     render_protected_section_names,
     render_report_structure,
+    render_report_system_prompt,
 )
 from dial_deep_research.app.research.report_length import LENGTH_EXEMPTIONS
 from dial_deep_research.app.research.report_rules import (
@@ -138,6 +138,8 @@ def _report_node(
         max_words=max_words,
         references_name=_REFERENCES_NAME,
         lookups=no_lookups(),
+        data_sources="The topics map.",
+        glossary=None,
         emit_revision_failed_stage=(failures.append if failures is not None else lambda _o: None),
         emit_activity=lambda _title: None,
     )
@@ -354,6 +356,9 @@ def _review_node(
         max_words=max_words,
         references_name=_REFERENCES_NAME,
         lookups=lookups or no_lookups(),
+        data_sources="The topics map.",
+        glossary=None,
+        glossary_fetch_listed_terms=False,
         emit_result_stage=stages.append,
         emit_activity=lambda _title: None,
     )
@@ -771,7 +776,7 @@ def test_the_length_exemption_is_the_citations_whatever_the_structure() -> None:
 
 
 def test_report_system_prompt_states_the_ceiling_and_the_protected_names() -> None:
-    prompt = REPORT_SYSTEM_PROMPT.format(
+    prompt = render_report_system_prompt(
         today_date=_TODAY,
         rules=render_writer_instructions(
             build_report_rules(
@@ -782,6 +787,8 @@ def test_report_system_prompt_states_the_ceiling_and_the_protected_names() -> No
             )
         ),
         protected_sections=render_protected_section_names(DEFAULT_REPORT_STRUCTURE),
+        data_sources="The topics map.",
+        glossary=False,
     )
 
     assert "2750 words" in prompt

@@ -124,6 +124,10 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# `--ignore=.env` keeps pytest from checking whether `.env` is a directory while it walks the root
+# directory during collection. That check fails in a sandbox that denies all access to `.env`, and
+# the tests never read the file.
+addopts = ["--ignore=.env"]
 # scripts/ is not a package; this lets tests import the script modules directly.
 # src is included too so imports work under CI's `poetry install --no-root`.
 pythonpath = ["scripts", "src"]

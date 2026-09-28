@@ -303,6 +303,17 @@ it covers. **Every fact drawn from a data query SHALL be cited `[data_query <id>
 one that opens the cited data, and the dataset it ran against still reaches the References section
 through it (see **report-citations**).
 
+**On a channel that configures a glossary, a fact taken from a glossary definition SHALL be cited
+`[glossary <term>]`**, where `<term>` is the term as the glossary spells it: for example
+`[glossary Primary Commodity Prices]`. The glossary is the one the report writer is shown, in its
+data-sources string, and the terms and definitions the research obtained with the glossary tools.
+The marker is written like the other three and reviewed like them; before delivery the app moves
+the glossary markers of each run of adjacent citations to its end and rewrites them into one readable
+group, `(<term> - glossary term)` for one term, with no pill, and lists the cited terms
+in the References section's glossary table (see **report-citations**). It counts as an inline
+citation wherever the report's rules speak of inline citations, such as the word count. On a channel
+without a glossary the form SHALL NOT be offered to the writer.
+
 **What identifies a source in each form is part of this contract**, not a detail left to the
 writer, because the app parses these markers and resolves what it finds back against the server
 that reported it. The instructions SHALL state each:
@@ -318,6 +329,10 @@ that reported it. The instructions SHALL state each:
 - A **data query** is referenced by its **query id**, the identifier the data-query tool reports
   for that query in its result, written whole. It SHALL NOT be abbreviated, case-changed or
   replaced by the dataset's URN or name.
+- A **glossary term** is referenced by its **name as the glossary spells it**, written whole after
+  the keyword `glossary`: `[glossary <term>]`. The `<term>` slot accepts any run of characters other
+  than a bracket or a line break, the way the data-query id slot does, so a term containing a square
+  bracket cannot be cited.
 
 **Only a data query that returned data SHALL be cited.** A data-query tool also reports ids for
 queries that returned nothing: a query it constructed and did not execute, the query it offers for
@@ -329,7 +344,7 @@ citation its pill and nothing else (see **report-citations**). The app also chec
 query ids against what the turn captured and asks for a revision when one breaks this rule
 (**report-composition**), but the instruction is what keeps a first draft right.
 
-Naming these is what separates the three forms from a formatting convention. The writer cannot infer
+Naming these is what separates the citation forms from a formatting convention. The writer cannot infer
 from the shape of a marker which values belong in it, and a writer that puts a dataset's display
 name where its URN belongs, or omits a page from a document citation, produces a citation that
 parses into nothing and silently loses its pill.
@@ -341,16 +356,17 @@ part names the page — and SHALL present any concrete spelling as one example a
 SHALL NOT state that the tools report attribution in one particular form, because that makes one
 server's formatting load-bearing for this application while breaking no test when it changes.
 
-**Those three forms SHALL be the only way the report references a source.** The report cites what the
+**Those forms — the three markers, and the glossary form on a channel that configures a glossary —
+SHALL be the only way the report references a source.** The report cites what the
 research retrieved and nothing else, so it SHALL carry no hyperlink in any form. Which forms count,
 what the writer is told, what the app checks and what is removed before delivery are owned by the
 **report-composition** capability.
 
 **The inline citation format SHALL NOT be configurable, per instance or otherwise.** It is not a
 style choice but a machine-readable interface: the app parses these markers out of the delivered
-report to build DIAL inline citation annotations from them (see the **report-citations**
-capability), so a deployment that emitted a different form would break that step rather than
-merely look different. Every report from every instance therefore carries the same inline form,
+report to build DIAL inline citation annotations from them, and the glossary form to build the
+References section's glossary table (see the **report-citations** capability), so a deployment that
+emitted a different form would break that step rather than merely look different. Every report from every instance therefore carries the same inline form,
 and only a change to this requirement may change it.
 
 Every cited source SHALL be decoded in the report's references section, whenever the configured
@@ -474,6 +490,18 @@ that row's name exactly as it loses the source's inline citations.
 - **THEN** the instructions SHALL direct the writer to cite the URN, and the report SHALL carry the
   URN in the marker rather than the name
 
+#### Scenario: A glossary definition is cited with the glossary marker
+
+- **WHEN** a channel configures a glossary, and the report states what a glossary term means, taken
+  from the glossary's definition of `Primary Commodity Prices`
+- **THEN** the writer's instructions SHALL have it cite `[glossary Primary Commodity Prices]`, and
+  the delivered text SHALL carry `(Primary Commodity Prices - glossary term)` in its place
+
+#### Scenario: A channel without a glossary is not offered the glossary form
+
+- **WHEN** a report is written on a channel that configures no glossary
+- **THEN** the writer's instructions SHALL NOT mention the glossary citation form
+
 ### Requirement: Research executes autonomously within a single turn
 
 The research graph SHALL run to completion autonomously within the single
@@ -496,10 +524,19 @@ is part of the contract, not an accident of implementation.
 
 **1. research-agent** (one call per agent step)
 
-- System prompt: the research-agent instructions, filled with today's date and the instance's
-  `client_name`. They state when to announce a step with `update_status`, and the rules that it is
-  called at most once per assistant message, never as a message's only tool call, and never
-  together with `finish_iteration`.
+- System prompt: the research-agent instructions, filled with today's date, the instance's
+  `client_name`, and the turn's data-sources string in a `<data_sources>` block: the instance's
+  `data_sources_descriptions`, followed by the datasets section when the channel has a dataset
+  server and by the rendered glossary when the channel configures one (see
+  **data-sources-discovery**). They state when to announce a step with `update_status`, and the
+  rules that it is called at most once per assistant message, never as a message's only tool call,
+  and never together with `finish_iteration`. When the glossary's list failed or some of its terms
+  did not resolve, they also carry the instruction to repeat what the app's glossary fetch missed,
+  with at most three calls, each part only when its tool is bound. When the fetch obtained the
+  whole glossary, they instead tell the agent not to call the bound glossary tools. On a channel with a dataset server, they also
+  carry the instruction that says, for each bound dataset tool, whether the app's own calls
+  succeeded: the agent does not call a tool again for an answer the datasets section shows, and
+  calls it when the app's calls failed, with at most three calls (see **data-sources-discovery**).
 - Messages: the graph's accumulated `messages` — the seed instruction (the aligned query and the
   approved plan), every `AIMessage` and `ToolMessage` of the turn so far **including image
   content blocks**, and each research-review-injected next-plan instruction. Image blocks are
@@ -522,6 +559,9 @@ is part of the contract, not an accident of implementation.
 - **The status announcements are NOT included**: `update_status` calls and their acknowledgements
   are removed before the findings are rendered, so no announced status appears among the tool
   calls this call weighs when judging coverage.
+- System prompt, additionally: the turn's data-sources string in a `<data_sources>` block, the
+  same string research-agent receives, so the next-iteration plan this call writes points at the
+  data sources that exist.
 - Output: a structured verdict — the assessment, then the next-iteration steps (empty means
   research is complete).
 
@@ -530,7 +570,11 @@ is part of the contract, not an accident of implementation.
 - System prompt: the report instructions, filled with today's date — the configured section
   structure, the protected sections, the word ceiling, the prohibited meta-annotations, the
   citation rules, and the rule that a source is referenced only by an inline citation form and
-  never by a hyperlink (see **report-composition**).
+  never by a hyperlink (see **report-composition**) — and the turn's data-sources string in a
+  `<data_sources>` block, the same string research-agent receives. On a channel that configures a
+  glossary, they also carry the rule that the report uses the glossary's terminology, whether or
+  not the app's glossary fetch succeeded (see **report-composition**). They carry no instruction to request missing definitions, because this
+  call has no tools.
 - Messages: the accumulated `messages` transcript **including images** (already clamped by
   the image budget) with the `update_status` calls and their acknowledgements removed, then the
   report request carrying the aligned query and the plans pursued. Removal is deterministic, so
@@ -550,7 +594,18 @@ is part of the contract, not an accident of implementation.
 **4. report-review** (one call per draft)
 
 - System prompt: the report-review instructions, filled with today's date — what to check and what
-  not to.
+  not to — and the turn's data-sources string in a `<data_sources>` block, the same string
+  research-agent receives. When the glossary fetch listed at least one term, or research-agent
+  obtained a successful glossary tool result, the checks include the glossary-terminology check
+  (see **report-composition**).
+- System prompt, additionally, on a channel that configures a glossary: the text of every
+  **successful** result of the two configured glossary tools (the list-terms tool and the
+  term-definitions tool) that research-agent obtained during the turn, in the order they were
+  obtained, in a `<glossary_tool_results>` block. The app selects them from the transcript by the
+  configured tool names, and passes their text as the server sent it, without parsing it. A result
+  marked as an error is left out. The block is absent when there is no such result. This is the one
+  kind of tool result this call receives: it is the glossary the check judges against when the
+  app's own fetch missed terms or definitions.
 - Messages: one human message, assembled **stable content first** so successive review calls in a run
   share a byte prefix (the same rule as research-review's assembly, see **prompt-caching**): the
   configured report structure with each section's description, the protected sections, the aligned
@@ -562,9 +617,9 @@ is part of the contract, not an accident of implementation.
   that the app checks the headings, the length and the hyperlinks itself. None of the three is
   its to judge: the app checks the draft and adds their violations on its own (see
   **report-composition**).
-- **The research findings are NOT included** — no transcript, no tool results, no images, and so
-  no status announcements either. Every criterion this call judges is decidable from the draft, the
-  configuration, and the query and plan.
+- **The research findings are NOT included** — no transcript, no tool results other than the
+  glossary tool results above, no images, and so no status announcements either. Every criterion this call judges is decidable from the draft, the
+  configuration, the query and plan, and the data-sources string.
 - Output: a structured verdict — one list of report violations, where an empty list is the
   approval. There is no separate approval field, so a remark the model does not want acted on
   cannot be expressed and forces a revision instead.
@@ -578,9 +633,10 @@ is part of the contract, not an accident of implementation.
 #### Scenario: report-review sees the draft but not the findings
 
 - **WHEN** report-review judges a draft
-- **THEN** its input SHALL contain the draft, the configured structure, the protected sections, and
-  the query and plan, and SHALL NOT contain any tool result, transcript message, image, measured
-  word count, or ceiling
+- **THEN** its input SHALL contain the draft, the configured structure, the protected sections, the
+  query and plan, the data-sources string, and the research agent's successful glossary tool
+  results when there are any, and SHALL NOT contain any other tool result, any transcript message,
+  image, measured word count, or ceiling
 
 #### Scenario: A revision's prompt extends the draft's prompt
 
@@ -603,6 +659,27 @@ is part of the contract, not an accident of implementation.
 - **THEN** the research tool calls of that message SHALL be preserved with their results, and only
   the `update_status` call and its acknowledgement SHALL be removed, leaving every remaining tool
   call paired with its result
+
+#### Scenario: Every research graph call receives the data-sources string
+
+- **WHEN** a research turn runs on a channel whose glossary listed terms
+- **THEN** the system prompts of research-agent, research-review, the report call and
+  report-review SHALL each carry the same data-sources string, ending in the rendered glossary
+
+#### Scenario: A channel without a glossary still gives research the topics map
+
+- **WHEN** a research turn runs on a channel that configures no glossary and has no dataset server
+- **THEN** the system prompts of research-agent, research-review, the report call and
+  report-review SHALL each carry the instance's `data_sources_descriptions`, and no prompt of the
+  research graph SHALL carry a datasets section, a glossary or the glossary-terminology rule
+
+#### Scenario: Every research graph call receives the datasets section
+
+- **WHEN** a research turn runs on a channel with a dataset server that configures no glossary
+- **THEN** the system prompts of research-agent, research-review, the report call and
+  report-review SHALL each carry the instance's `data_sources_descriptions` followed by the same
+  datasets section, and only research-agent's SHALL carry the instruction about the dataset
+  tools
 
 ### Requirement: Research-agent and research-review act on a failed tool call
 

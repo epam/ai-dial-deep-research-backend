@@ -573,8 +573,10 @@ References section is no part of it, so no derivation stands between the instruc
 **The review model SHALL NOT be asked to judge any of them.** It is told that the app checks the
 headings, the length, the hyperlinks and the cited query, dataset and document ids, and its own checks are the ones that need a reader: a
 padded section, a section that should admit it has nothing to say, the protected-section rules, the
-prohibited annotations, valid Markdown, the citation format, and a list of sources the draft
-carries. A model verdict SHALL NOT be able to pass a draft that breaks an app-checked
+prohibited annotations, valid Markdown, the citation format, a list of sources the draft
+carries, and, on a turn whose glossary fetch listed at least one term or whose research agent
+obtained a successful glossary tool result, the glossary terminology (see
+**A report uses the glossary's terminology**). A model verdict SHALL NOT be able to pass a draft that breaks an app-checked
 rule, and a review call that fails SHALL NOT suppress one.
 
 **A list of sources is the review model's to report, because the app cannot see every form of
@@ -592,8 +594,11 @@ to do so. The Overview is exactly such a section in the default structure, so a 
 *mentioning* sources would contradict the structure it is enforcing.
 
 **Every check the review model is given SHALL be decidable from what that call receives.** It sees
-the draft, the configured structure, and the query and plan, and it deliberately sees neither the
-findings nor any tool result (**research-execution**). A check phrased against what a server
+the draft, the configured structure, the query and plan, the turn's data-sources string, and the
+research agent's successful glossary tool results, and it deliberately sees neither the findings nor
+any other tool result (**research-execution**). The glossary-terminology check is given only on a
+turn whose glossary fetch listed at least one term or whose research agent obtained a successful
+glossary tool result, for this reason. A check phrased against what a server
 reported is therefore unanswerable, and a model asked one resolves it by guessing. The
 citation-format check in particular SHALL be worded against the **shape** of a citation and SHALL
 carry an example of a well-formed dataset URN and of a well-formed data-query citation, rather than
@@ -616,7 +621,6 @@ The check is the reviewer's standing behaviour rather than anything about the dr
 SHALL be stated in its **system prompt**. The per-turn request SHALL carry no copy of it, and SHALL
 NOT need the section's configured name to render: the check does not turn on what the heading is
 called, so naming it there would add a per-instance input to a call that does not use one.
-
 
 #### Scenario: An approving verdict cannot pass a mis-headed draft
 
@@ -738,6 +742,13 @@ called, so naming it there would add a per-instance input to a call that does no
 
 - **WHEN** a reviewed draft cites documents and the document-metadata read fails
 - **THEN** the document check SHALL report no violation for that draft
+
+#### Scenario: The glossary check is given only with the glossary
+
+- **WHEN** the report-review call is issued on a turn whose glossary listed terms
+- **THEN** its system prompt SHALL list the glossary-terminology check among the review model's own
+  checks and SHALL carry the glossary in its data-sources string, while on a turn without a
+  glossary the check SHALL NOT appear
 
 ### Requirement: A review ↔ revise loop enforces the report rules before delivery
 
@@ -988,3 +999,133 @@ is mechanical and stops at removal:
 - **WHEN** a draft cites `[doc 442, page 3]` and `[dataset ABC:DEF]`
 - **THEN** neither SHALL be reported as a hyperlink violation, and neither SHALL be altered by the
   hyperlink removal
+
+### Requirement: A report uses the glossary's terminology
+
+On a channel that configures a glossary (see **data-sources-discovery**), the report SHALL use the
+glossary's terminology: where the report refers to a concept that a glossary term names, it SHALL
+use that term, spelled as the glossary spells it, rather than a synonym or a paraphrase. A glossary
+term that the report has no reason to mention is not required.
+
+**The glossary is the only source of glossary terms and definitions.** A phrase counts as a
+glossary term only when it is a term of the glossary: a `term` in the data-sources string's
+`Glossary terms:` list, or a term in the research agent's glossary tool results. A phrase found
+anywhere else, such as a dataset description or structure, a document, a data-query result or
+the knowledge-base descriptions, is not a glossary term, however much it reads like one. The rule
+governs only the concepts the glossary names: a term the glossary does not list, such as "trade
+balance" taken from a document or a dataset description, may be used freely, unless it names a
+concept that a glossary term names, in which case the glossary term applies. The writer SHALL NOT
+present such a phrase as a glossary term or cite it with `[glossary <term>]`, and the reviewer
+SHALL NOT ask for it as a glossary term. The same holds for definitions: a definition cited as a
+glossary definition comes from the glossary. Both calls receive this in the rule's shared wording.
+
+The rule SHALL be given to two calls, in the same wording of what it requires:
+
+- **The report writer**, on every turn of such a channel. Its system prompt SHALL carry the rule
+  next to the other report-wide rules. The glossary reaches the writer in two ways: the app's fetch
+  through its data-sources string, and whatever terms and definitions the research agent obtained
+  with its own tool calls through the transcript (see **research-execution**). The writer's rule
+  SHALL say that the glossary in the data-sources string may lack terms or definitions, because the
+  app's fetch may have failed in part or in whole, and that the terms and definitions in the
+  research's tool results count as glossary terms too.
+- **The report reviewer**, on a turn whose glossary fetch listed at least one term, or whose
+  research agent obtained at least one successful result from a configured glossary tool. Its
+  system prompt SHALL carry the check as one of the review model's own checks. The glossary reaches
+  the reviewer in two ways: the app's fetch through its data-sources string, and the research
+  agent's successful glossary tool results, which the app selects from the transcript by the
+  configured tool names (see **research-execution**). A draft that names a glossary concept by
+  another word SHALL be reported as a violation naming the passage and the glossary term to use.
+
+**Both calls know the glossary citation form.** The writer's instructions state the form
+`[glossary <term>]` and when to use it (see **research-execution**). The reviewer's instructions
+state the same form, so the review model treats a glossary marker as a well-formed citation and
+reports a malformed one, such as a different keyword or a term written in parentheses, under the
+citation-format check. The readable form the delivery produces never reaches the reviewer. Both hear of the form only on a channel that configures a glossary.
+
+This is a check for the review model, not for Python: whether a phrase in the draft refers to the
+concept a glossary term names needs a reader, so no app-owned rule decides it.
+
+A term whose definition is `null` SHALL still count for the rule, judged by its name.
+
+On a channel without a glossary, neither call SHALL carry the rule. On a turn whose list-terms call
+failed, the writer SHALL carry the rule, and the reviewer SHALL carry the check only when the
+research agent obtained a successful glossary tool result, because otherwise the reviewer has no
+terms to judge against. Both still receive the data-sources string, which on a
+failed list ends in the failure text.
+
+#### Scenario: The writer is told to use the glossary's terms
+
+- **WHEN** the report writer runs on a turn whose glossary listed terms
+- **THEN** its system prompt SHALL carry the glossary-terminology rule, and its data-sources string
+  SHALL carry the glossary
+
+#### Scenario: The reviewer reports a synonym
+
+- **WHEN** the glossary lists `Primary Commodity Prices`, and a draft refers to the same concept as
+  "raw material price levels"
+- **THEN** the review model SHALL report a violation that names the passage and the glossary term
+
+#### Scenario: A term found only outside the glossary is not demanded
+
+- **WHEN** the `Datasets:` part describes `IMF:WEO` as covering the "unemployment rate", no glossary
+  term is "unemployment rate", and a draft writes "the share of the labour force without a job"
+- **THEN** the review model SHALL NOT report a glossary-terminology violation for that passage
+
+#### Scenario: A term the glossary does not list may be used
+
+- **WHEN** a document page the research read uses the term "trade balance", and no glossary term
+  names that concept
+- **THEN** the report writer MAY use "trade balance", and the review model SHALL NOT report its use
+  as a violation
+
+#### Scenario: The reviewer accepts a glossary citation and reports a malformed one
+
+- **WHEN** a draft on a glossary channel cites `[glossary World Economic Outlook]` in one place and
+  `(World Economic Outlook - glossary term)` in another
+- **THEN** the review model SHALL NOT report the first, and SHALL report the second as a citation
+  that does not follow the glossary form
+
+#### Scenario: A failed list still gives the writer the rule
+
+- **WHEN** the list-terms call failed three times, and the research agent obtained the terms with
+  its own list-terms call
+- **THEN** the report writer's prompt SHALL carry the glossary-terminology rule, saying that the
+  data-sources glossary may lack terms and that the terms in the research's tool results count,
+  and the report reviewer's prompt SHALL carry the check and the research agent's list-terms
+  result
+
+#### Scenario: A failed list and no agent result give the reviewer no check
+
+- **WHEN** the list-terms call failed three times, and the research agent obtained no successful
+  result from either glossary tool
+- **THEN** the report reviewer's prompt SHALL NOT carry the glossary-terminology check
+
+### Requirement: The data sources in the system prompt count as retrieved sources
+
+The report writer's system prompt SHALL state that the report may draw on two kinds of source: the
+research findings in the transcript, and the data-sources string in its `<data_sources>` block,
+which holds the channel's hand-written descriptions and what the app fetched from the dataset
+server — the list of datasets, their structures and the glossary. A fact taken from the
+data-sources string SHALL count as grounded in a retrieved source, and SHALL be cited with the
+citation form of the source it describes, such as `[dataset <urn>]` for a dataset's name,
+description, coverage or last-update date.
+
+A fact taken from a glossary definition SHALL be cited `[glossary <term>]` (see
+**research-execution**). A fact from the hand-written description of a publication series SHALL NOT
+be cited at all, and SHALL NOT be given an invented citation such as a `[doc <id>, page <ix>]`: only
+a publication itself is cited, by its document and page. Such a fact follows the rule for a sentence
+that cannot be cited: the sentence is removed or flagged as the report's own synthesis.
+
+The report reviewer SHALL judge such a fact the same way: citing a dataset for a fact the datasets
+section states about it SHALL NOT be reported as a violation.
+
+The statement SHALL NOT tell the writer to cite datasets the research did not query, nor forbid
+it. A report may cite such a dataset when it uses it, and an instruction either way would bias the
+writer.
+
+#### Scenario: A dataset's metadata is cited from the datasets section
+
+- **WHEN** a draft states the last-update date of a dataset that no tool call of the turn queried,
+  taken from the datasets section, and cites it as `[dataset <urn>]`
+- **THEN** the report writer's instructions SHALL allow it, and the report reviewer SHALL NOT report
+  it as a fact without a retrieved source

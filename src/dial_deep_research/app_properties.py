@@ -99,6 +99,9 @@ SOURCE_KIND_BY_SERVER_TYPE: dict[MCPServerType, SourceKind] = {
     "statgpt": "dataset",
 }
 
+# The order the References section writes its server tables in, by the kind of source each lists.
+REFERENCES_TABLE_ORDER: tuple[SourceKind, ...] = ("dataset", "document")
+
 # The one placeholder a document-metadata resource template carries. The app substitutes the cited
 # ids for it literally rather than through `str.format`, which would choke on any other brace a URI
 # may hold and would accept a template carrying placeholders the app does not fill.
@@ -131,30 +134,90 @@ class ReferenceColumn(BaseModel):
     )
     key: str = Field(
         min_length=1,
-        description="The name this server reports the value under — a key of a document's metadata"
-        " object, or a field of a dataset's catalogue record. A source that reports nothing usable"
+        description="The name the value is reported under — a key of a document's metadata"
+        " object, a field of a dataset's catalogue record, or, in the glossary table, a field of a"
+        " glossary term's record such as term or definition. A source that reports nothing usable"
         " under it leaves the cell empty, except in the first column, which falls back to the"
-        " source's own identifier.",
+        " source's own identifier, or to the cited term in the glossary table.",
     )
 
 
 class ReferencesTable(BaseModel):
-    """How one server's cited sources are listed in the report's References section."""
+    """How one kind of cited source is listed in the report's References section: one server's
+    sources, or the cited glossary terms."""
 
     model_config = ConfigDict(frozen=True)
 
     title: str = Field(
         min_length=1,
-        description="The sub-heading this table is written under, for example Documents or"
-        " Datasets. A reader sees it, so write it in the language this channel's readers read.",
+        description="The sub-heading this table is written under, for example Documents, Datasets"
+        " or Glossary. A reader sees it, so write it in the language this channel's readers read.",
     )
     columns: tuple[ReferenceColumn, ...] = Field(
         min_length=1,
         description="The table's columns, in the order they are rendered. The order matters beyond"
         " layout: the first column is the one a reader identifies a row by, so it is the one that"
-        " falls back to the source's identifier — a document id, or a dataset's URN — when its key"
-        " resolves nothing. Put the column naming the source first.",
+        " falls back to the source's identifier — a document id, a dataset's URN, or the cited"
+        " glossary term — when its key resolves nothing. Put the column naming the source first.",
     )
+
+
+class GlossaryTools(BaseModel):
+    """The glossary tools of a dataset server, and how cited glossary terms are listed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    list_terms_tool: str = Field(
+        min_length=1,
+        description="Name of the server's tool that lists the glossary's terms. The application"
+        " calls it with no arguments.",
+    )
+    definitions_tool: str = Field(
+        min_length=1,
+        description="Name of the server's tool that returns the definitions of named terms. The"
+        ' application calls it with {"terms": [<term name>, ...]}.',
+    )
+    max_terms_per_definitions_call: int = Field(
+        ge=1,
+        description="The largest number of terms one call of the definitions tool may request."
+        " Copy it from that tool's argument description: the server rejects a larger request"
+        " whole, so the application never sends one.",
+    )
+    references_table: ReferencesTable = Field(
+        description="How the glossary terms the report cites are listed in its References"
+        " section: the sub-heading, and columns keyed by fields of a term's record, such as term"
+        " and definition. The table follows the dataset and document tables.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_distinct_tools(self) -> GlossaryTools:
+        """The two tools are called with different arguments, and their results are told apart by
+        name, so one tool named for both roles would be called and read with the wrong shape."""
+        if self.list_terms_tool == self.definitions_tool:
+            raise ValueError(
+                f"list_terms_tool and definitions_tool both name the same tool"
+                f" {self.list_terms_tool!r}: the glossary needs one tool that lists the terms and"
+                " another that returns their definitions"
+            )
+        return self
+
+
+class DatasetStructureTool(BaseModel):
+    """The configured dataset-structure tool and the server that advertises it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    server_name: str
+    tool_name: str
+
+
+class ServerGlossary(BaseModel):
+    """The configured glossary tools and the server that advertises them."""
+
+    model_config = ConfigDict(frozen=True)
+
+    server_name: str
+    tools: GlossaryTools
 
 
 class ServerReferencesTable(BaseModel):
@@ -257,17 +320,42 @@ class MCPClientSettings(BaseModel):
         " only a generic_rag server may set either.",
     )
 
-    dataset_metadata_tool: str | None = Field(
+    list_datasets_tool: str | None = Field(
         default=None,
         description="Name of this server's tool listing the datasets this channel exposes. The"
-        " application calls it when it delivers a report, to learn a cited dataset's name and the"
-        " address of its page, so a dataset citation becomes a pill that opens that page. The tool"
-        " takes no arguments and answers with the whole catalogue; the application selects the"
-        " datasets the report cites. It stays available to the research agent, which uses the same"
-        " listing to discover which datasets exist, so naming it here only adds a caller."
+        " application calls it at the start of every turn and shows its answer to the models, so"
+        " they know which datasets exist. It reads the same answer when it delivers a report, to"
+        " learn a cited dataset's name and the address of its page, so a dataset citation becomes"
+        " a pill that opens that page. The tool takes no arguments and answers with the whole"
+        " catalogue. It stays available to the research agent whenever tools_to_include offers it,"
+        " and the agent calls it when the application's own call failed."
         " Required on a statgpt server, and only a statgpt server may set it: without it every"
         " dataset citation is delivered as a bare URN in square brackets, which names nothing the"
         " reader can open.",
+    )
+
+    dataset_structure_tool: str | None = Field(
+        default=None,
+        description="Name of this server's tool that returns the structure of one dataset, called"
+        ' with {"dataset_id": <id>}, where the id is a record\'s id in the list_datasets_tool'
+        " answer. When set, the application calls it for every listed dataset at the start of"
+        " every turn and shows the structures to the models next to the list. Showing the"
+        " datasets is designed for a channel with about ten datasets, because the whole list and"
+        " every structure reach every model call that plans the research, runs it or writes the"
+        " report. Leave it unset to show the list without the structures. It need not appear in"
+        " tools_to_include: whether the research agent is offered the tool stays that filter's"
+        " decision. Only a statgpt server may set it.",
+    )
+
+    glossary: GlossaryTools | None = Field(
+        default=None,
+        description="This server's glossary tools. Set it whenever the server exposes glossary"
+        " tools that the research agent would be offered anyway, which is when tools_to_include"
+        " is empty or already names them. With it, the application fetches the glossary at the"
+        " start of every turn and shows it to the models, tells the report writer to use the"
+        " glossary's terminology and how to cite a term, and lists the cited terms in the"
+        " References section. Without it, none of that happens. The tools need not appear in"
+        " tools_to_include. Only a statgpt server may set it.",
     )
 
     data_query_meta_key: str | None = Field(
@@ -419,8 +507,8 @@ class MCPClientSettings(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_dataset_metadata_tool(self) -> MCPClientSettings:
-        """The dataset-metadata tool belongs to the dataset server, and it must name one.
+    def _validate_list_datasets_tool(self) -> MCPClientSettings:
+        """The list-datasets tool belongs to the dataset server, and it must name one.
 
         A `[dataset <urn>]` marker names no server, so the app matches every cited URN against
         the one configured dataset server's catalogue. A second server answering about dataset
@@ -433,17 +521,42 @@ class MCPClientSettings(BaseModel):
         dataset server configured without the tool is refused rather than costing every report
         its dataset pills.
         """
-        if self.server_type == "statgpt" and not self.dataset_metadata_tool:
+        if self.server_type == "statgpt" and not self.list_datasets_tool:
             raise ValueError(
-                "a statgpt server must name its dataset_metadata_tool: the datasets it serves are"
+                "a statgpt server must name its list_datasets_tool: the datasets it serves are"
                 " cited by URN, and that tool is the only thing that turns a URN into a dataset"
                 " name and a page the reader can open"
             )
-        if self.server_type != "statgpt" and self.dataset_metadata_tool:
+        if self.server_type != "statgpt" and self.list_datasets_tool:
             raise ValueError(
-                f"only a statgpt server may set dataset_metadata_tool, and this one is"
+                f"only a statgpt server may set list_datasets_tool, and this one is"
                 f" {self.server_type}: the tool names the datasets a report cites and gives each"
                 " of them a page address, and those come from the dataset server"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_dataset_structure_tool(self) -> MCPClientSettings:
+        """Only the dataset server may name a dataset-structure tool.
+
+        The structures describe the datasets the list-datasets tool reports, and only a `statgpt`
+        server names that tool. Optional, because a channel may show the list alone.
+        """
+        if self.server_type != "statgpt" and self.dataset_structure_tool:
+            raise ValueError(
+                f"server {self.server_name!r} is {self.server_type}, and only a statgpt server"
+                " may name a dataset_structure_tool: the structures describe the datasets the"
+                " dataset server lists"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_glossary(self) -> MCPClientSettings:
+        """Only the dataset server may declare a glossary: the glossary is served by it."""
+        if self.server_type != "statgpt" and self.glossary is not None:
+            raise ValueError(
+                f"server {self.server_name!r} is {self.server_type}, and only a statgpt server"
+                " may declare a glossary: the glossary is served by the dataset server"
             )
         return self
 
@@ -556,7 +669,12 @@ class Prompts(BaseModel):
     )
     data_sources_descriptions: str = Field(
         min_length=1,
-        description="A topics map of the data sources available in the knowledge base",
+        description="A topics map of the data sources available in the knowledge base. Describe"
+        " here only what the application does not fetch from the servers itself, such as the"
+        " publications the document server holds. The application fetches the list of datasets"
+        " from the dataset server, their structures when a dataset_structure_tool is configured,"
+        " and the glossary when a glossary is configured, and appends them after this text on"
+        " every turn, so a dataset described here too is shown to the models twice.",
     )
 
 
@@ -754,16 +872,19 @@ class ApplicationProperties(BaseModel):
 
     @property
     def references_tables(self) -> list[ServerReferencesTable]:
-        """Each server's References table, in the order the servers are configured.
+        """Each server's References table, datasets first and documents second.
 
-        The order is the order the tables are written in, so an operator decides it by ordering
-        the servers. Every server carries a table, so this never selects between candidates — it
-        pairs each table with the server type that says which cited sources fill it.
+        The order is the order the tables are written in, and it is fixed by the kind of source a
+        table lists, whatever order the servers are configured in. The glossary table follows
+        them, and is not among these. Every server carries a table, so this never selects between
+        candidates — it pairs each table with the server type that says which cited sources fill
+        it.
         """
-        return [
+        tables = [
             ServerReferencesTable(server_type=server.server_type, table=server.references_table)
             for server in self.mcp_servers
         ]
+        return sorted(tables, key=lambda entry: REFERENCES_TABLE_ORDER.index(entry.source_kind))
 
     @property
     def document_metadata(self) -> DocumentMetadataSource | None:
@@ -785,8 +906,8 @@ class ApplicationProperties(BaseModel):
         )
 
     @property
-    def dataset_metadata_tool(self) -> str | None:
-        """The configured dataset-metadata tool's name, or `None` when no dataset server is
+    def list_datasets_tool(self) -> str | None:
+        """The configured list-datasets tool's name, or `None` when no dataset server is
         configured.
 
         At most one server can name one, for the reason `file_sharing_tool` gives: only a
@@ -795,19 +916,49 @@ class ApplicationProperties(BaseModel):
         cite none.
         """
         return next(
-            (
-                server.dataset_metadata_tool
-                for server in self.mcp_servers
-                if server.dataset_metadata_tool
-            ),
+            (server.list_datasets_tool for server in self.mcp_servers if server.list_datasets_tool),
             None,
         )
+
+    @property
+    def dataset_server(self) -> MCPClientSettings | None:
+        """The configured `statgpt` server, or `None` when the channel serves no datasets.
+
+        At most one server of each type is configured, so there is nothing to choose between.
+        """
+        return next(
+            (server for server in self.mcp_servers if server.server_type == "statgpt"), None
+        )
+
+    @property
+    def dataset_structure_tool(self) -> DatasetStructureTool | None:
+        """The configured dataset-structure tool and its server, or `None` when none is named.
+
+        Only the dataset server may name one, and at most one is configured.
+        """
+        server = self.dataset_server
+        if server is None or server.dataset_structure_tool is None:
+            return None
+        return DatasetStructureTool(
+            server_name=server.server_name, tool_name=server.dataset_structure_tool
+        )
+
+    @property
+    def glossary(self) -> ServerGlossary | None:
+        """The configured glossary tools and their server, or `None` when no glossary is set.
+
+        Only the dataset server may declare one, and at most one is configured.
+        """
+        server = self.dataset_server
+        if server is None or server.glossary is None:
+            return None
+        return ServerGlossary(server_name=server.server_name, tools=server.glossary)
 
     @property
     def data_query_meta_key(self) -> str | None:
         """The configured data-query meta key, or `None` when no dataset server is configured.
 
-        At most one server can name one, for the reason `dataset_metadata_tool` gives.
+        At most one server can name one, for the reason `list_datasets_tool` gives.
         """
         return next(
             (

@@ -183,7 +183,7 @@ tool argument — a document id passed to the file-sharing tool, or into a metad
 out exactly as the marker wrote it. An identifier **matched locally** against what the server
 already answered is compared exactly as the marker wrote it, against the server's own value
 likewise untransformed. Two identifiers are matched locally: a dataset id compared to the `id` of
-each record the dataset-metadata tool reported, and a query id compared to the query id of each
+each record the list-datasets tool reported, and a query id compared to the query id of each
 data-query record the server's tool results carried during the turn. The rule is the same rule
 because the risk is the same: a comparison that case-folds, trims or strips a version can match the
 wrong record as easily as a rewritten argument can fetch the wrong file.
@@ -212,7 +212,7 @@ own documents would make an identifier ambiguous and a pill could open the wrong
 
 #### Scenario: A dataset identifier is matched against the catalogue exactly
 
-- **WHEN** the delivered report cites `[dataset IMF:WEO(1.0.0)]` and the dataset-metadata tool's
+- **WHEN** the delivered report cites `[dataset IMF:WEO(1.0.0)]` and the list-datasets tool's
   answer carries records with the ids `IMF:WEO(1.0.0)` and `imf:weo`
 - **THEN** the app SHALL select the record whose id is `IMF:WEO(1.0.0)`, comparing the strings
   character for character, and SHALL NOT treat the case-folded id as a match

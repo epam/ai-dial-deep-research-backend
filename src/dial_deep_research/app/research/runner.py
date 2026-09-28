@@ -26,7 +26,7 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -41,10 +41,14 @@ from langchain_core.tools import BaseTool
 from langgraph.types import StreamPart
 from pydantic import BaseModel, Field
 
+from dial_deep_research.app.data_source_calls import InvalidResultError
+from dial_deep_research.app.data_sources import DataSources
+from dial_deep_research.app.glossary import read_definitions, read_term_list
 from dial_deep_research.app.history import PrepState
 from dial_deep_research.app.mcp_tools import load_mcp_tools
 from dial_deep_research.app_properties import (
     ApplicationProperties,
+    ServerGlossary,
     ServerReferencesTable,
 )
 from dial_deep_research.utils.dial_annotations import send_annotations
@@ -66,6 +70,7 @@ from .citations import (
     cited_dataset_entries,
     cited_dataset_ids,
     cited_document_ids,
+    cited_glossary_terms,
     convert_citations,
     find_citation_markers,
     log_citations_resolved,
@@ -86,13 +91,16 @@ from .nodes import (
     ReportRevisionFailure,
     ResearchBudgetExhausted,
     ResearchReviewOutcome,
+    glossary_tool_messages,
 )
+from .prompts import render_data_sources_instructions
 from .references import (
     ReferencesSection,
     ReferencesTableContent,
     build_references_section,
     dataset_rows,
     document_rows,
+    glossary_rows,
 )
 from .report_length import LENGTH_EXEMPTIONS
 from .state import build_initial_state
@@ -129,6 +137,7 @@ _KIND_IDS_UNRESOLVED = "ids_unresolved"
 _KIND_LINK_PASS_FAILED = "link_pass_failed"
 _KIND_CONVERSION_FAILED = "conversion_failed"
 _KIND_REFERENCES_BUILD_FAILED = "references_build_failed"
+_KIND_GLOSSARY_TABLE_FAILED = "glossary_table_failed"
 _KIND_EMISSION_FAILED = "emission_failed"
 # The dataset tool gets a kind of its own rather than sharing the one above, so a warning says
 # which resolution was misconfigured; the rest of its kinds are named in `dataset_metadata.py`.
@@ -176,6 +185,7 @@ def _with_references_section(
     document_urls: Mapping[int, str],
     dataset_entries: Sequence[DatasetTableEntry],
     dataset_sources: Mapping[str, DatasetSource],
+    glossary_table: ReferencesTableContent | None,
     first_index: int,
     pill_title_max_chars: int | None,
 ) -> ReferencesSection:
@@ -186,6 +196,9 @@ def _with_references_section(
     carrying what its server reported about it — so a source whose metadata did not resolve is
     listed from its identifier rather than left out. A row whose source the reader can open is a
     pill, numbered from `first_index` so it follows the inline citations' annotations.
+
+    `tables` come in the order the property fixes, datasets then documents, and the glossary
+    table, when the report cites a glossary term, follows them.
 
     Nothing is taken out of the text: a draft that wrote a references section of its own keeps it,
     having already been reported for the extra heading while the loop had a version left.
@@ -206,6 +219,8 @@ def _with_references_section(
         )
         for entry in tables
     ]
+    if glossary_table is not None:
+        contents.append(glossary_table)
     built = build_references_section(
         heading=heading,
         empty_text=empty_text,
@@ -249,14 +264,33 @@ def _warn_data_query_outcomes(*, query_ids: Sequence[str], data_queries: DataQue
         )
 
 
-def _count_markers(text: str) -> int:
+def _read_structured(
+    message: ToolMessage, *, read: Callable[[Any], list[dict[str, Any]]]
+) -> list[dict[str, Any]]:
+    """The records of one glossary tool result, read off its structured result.
+
+    Empty for a result without a structured result or without the shape the fetch accepts: the
+    table then falls back to the next source, or to the term alone.
+    """
+    artifact = message.artifact
+    if not isinstance(artifact, dict) or "structured_content" not in artifact:
+        return []
+    try:
+        return read(artifact["structured_content"])
+    except InvalidResultError:
+        return []
+
+
+def _count_markers(text: str, *, glossary: bool) -> int:
     """How many citation markers the text still carries, for the step's own log event.
+
+    `glossary` also counts the `[glossary <term>]` form, which only a glossary channel cites with.
 
     Guarded, because the only path that reaches it is one where the marker parsing already
     failed once, and a count in a log record is not worth failing a delivered report over.
     """
     try:
-        return len(find_citation_markers(text))
+        return len(find_citation_markers(text, glossary=glossary))
     except Exception:
         return 0
 
@@ -281,17 +315,34 @@ class ResearchRunner:
         self,
         prep_state: PrepState,
         properties: ApplicationProperties,
+        data_sources: DataSources,
         opik_tracer: OpikTracer | None = None,
         bearer_token: str | None = None,
     ) -> list[BaseMessage]:
+        """Run the research graph and deliver its report.
+
+        `data_sources` is the turn's data-sources fetch, made before preparation: its string
+        reaches every node, and its catalogue is the one the citations resolve against.
+        """
         loaded = await load_mcp_tools(mcp_servers=properties.mcp_servers, bearer_token=bearer_token)
         # One set of lookups per request, shared by the report review's identifier checks and the
         # citation step, so neither asks a server again about what the other already learned.
         lookups = CitationLookups(
-            dataset_tool=loaded.dataset_metadata_tool,
+            dataset_tool=loaded.list_datasets_tool,
             client=loaded.client,
             document_source=properties.document_metadata,
             data_queries=loaded.data_queries,
+            catalogue=data_sources.catalogue,
+        )
+        structure_tool = properties.dataset_structure_tool
+        glossary = properties.glossary
+        glossary_tools = glossary.tools if glossary is not None else None
+        data_sources_instructions = render_data_sources_instructions(
+            data_sources=data_sources,
+            bound_tools={tool.name for tool in loaded.agent_tools},
+            list_datasets_tool=properties.list_datasets_tool,
+            dataset_structure_tool=structure_tool.tool_name if structure_tool else None,
+            glossary=glossary_tools,
         )
         # Both are research-specific and app-owned: the sentinel ends an iteration, the status
         # tool tells the user what the agent is doing. Neither reaches an MCP server.
@@ -310,6 +361,10 @@ class ResearchRunner:
             max_report_versions=properties.max_report_versions,
             references_section_name=properties.references_section_name,
             citation_lookups=lookups,
+            data_sources=data_sources.text,
+            data_sources_instructions=data_sources_instructions,
+            glossary=glossary_tools,
+            glossary_fetch_listed_terms=bool(data_sources.glossary_listed),
             emit_research_review_result_stage=self._emit_research_review_result_stage,
             emit_research_budget_exhausted=self._emit_research_budget_exhausted_stage,
             emit_report_review_result_stage=self._emit_report_review_result_stage,
@@ -347,12 +402,14 @@ class ResearchRunner:
             file_sharing_tool=loaded.file_sharing_tool,
             configured_tool_name=properties.file_sharing_tool,
             lookups=lookups,
-            configured_dataset_tool_name=properties.dataset_metadata_tool,
+            configured_dataset_tool_name=properties.list_datasets_tool,
             pill_title_max_chars=properties.max_pill_title_chars,
             filter_line_max_chars=properties.data_query_card_filter_max_line_chars,
             references_heading=properties.references_section_name,
             references_empty_text=properties.references_section_empty_text,
             references_tables=properties.references_tables,
+            glossary=glossary,
+            data_sources=data_sources,
         )
         return self._messages
 
@@ -368,6 +425,8 @@ class ResearchRunner:
         references_heading: str,
         references_empty_text: str,
         references_tables: Sequence[ServerReferencesTable],
+        glossary: ServerGlossary | None,
+        data_sources: DataSources,
     ) -> None:
         """Post-process the settled report, append it to the choice, and emit its annotations.
 
@@ -397,6 +456,8 @@ class ResearchRunner:
                 references_heading=references_heading,
                 references_empty_text=references_empty_text,
                 references_tables=references_tables,
+                glossary=glossary,
+                data_sources=data_sources,
             )
         except BaseException:
             # The step catches its own failures, so only something outside them reaches here —
@@ -438,6 +499,8 @@ class ResearchRunner:
         references_heading: str,
         references_empty_text: str,
         references_tables: Sequence[ServerReferencesTable],
+        glossary: ServerGlossary | None,
+        data_sources: DataSources,
     ) -> _ReportDelivery:
         """The three deterministic alterations of the settled draft, in their fixed order.
 
@@ -452,7 +515,9 @@ class ResearchRunner:
             removal = remove_hyperlinks(draft)
         except Exception as error:
             self._warn_citation_failure(kind=_KIND_LINK_PASS_FAILED, error=error)
-            return _ReportDelivery(text=draft, markers_left=_count_markers(draft))
+            return _ReportDelivery(
+                text=draft, markers_left=_count_markers(draft, glossary=glossary is not None)
+            )
 
         delivery = _ReportDelivery(text=removal.text, hyperlinks_removed=removal.removed)
         metadata_source = lookups.document_source
@@ -480,7 +545,7 @@ class ResearchRunner:
             # draft that cites nothing and carried no link leaves the step with nothing to say,
             # and a stage there would open and close in the same instant.
             has_resolution = (file_sharing_tool is not None and document_ids) or (
-                lookups.has_dataset_tool and catalogue_urns
+                lookups.has_dataset_catalogue and catalogue_urns
             )
             if removal.removed or has_resolution:
                 self._set_activity(CITATIONS_ACTIVITY)
@@ -536,10 +601,12 @@ class ResearchRunner:
                 data_queries=data_queries.records,
                 pill_title_max_chars=pill_title_max_chars,
                 filter_line_max_chars=filter_line_max_chars,
+                glossary=glossary is not None,
             )
+            glossary_terms = cited_glossary_terms(removal.text) if glossary is not None else []
         except Exception as error:
             self._warn_citation_failure(kind=_KIND_CONVERSION_FAILED, error=error)
-            delivery.markers_left = _count_markers(delivery.text)
+            delivery.markers_left = _count_markers(delivery.text, glossary=glossary is not None)
             return delivery
 
         delivery.text = converted.text
@@ -547,6 +614,9 @@ class ResearchRunner:
         delivery.citations_annotated = len(converted.annotations)
         delivery.markers_left = converted.markers_left
 
+        glossary_table = self._glossary_table(
+            terms=glossary_terms, glossary=glossary, data_sources=data_sources
+        )
         try:
             section = _with_references_section(
                 delivery.text,
@@ -558,6 +628,7 @@ class ResearchRunner:
                 document_urls=document_urls,
                 dataset_entries=dataset_entries,
                 dataset_sources=dataset_sources,
+                glossary_table=glossary_table,
                 first_index=len(delivery.annotations),
                 pill_title_max_chars=pill_title_max_chars,
             )
@@ -568,6 +639,42 @@ class ResearchRunner:
             # every pill the conversion earned is already in the text above.
             self._warn_citation_failure(kind=_KIND_REFERENCES_BUILD_FAILED, error=error)
         return delivery
+
+    def _glossary_table(
+        self,
+        *,
+        terms: Sequence[str],
+        glossary: ServerGlossary | None,
+        data_sources: DataSources,
+    ) -> ReferencesTableContent | None:
+        """The glossary table's content, or `None` when the report cites no glossary term.
+
+        A cited term's record comes from the app's fetch, then from the research agent's
+        term-definitions results, then from its list-terms results. The agent's results are
+        selected from the transcript by the configured tool names and read with the fetch's own
+        shape rules. A failure here costs this table and nothing else.
+        """
+        if glossary is None or not terms:
+            return None
+        tools = glossary.tools
+        try:
+            fetched = data_sources.glossary.records if data_sources.glossary is not None else None
+            definitions: list[dict[str, Any]] = []
+            listed: list[dict[str, Any]] = []
+            for message in glossary_tool_messages(self._messages, glossary=tools):
+                if message.name == tools.definitions_tool:
+                    definitions.extend(_read_structured(message, read=read_definitions))
+                else:
+                    listed.extend(_read_structured(message, read=read_term_list))
+            rows = glossary_rows(terms, sources=[fetched or [], definitions, listed])
+        except Exception as error:
+            self._warn_citation_failure(kind=_KIND_GLOSSARY_TABLE_FAILED, error=error)
+            return None
+        return ReferencesTableContent(
+            title=tools.references_table.title,
+            columns=tools.references_table.columns,
+            rows=rows,
+        )
 
     async def _share_cited_documents(
         self,
@@ -683,8 +790,8 @@ class ResearchRunner:
         dataset has a portal page is the channel's own data — and the gap between the requested
         and resolved counts on the step's own event is the whole record of it.
 
-        Read through the turn's lookups, so a catalogue the report review already fetched is not
-        fetched again.
+        Read through the turn's lookups, so a catalogue the data-sources fetch obtained at the
+        start of the turn, or the report review fetched, is not fetched again.
         """
         if configured_tool_name is None:
             logger.debug(
@@ -692,7 +799,7 @@ class ResearchRunner:
                 " delivered as the marker text the report writer wrote"
             )
             return {}
-        if not lookups.has_dataset_tool:
+        if not lookups.has_dataset_catalogue:
             self._warn_citation_failure(
                 kind=_KIND_DATASET_TOOL_NOT_ADVERTISED, tool_name=configured_tool_name
             )

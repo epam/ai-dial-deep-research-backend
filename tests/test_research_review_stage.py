@@ -80,6 +80,7 @@ def _review_node(
     node = nodes.make_research_review_node(
         today_date="2026-08-14",
         max_research_iterations=max_research_iterations,
+        data_sources="The topics map.",
         emit_result_stage=outcomes.append,
         emit_activity=lambda _title: None,
     )
@@ -186,6 +187,7 @@ async def test_a_failed_review_call_emits_nothing_and_ends_the_turn(
     node = nodes.make_research_review_node(
         today_date="2026-08-14",
         max_research_iterations=10,
+        data_sources="The topics map.",
         emit_result_stage=outcomes.append,
         emit_activity=lambda _title: None,
     )
@@ -255,6 +257,10 @@ async def _run_graph_with_the_cap_reached(
         max_report_versions=1,
         references_section_name="References",
         citation_lookups=no_lookups(),
+        data_sources="The topics map.",
+        data_sources_instructions="",
+        glossary=None,
+        glossary_fetch_listed_terms=False,
         emit_research_review_result_stage=lambda outcome: (
             findings.append(outcome),
             order.append("findings"),

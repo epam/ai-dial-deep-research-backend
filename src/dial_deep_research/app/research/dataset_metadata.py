@@ -1,4 +1,4 @@
-"""Calling the configured dataset-metadata tool, and reading the catalogue it answers with.
+"""Calling the configured list-datasets tool, and reading the catalogue it answers with.
 
 A dataset citation needs three things the app does not hold: the dataset's human name, which
 labels the pill and the card and leads its References row; the address of its page, which is what
@@ -154,7 +154,19 @@ async def read_catalogue(*, tool: BaseTool) -> dict[str, DatasetSource]:
         # deliberately not read — a second read path, for a case no server we can test against
         # produces, would decide silently which copy an answer came from.
         raise DatasetMetadataError(KIND_DATASET_NO_STRUCTURED_RESULT)
-    structured = artifact["structured_content"]
+    return parse_catalogue(artifact["structured_content"])
+
+
+def parse_catalogue(structured: Any) -> dict[str, DatasetSource]:
+    """Every dataset a list-datasets structured result reports, by URN.
+
+    Shared by the citation path, which reads the structured result off a `ToolMessage`, and by the
+    data-sources fetch at the start of the turn, which reads it off the MCP result directly, so
+    one set of rules decides which records are usable.
+
+    Raises:
+        DatasetMetadataError: the result carries no readable `datasets` array.
+    """
     try:
         catalogue = _Catalogue.model_validate(structured)
     except ValidationError as error:

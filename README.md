@@ -192,7 +192,7 @@ carries an identifier that means something only inside the server that issued it
   deployment), through whose copy the reader opens a cited page, and its
   `document_metadata_resource` and `document_title_key`, which name the publication a pill stands
   for rather than its id;
-- a `statgpt` server names its `dataset_metadata_tool`, which gives a cited dataset its name and
+- a `statgpt` server names its `list_datasets_tool`, which gives a cited dataset its name and
   the address of the page the citation opens, and its `data_query_meta_key`, the `_meta` key its
   tool results carry data-query records under (such as `acme.example.org/client`), which gives a
   cited data query the data explorer link its pill opens. The key's namespace comes from the

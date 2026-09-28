@@ -41,5 +41,5 @@
 
 ## 9. End-to-end smoke test
 
-- [x] 9.1 Start the DR server from this worktree and send one short research turn (a query about the latest short insight-type publication, chosen only to keep token usage low) via `scripts/send_conversation.py`, using a conversation artifact file outside the repo (e.g. under `$TMPDIR`) so no query content is ever written into a repo-tracked path.
+- [x] 9.1 Start the DR server from this worktree and send one short research turn (a query about a recent publication, chosen only to keep token usage low) via `scripts/send_conversation.py`, using a conversation artifact file outside the repo (e.g. under `$TMPDIR`) so no query content is ever written into a repo-tracked path.
 - [x] 9.2 Confirm the new message-count (and, where changed, duration) fields appear in the logs for each LLM call site touched by this change.

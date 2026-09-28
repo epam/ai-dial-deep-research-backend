@@ -1,0 +1,653 @@
+## Purpose
+
+Builds the description of a channel's data sources from what its StatGPT MCP server reports, so an
+admin does not have to write and maintain it by hand for every environment. The app fetches the
+list of datasets, their structures and the glossary once per turn, with retries, and puts them into
+the context of the model calls that plan the research, run it and write the report.
+
+## ADDED Requirements
+
+### Requirement: The data sources are fetched once per turn, before preparation
+
+When a channel configures a `statgpt` MCP server, the app SHALL run one **data-sources fetch** per
+turn, before the preparation agent's first model call, and SHALL use its result for every model
+call of the turn, research included. The fetch has two parts, which SHALL run concurrently:
+
+- **the datasets**: always, because a `statgpt` server always names its list-datasets tool (see
+  **application-config-schema**), and, when the server also names a `dataset_structure_tool`, the
+  structure of every listed dataset;
+- **the glossary**: only when the server configures a `glossary`.
+
+A turn of the playground deployment SHALL run the data-sources fetch once, before the playground
+agent's first model call, under the same rules.
+
+A channel with no `statgpt` server SHALL make no data-sources call, and its prompts SHALL carry
+neither a datasets section nor a glossary.
+
+The fetch SHALL call the tools the configuration names, by those names. It SHALL NOT fetch the
+server's tool list to find the tools: the names come from the configuration, and a name the server
+does not advertise surfaces as a failed call, which the retry rules below already handle. The MCP
+client library may still request the tool list during a call, to validate the call's structured
+result against the tool's output schema as the MCP specification recommends; that request is part
+of the call, under its deadline and its retries. The server's
+`tools_to_include` filter SHALL NOT affect the fetch, because the filter states which tools a model
+is offered, and the fetch is made by the app.
+
+The fetch SHALL use an MCP client constructed for the turn, with the same connection and
+credentials as the turn's other MCP traffic to that server (see **dial-agent-with-mcp**), and each
+tool call SHALL run in an MCP session of its own, so a failure that ends one session cannot fail
+another call.
+
+Every call SHALL be bounded by a fixed deadline. A call that has not returned by its deadline
+SHALL count as a failed call. The bound is needed because the MCP transport's read timeout does not
+end a call, and without it one call that never returns would hold the turn before preparation
+starts.
+
+The fetched data sources SHALL NOT be persisted to the turn state. They live for the turn only, and
+the next turn fetches them again.
+
+A turn that ends before preparation because its conversation already handed off to research SHALL
+make no data-sources call: the fetch runs only on a turn that goes on to preparation.
+
+#### Scenario: One fetch serves the whole turn
+
+- **WHEN** a turn on a channel with a `statgpt` server runs preparation and then research
+- **THEN** the list-datasets tool SHALL be called in one fetch before the preparation agent's first
+  model call, and the research calls SHALL receive the datasets section that fetch produced, with
+  no second fetch
+
+#### Scenario: A channel without a dataset server makes no call
+
+- **WHEN** a turn runs on a channel whose only MCP server is a `generic_rag` server
+- **THEN** no data-sources call SHALL be made, and no prompt SHALL carry a datasets section or a
+  glossary
+
+#### Scenario: A channel without a glossary makes no glossary call
+
+- **WHEN** a turn runs on a channel whose `statgpt` server sets no `glossary`
+- **THEN** no list-terms or term-definitions call SHALL be made, and no prompt SHALL carry a
+  glossary
+
+#### Scenario: The tool filter does not stop the fetch
+
+- **WHEN** the server's `tools_to_include` names neither the list-datasets tool nor the glossary
+  tools
+- **THEN** the app SHALL still fetch the datasets and the glossary, and none of those tools SHALL
+  be offered to a model
+
+#### Scenario: A call that never returns is cut off
+
+- **WHEN** a term-definitions call receives no response
+- **THEN** the call SHALL count as failed once its deadline passes, and its terms SHALL be
+  re-requested in the next round
+
+#### Scenario: A stalled list-datasets call is cut off and retried
+
+- **WHEN** the first list-datasets attempt receives no response
+- **THEN** that attempt SHALL count as failed once its deadline passes, and the app SHALL make the
+  second attempt
+
+#### Scenario: Tools are called by their configured names
+
+- **WHEN** a data-sources fetch starts on a channel that names its list-datasets tool
+- **THEN** the app SHALL call that tool by the configured name, without first listing the server's
+  tools to find it
+
+#### Scenario: A handed-off conversation makes no call
+
+- **WHEN** a turn arrives on a conversation whose research already started on an earlier turn
+- **THEN** the app SHALL make no data-sources call, and the turn SHALL fail as it does today
+
+### Requirement: The list of datasets is requested with at most three attempts
+
+The app SHALL call the list-datasets tool with no arguments, and SHALL make at most **three
+attempts** in total. An attempt SHALL count as failed when the call raises, when the result is
+marked as an MCP error, when it does not return by its deadline, or when its structured content
+does not carry a `datasets` array, the shape the **report-citations** contract of the tool requires.
+Any failed attempt SHALL be retried while attempts remain, whatever the kind of failure. The
+attempts SHALL be separated by a growing delay with jitter, on the order of one second before the
+second attempt and two seconds before the third.
+
+When all three attempts fail, the datasets section SHALL carry the failure text described in **The
+datasets section is rendered as one string**, no structure call SHALL be made, and the turn SHALL
+continue.
+
+A list with no datasets SHALL be a successful result, and no structure call SHALL be made.
+
+A cancelled turn SHALL NOT be retried or converted into the failure text: cancellation SHALL
+propagate.
+
+#### Scenario: A transient failure is retried
+
+- **WHEN** the first list-datasets attempt fails with HTTP 502 and the second succeeds
+- **THEN** the app SHALL use the second attempt's answer, and SHALL make no third attempt
+
+#### Scenario: Three failures give the failure text
+
+- **WHEN** all three list-datasets attempts fail
+- **THEN** the datasets section SHALL carry the failure text, no structure call SHALL be made, and
+  the turn SHALL continue to the preparation agent
+
+### Requirement: Dataset structures are requested concurrently, one call per dataset
+
+When the server names a `dataset_structure_tool` and the list succeeded, the app SHALL request the
+structure of every dataset the list reported.
+
+**The structures add the larger share of the tokens.** A dataset's structure answer is on the
+order of 450 tokens, and its record in the list answer on the order of 200. A channel that wants the list without the
+structures leaves `dataset_structure_tool` unset: the models see the list alone, and the research
+agent calls the structure tool itself when the server's `tools_to_include` filter offers it.
+
+- **The contract.** A tool named as a dataset-structure tool SHALL take one argument,
+  `{"dataset_id": <id>}`, where `<id>` is a record's `id` from the list-datasets answer, and SHALL
+  return the structure of that one dataset as a JSON object in its MCP **structured result**. The
+  app SHALL depend on nothing else about the object: it shows the object to the models as the
+  server sent it.
+- **Calls.** The app SHALL make one call per distinct string `id` in the list's `datasets` array,
+  and SHALL send all of them concurrently. A record without a string `id` gets no call.
+- **Attempts.** Each call SHALL have at most **three attempts**, separated by the same growing
+  delay as the list attempts. An attempt SHALL count as failed when the call raises, when the
+  result is marked as an MCP error, when it does not return by its deadline, or when it carries no
+  structured result that is a JSON object.
+- **After the last attempt**, a dataset whose structure was not obtained SHALL stay in the
+  structures block as a failure entry.
+
+#### Scenario: Every listed dataset gets one structure call
+
+- **WHEN** the list reports 5 datasets and the server names a dataset-structure tool
+- **THEN** the app SHALL send 5 concurrent structure calls, each with one dataset's `id` as
+  `dataset_id`
+
+#### Scenario: Only the failed call is repeated
+
+- **WHEN** one of the 5 structure calls fails with HTTP 502 and the other 4 succeed
+- **THEN** the app SHALL repeat only the failed call, at most twice more
+
+#### Scenario: A structure answer that is not an object is a failed attempt
+
+- **WHEN** a structure call returns structured content that is a JSON array rather than an object
+- **THEN** that attempt SHALL count as failed and be retried while attempts remain
+
+#### Scenario: No structure tool means no structure call
+
+- **WHEN** the server names no `dataset_structure_tool`
+- **THEN** the app SHALL make no structure call, and the datasets section SHALL carry no structures
+  block
+
+### Requirement: The datasets section is designed for a catalogue of about ten datasets
+
+Showing the whole catalogue to every call that receives the data-sources string SHALL be understood
+as designed for a channel whose catalogue holds on the order of **ten datasets**. Such a catalogue
+costs on the order of 6,500 tokens with its structures, and every call carries all of it. The app SHALL NOT cap, page, filter or shorten the catalogue: a channel with a larger
+catalogue is outside what this change designs for, and serving one is deferred.
+
+#### Scenario: A channel of the intended size
+
+- **WHEN** the list reports 5 datasets and the server names a dataset-structure tool
+- **THEN** the datasets section SHALL carry the whole list and all 5 structures, with nothing left
+  out
+
+### Requirement: The datasets section is rendered as one string
+
+The datasets section SHALL be one string. It SHALL start with the line `Datasets:`, a newline, and
+the list-datasets tool's structured result serialized as one-line JSON, exactly as the server sent
+it: every field, in the server's order.
+
+When the server names a `dataset_structure_tool` and the list reported at least one dataset with a
+string `id`, the section SHALL continue with a blank line, the line `Dataset structures:`, a
+newline, and a one-line JSON array. The array SHALL carry one element per dataset the app requested
+a structure for, in the order the list reported them:
+
+- for a dataset whose structure was obtained, the structured result of its structure call, exactly
+  as the server sent it;
+- for a dataset whose structure was not obtained, the object
+  `{"dataset_id": <id>, "error": "failed to obtain dataset structure"}`.
+
+When the list-datasets tool failed three times, the section SHALL be the line `Datasets:`, a
+newline, and the text `failed to obtain list of datasets`, with no structures block.
+
+Characters outside ASCII SHALL be written as themselves rather than as `\u` escapes, because dataset
+names and descriptions carry typographic quotes and dashes, and an escape costs tokens and reads
+worse.
+
+#### Scenario: A list with structures
+
+- **WHEN** the list reports two datasets and both structure calls succeed
+- **THEN** the section SHALL be `Datasets:`, a newline, the list's structured result as one-line
+  JSON, a blank line, `Dataset structures:`, a newline, and a JSON array of the two structured
+  results in the list's order
+
+#### Scenario: A failed structure is marked in its place
+
+- **WHEN** the list reports datasets `A` and `B` in that order, and only the structure of `A` is
+  obtained
+- **THEN** the array SHALL carry the structure of `A` first, and then
+  `{"dataset_id": "B", "error": "failed to obtain dataset structure"}`
+
+#### Scenario: A failed list gives the failure text
+
+- **WHEN** all three list-datasets attempts fail
+- **THEN** the section SHALL be `Datasets:` followed by a newline and
+  `failed to obtain list of datasets`
+
+### Requirement: The list of terms is requested with at most three attempts
+
+The app SHALL call the list-terms tool with no arguments, and SHALL make at most **three
+attempts** in total. An attempt SHALL count as failed when the call raises, when the result is
+marked as an MCP error, when it does not return by its deadline, or when its structured content
+does not carry a `terms` array of records with a `term` string. Any failed attempt SHALL be
+retried while attempts remain, whatever the kind of failure. The attempts SHALL be separated by a
+growing delay with jitter, on the order of one second before the second attempt and two seconds
+before the third.
+
+When all three attempts fail, the glossary result SHALL be the failure text described in **The
+glossary is rendered as one string**, no term-definitions call SHALL be made, and the turn SHALL
+continue.
+
+A list with no terms SHALL be a successful result: no term-definitions call SHALL be made, and the
+glossary SHALL render as an empty array.
+
+A cancelled turn SHALL NOT be retried or converted into the failure text: cancellation SHALL
+propagate.
+
+#### Scenario: A transient failure is retried
+
+- **WHEN** the first list-terms attempt fails with HTTP 502 and the second succeeds
+- **THEN** the app SHALL use the second attempt's list, and SHALL make no third attempt
+
+#### Scenario: Three failures give the failure text
+
+- **WHEN** all three list-terms attempts fail
+- **THEN** the glossary result SHALL be the failure text, no term-definitions call SHALL be made,
+  and the turn SHALL continue to the preparation agent
+
+### Requirement: Definitions are requested in concurrent batches, in at most three rounds
+
+After the list succeeds, the app SHALL request the definition of every listed term through the
+term-definitions tool, whose argument is `{"terms": [<term name>, ...]}`.
+
+- **Batches.** A round SHALL split the terms it requests into batches of at most
+  `max_terms_per_definitions_call` names, and SHALL send all of that round's batches concurrently.
+  The app SHALL never send a batch larger than the limit, because the server rejects such a call
+  whole and fetches nothing for it.
+- **Rounds.** The app SHALL run at most **three rounds**. The first round requests every listed
+  term. Each later round requests every term that did not resolve in the round before, split into
+  new batches, and runs only when at least one such term exists. Later rounds SHALL be separated
+  from the round before by a growing delay with jitter, on the order of one second before the
+  second round and two seconds before the third.
+- **What resolves a term.** A batch call counts as failed under the same conditions as a list-terms
+  attempt, with `definitions` in place of `terms`. A term resolves when a successful call's
+  `definitions` carries a record whose `term` equals the listed name after surrounding whitespace
+  is trimmed from both and both are case-folded. A term does not resolve when its batch call failed,
+  when the call reports it under `notFound`, or when the call's answer names it nowhere. A record
+  that matches no term the batch requested SHALL be ignored.
+- **After the last round**, a term that did not resolve SHALL stay in the glossary without a
+  definition.
+
+#### Scenario: A glossary larger than the limit is split into batches
+
+- **WHEN** the list has 25 terms and the limit is 10
+- **THEN** the first round SHALL send three concurrent calls, requesting 10, 10 and 5 terms
+
+#### Scenario: Only the unresolved terms are re-requested
+
+- **WHEN** in the first round one batch of 10 fails and the other batches resolve every term they
+  requested
+- **THEN** the second round SHALL request exactly those 10 terms, and a third round SHALL run only
+  if some of them still do not resolve
+
+#### Scenario: A term reported as not found is re-requested
+
+- **WHEN** a successful batch call reports one requested term under `notFound`
+- **THEN** that term SHALL be requested again in the next round, while rounds remain
+
+#### Scenario: A term still unresolved after three rounds stays listed
+
+- **WHEN** a term does not resolve in any of the three rounds
+- **THEN** it SHALL appear in the glossary without a definition, and no fourth round SHALL run
+
+### Requirement: The glossary is rendered as one string
+
+The glossary result SHALL be one string: the line `Glossary terms:`, a newline, and a JSON array.
+The array SHALL carry one object per listed term, in the order the list-terms tool returned them.
+Each object SHALL start with an `index` field, an integer counting from 1 in that order, followed
+by:
+
+- for a resolved term, every field of its record in the term-definitions answer, in the order the
+  answer gives them;
+- for an unresolved term, every field of its record in the list-terms answer, with a `definition`
+  field set to `null` directly after `term`.
+
+Characters outside ASCII SHALL be written as themselves rather than as `\u` escapes, because
+glossary terms carry typographic quotes and dashes, and an escape costs tokens and reads worse.
+
+When the list-terms tool failed three times, the string SHALL be the line `Glossary terms:`, a
+newline, and the text `failed to obtain list of terms`.
+
+The rendered objects exist only inside this string, which is never persisted as a list, so the
+`index` field cannot be re-slotted by the DIAL SDK's chunk merge.
+
+#### Scenario: Resolved and unresolved terms side by side
+
+- **WHEN** the list returns `Primary Commodity Prices` and `World Economic Outlook` in that order,
+  and only the second resolves
+- **THEN** the string SHALL be `Glossary terms:` followed by a newline and an array whose first
+  object is `{"index": 1, "term": "Primary Commodity Prices", "definition": null}` and whose second
+  object starts with `"index": 2` and carries the definition record's fields
+
+#### Scenario: A failed list gives the failure text
+
+- **WHEN** all three list-terms attempts fail
+- **THEN** the string SHALL be `Glossary terms:` followed by a newline and
+  `failed to obtain list of terms`
+
+### Requirement: The data-sources string reaches the calls that plan, research and write
+
+The **data-sources string** of a turn SHALL be the instance's `prompts.data_sources_descriptions`,
+followed, on a channel with a `statgpt` server, by a blank line and the datasets section, and
+followed, when the channel configures a glossary, by a blank line and the rendered glossary string.
+On a channel with no `statgpt` server it SHALL be `prompts.data_sources_descriptions` unchanged.
+
+The data-sources string SHALL be what every model call receives in place of
+`prompts.data_sources_descriptions`: the preparation agent and the query clarity check (see
+**clarification-and-plan-alignment**), and the playground agent. It SHALL also be what every call
+of the research graph receives — research-agent, research-review, the report writer and
+report-review (see **research-execution**).
+
+The plan approval check SHALL receive neither the data-sources string nor any part of it: it judges
+whether the user approved the recorded plan, which none of it bears on.
+
+**The playground agent.** Its system prompt SHALL carry the data-sources string where it carries
+`data_sources_descriptions`. Its other inputs are unchanged.
+
+#### Scenario: The combined string reaches the preparation agent
+
+- **WHEN** a turn runs on a channel whose `statgpt` server names a dataset-structure tool and
+  configures a glossary that listed terms
+- **THEN** the preparation agent's system prompt SHALL carry the instance's
+  `data_sources_descriptions`, a blank line, the datasets section with its structures block, a
+  blank line, and the rendered glossary string, in that order
+
+#### Scenario: A failed fetch still reaches the prompts
+
+- **WHEN** all three list-terms attempts failed
+- **THEN** the preparation agent, the query clarity check, the playground agent and every call of
+  the research graph SHALL receive the data-sources string ending in the failure text, and the
+  report reviewer SHALL be given the glossary-terminology check only if the research agent obtained
+  a successful glossary tool result
+
+#### Scenario: A failed list of datasets still reaches the prompts
+
+- **WHEN** all three list-datasets attempts failed
+- **THEN** every call that receives the data-sources string SHALL receive it with a datasets
+  section carrying `failed to obtain list of datasets`
+
+### Requirement: An agent that can call the dataset tools is told which calls are done and which failed
+
+The system prompt of the research agent SHALL tell the agent, for each of the two dataset tools,
+whether the app's own calls succeeded. A tool whose answer the datasets
+section shows SHALL NOT be called again for that answer. A tool whose call failed after the app's
+retries SHALL be called by the agent when it needs the answer, because the agent's call is the
+fallback for a failure the app's retries did not overcome. The instruction SHALL name each tool as
+the agent is offered it, and SHALL carry these parts:
+
+- **The list succeeded**: the datasets section holds the list-datasets tool's answer, so the agent
+  SHALL NOT call the list-datasets tool.
+- **The list failed**: the app could not obtain the list of datasets, so the agent SHALL call the
+  list-datasets tool when it needs to know which datasets exist, making **at most three**
+  list-datasets calls in the whole research.
+- **Structures were fetched**: the structures block holds the dataset-structure tool's answer for
+  every dataset whose entry is not a failure entry. The agent SHALL NOT call the structure tool for
+  such a dataset, and SHALL call it for a dataset whose entry is a failure entry when it needs that
+  structure, making **at most three** structure calls for that dataset in the whole research.
+- **The list failed and the server names a dataset-structure tool**: no structure was fetched, so
+  the agent SHALL call the structure tool for each dataset whose structure it needs, making **at
+  most three** structure calls for each dataset in the whole research. This part SHALL appear only
+  when the list-datasets tool is bound too, because without the list the agent has no dataset id to
+  pass.
+
+The limit of three calls is the same bound the research agent's failed-tool rule sets, one call and
+two repeats (see **research-execution**), and the same limit the glossary instruction states.
+
+Each part about a tool SHALL appear only when that tool is among the tools bound to the agent.
+
+**The playground agent** SHALL carry only the parts about a failed call — the failed list and the
+failure entries — and never a part that tells it not to call a tool. The playground exists to
+exercise the MCP tools, and its user may ask it to call either tool whatever the fetch obtained.
+
+No other model call SHALL carry any part of the instruction.
+
+#### Scenario: Both tools succeeded and are bound
+
+- **WHEN** a research turn runs on a channel whose list and structure calls all succeeded, and the
+  research agent's tools include both tools
+- **THEN** the research agent's system prompt SHALL tell it not to call either tool for the
+  datasets the section shows, naming both tools
+
+#### Scenario: A failed list tells the agent to call the tool
+
+- **WHEN** all three list-datasets attempts failed, and the list-datasets tool is bound to the
+  research agent
+- **THEN** the research agent's system prompt SHALL tell it to call the list-datasets tool when it
+  needs to know which datasets exist, at most three times
+
+#### Scenario: A failed structure tells the agent to request it
+
+- **WHEN** the structures block carries a failure entry for dataset `B`, and the structure tool is
+  bound to the research agent
+- **THEN** the research agent's system prompt SHALL tell it to call the structure tool for the
+  datasets whose entry is a failure entry, and not to call it for the others
+
+#### Scenario: The structure tool is filtered out
+
+- **WHEN** the server's `tools_to_include` omits the dataset-structure tool
+- **THEN** no system prompt SHALL carry a part about the structure tool, and the structures block
+  SHALL still reach every call that receives the data-sources string
+
+#### Scenario: A failed list without the list tool gives no structure part
+
+- **WHEN** all three list-datasets attempts failed, and the research agent's tools include the
+  structure tool but not the list-datasets tool
+- **THEN** the research agent's system prompt SHALL NOT tell it to call the structure tool
+
+#### Scenario: The playground is never told not to call a tool
+
+- **WHEN** a playground turn runs on a channel whose list and structure calls all succeeded
+- **THEN** the playground agent's system prompt SHALL carry no part of the dataset-tools
+  instruction
+
+#### Scenario: The preparation calls are never told to call a dataset tool
+
+- **WHEN** all three list-datasets attempts failed
+- **THEN** neither the preparation agent's nor the query clarity check's system prompt SHALL tell
+  the model to call the list-datasets tool or the dataset-structure tool, because preparation has
+  no MCP tools
+
+### Requirement: Preparation plans around a failed list of datasets
+
+A failed list of datasets SHALL NOT stop preparation. When all three list-datasets attempts failed,
+the preparation agent's system prompt SHALL carry an instruction with two parts:
+
+- the failure SHALL NOT hold up clarification or the plan, and the agent SHALL NOT ask the user to
+  wait, to retry, or to choose datasets it cannot name;
+- when the query needs data the datasets would hold, the plan SHALL carry an item that asks
+  research to search the available datasets for that data, and that says the list of datasets
+  could not be obtained at the moment, so no specific dataset can be suggested yet. An example of
+  such an item: "Search the available datasets for X. The list of datasets could not be obtained at
+  the moment, so no specific datasets can be suggested yet."
+
+The instruction SHALL also state that the preparation rule requiring the plan to name every data
+source that plausibly covers the query topic does not apply to a data source whose listing failed,
+which today means the datasets. The search item takes the place of the named datasets. Without this
+exception the two rules would contradict each other, because no dataset can be named.
+
+The instruction SHALL NOT appear when the list succeeded, or on a channel with no dataset server.
+The query clarity check gets no such instruction, because it does not ask the user to choose a
+dataset in any case.
+The research agent needs no such instruction: the plan item reaches it through the approved plan,
+and its own instruction tells it to call the list-datasets tool when the app's list failed.
+
+#### Scenario: A failed list adds a search item to the plan
+
+- **WHEN** all three list-datasets attempts failed, and the user asks for GDP growth forecasts
+  that the datasets would hold
+- **THEN** the preparation agent's system prompt SHALL carry the instruction, and the plan the agent
+  records SHALL carry an item asking research to search the available datasets for GDP growth,
+  saying that no specific dataset can be suggested because the list could not be obtained
+
+#### Scenario: A successful list gives no such instruction
+
+- **WHEN** the list-datasets call succeeded
+- **THEN** the preparation agent's system prompt SHALL NOT carry the instruction about a failed
+  list
+
+### Requirement: An agent that can call the glossary tools is told which calls are done and which failed
+
+The system prompt of the research agent and of the playground agent SHALL tell the agent to repeat,
+with its own tool calls, the parts of the glossary fetch that failed after the app's retries. The
+agent's calls are the fallback for a failure the app's retries did not overcome. When the fetch
+obtained the whole glossary, the research agent SHALL be told not to call the glossary tools. The
+instruction SHALL name each tool as the agent is offered it, and SHALL carry these parts:
+
+- **The list of terms failed**: the app could not obtain the glossary's terms, so the agent SHALL
+  call the list-terms tool to obtain them, making **at most three** list-terms calls in the whole
+  research.
+- **Some terms have no definition**, or the list failed: the agent SHALL call the term-definitions
+  tool for the terms that have no definition and whose names look relevant to the task, requesting
+  each term's definition in **at most three** calls in the whole research.
+- **The glossary is complete**: the list of terms succeeded and every listed term resolved, so the
+  agent SHALL NOT call the list-terms tool or the term-definitions tool. The part SHALL name each of
+  the two tools that is bound, and SHALL appear only when at least one of them is bound.
+
+The limit of three calls is the same bound the research agent's failed-tool rule sets, one call and
+two repeats (see **research-execution**), so the agent's retries stay bounded when the server keeps
+failing.
+
+The part about the list-terms tool SHALL appear only when the list failed and that tool is among
+the tools bound to the agent. The part about the term-definitions tool SHALL appear only when that
+tool is bound and the list failed or at least one listed term did not resolve.
+
+**The playground agent** SHALL carry only the parts about a failed call, and never the part about a
+complete glossary, because its user may ask it to call either tool whatever the fetch obtained.
+
+No other model call SHALL carry any part of the instruction. Every other call sees an unresolved term only as a `null` definition, and
+a failed list only as the failure text.
+
+**What the agent's retries reach.** A term or a definition the agent obtains is a tool result:
+research-review sees it in the rendered findings, and the report writer sees it in the transcript.
+The report reviewer receives no tool results except these: the app selects the agent's successful
+results of the two configured glossary tools by name and passes their text to the reviewer (see
+**research-execution**). So the writer's rule and the reviewer's check both count the agent's
+results (see **report-composition**), and the References section's glossary table reads a cited
+term's definition from them when the app's fetch did not resolve it (see **report-citations**).
+
+#### Scenario: A failed list tells the agent to list the terms
+
+- **WHEN** all three list-terms attempts failed, and the research agent's tools include the
+  list-terms tool and the term-definitions tool
+- **THEN** the research agent's system prompt SHALL tell it to call the list-terms tool at most
+  three times, and to request the definitions of the relevant terms it obtains, each in at most
+  three calls
+
+#### Scenario: Unresolved terms are re-requested by the agent
+
+- **WHEN** the glossary listed 25 terms, 2 did not resolve, and the research agent's tools include
+  the term-definitions tool
+- **THEN** the research agent's system prompt SHALL tell it to request the definitions of those of
+  the 2 terms that look relevant, each in at most three calls, and SHALL NOT tell it to call the
+  list-terms tool
+
+#### Scenario: A complete glossary tells the research agent not to call the glossary tools
+
+- **WHEN** the glossary listed 25 terms and all 25 resolved, and the research agent's tools include
+  the list-terms tool and the term-definitions tool
+- **THEN** the research agent's system prompt SHALL tell it not to call either tool, naming both,
+  and SHALL NOT tell it to call either tool
+
+#### Scenario: The playground is never told not to call a glossary tool
+
+- **WHEN** a playground turn runs on a channel whose glossary listed 25 terms and all 25 resolved
+- **THEN** the playground agent's system prompt SHALL carry no part of the glossary instruction
+
+#### Scenario: The tool is filtered out
+
+- **WHEN** the server's `tools_to_include` omits the term-definitions tool
+- **THEN** neither the research agent's nor the playground agent's system prompt SHALL carry the
+  part about it, and the glossary SHALL still reach them
+
+### Requirement: A data-sources fetch never fails the turn
+
+No failure of the data-sources fetch SHALL fail the turn. A failed list of datasets or of terms
+SHALL become its failure text, a structure that was not obtained SHALL become a failure entry, and
+a term that did not resolve SHALL stay listed without a definition. The only exception is
+cancellation, which SHALL propagate.
+
+#### Scenario: A cancelled turn is not turned into a failure text
+
+- **WHEN** the turn is cancelled while the data-sources fetch is waiting for a call
+- **THEN** the cancellation SHALL propagate, no further attempt SHALL be made, and no failure text
+  SHALL be rendered
+
+#### Scenario: The server is unreachable
+
+- **WHEN** every data-sources call fails because the server cannot be reached
+- **THEN** the turn SHALL continue to the preparation agent with both failure texts in its
+  data-sources string, and no error SHALL be delivered to the user for the data sources
+
+### Requirement: The datasets fetch is recorded in the logs
+
+Every datasets fetch SHALL log one INFO event when it ends, carrying the server name, the number of
+list-datasets attempts made, the number of listed datasets, the number of structures requested,
+the number obtained, the number not obtained, and the fetch's duration. When the list failed, the
+event SHALL carry the listed count as absent rather than as zero, so a failed list is not read as
+an empty catalogue.
+
+The app SHALL log one WARNING when the list-datasets tool failed three times, naming the server and
+the kind of the last failure. It SHALL log one WARNING when at least one structure was not
+obtained, naming the server and the number not obtained. Neither is an ERROR, because the turn
+continues (see **logging-policy**).
+
+These records follow the **logging-policy** content allowlist: names, counts, durations and failure
+kinds. They SHALL NOT carry a dataset id, a dataset name, a tool's answer, or a failure's own text,
+because the catalogue is the client's content.
+
+#### Scenario: A complete fetch
+
+- **WHEN** a fetch lists 5 datasets and obtains all 5 structures
+- **THEN** one INFO event SHALL state one list attempt, 5 listed, 5 requested, 5 obtained, 0 not
+  obtained and the duration, and no WARNING SHALL be logged
+
+#### Scenario: Failed structures are counted, not named
+
+- **WHEN** two structures are not obtained after three attempts each
+- **THEN** one WARNING SHALL state the server name and the number 2, and no log record SHALL carry
+  either dataset's id
+
+### Requirement: The glossary fetch is recorded in the logs
+
+Every glossary fetch SHALL log one INFO event when it ends, carrying the server name, the number of
+list-terms attempts made, the number of listed terms, the number of resolved terms, the number of
+unresolved terms, the number of definition rounds run, and the fetch's duration. When the list
+failed, the event SHALL carry the listed count as absent rather than as zero, so a failed list is
+not read as an empty glossary.
+
+The app SHALL log one WARNING when the list-terms tool failed three times, naming the server and
+the kind of the last failure. It SHALL log one WARNING after the last round when at least one term
+did not resolve, naming the server and the number of unresolved terms. Neither is an ERROR, because
+the turn continues (see **logging-policy**).
+
+These records follow the **logging-policy** content allowlist: names, counts, durations and failure
+kinds. They SHALL NOT carry a term name, a definition, a tool's arguments, a tool's answer, or a
+failure's own text, because term names and definitions are the client's content.
+
+#### Scenario: A complete fetch
+
+- **WHEN** a fetch lists 25 terms and resolves all of them in the first round
+- **THEN** one INFO event SHALL state one list attempt, 25 listed, 25 resolved, 0 unresolved, one
+  round and the duration, and no WARNING SHALL be logged
+
+#### Scenario: Unresolved terms are counted, not named
+
+- **WHEN** two terms do not resolve after three rounds
+- **THEN** one WARNING SHALL state the server name and the number 2, and no log record SHALL carry
+  either term's name

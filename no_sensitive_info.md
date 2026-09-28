@@ -34,6 +34,11 @@ Generic placeholders, and genuinely public facts:
   `World Economic Outlook` or `Primary Commodity Prices`. `IMF:WEO` is this repository's canonical
   dataset-identifier example in prompts, comments and tests.
 - `Market Outlook 2025` as a document or publication title.
+- **Approximate, typical figures**, such as "a dataset description typically takes about 200
+  tokens" or "a call finishes within a few seconds". They name no deployment. An **exact** figure
+  taken from a live system stays out, such as a character count or a precise token count, and so
+  does any count that describes a real deployment, such as how many datasets or documents a channel
+  exposes, even when it is rounded.
 
 Being over-strict costs real information, so check whether a name identifies a client relationship
 before scrubbing it. A publicly known organization and its publicly published data are fine.

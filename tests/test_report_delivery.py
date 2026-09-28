@@ -21,6 +21,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import ValuesStreamPart
 
+from dial_deep_research.app.data_sources import DataSources
 from dial_deep_research.app.research import references as references_module
 from dial_deep_research.app.research import runner as runner_module
 from dial_deep_research.app.research.citation_lookups import CitationLookups
@@ -31,6 +32,7 @@ from dial_deep_research.app_properties import (
     DocumentMetadataSource,
     ReferenceColumn,
     ReferencesTable,
+    ServerGlossary,
     ServerReferencesTable,
 )
 from tests.dial_spies import ChoiceSpy
@@ -137,7 +139,7 @@ def _catalogue_tool(
     raises: Exception | None = None,
     calls: list[dict[str, Any]] | None = None,
 ) -> BaseTool:
-    """A dataset-metadata tool shaped like the MCP adapter's: the catalogue in the artifact."""
+    """A list-datasets tool shaped like the MCP adapter's: the catalogue in the artifact."""
     payload = artifact if datasets is None else {"structured_content": {"datasets": datasets}}
 
     async def list_datasets() -> tuple[str, Any]:
@@ -202,6 +204,8 @@ async def _deliver(
     references_heading: str = _REFERENCES_HEADING,
     references_empty_text: str = _REFERENCES_EMPTY_TEXT,
     references_tables: tuple[ServerReferencesTable, ...] = (),
+    glossary: ServerGlossary | None = None,
+    data_sources: DataSources | None = None,
 ) -> None:
     """Deliver the settled report. Every delivery appends the References section, so a test that
     configures no table for its sources gets the section's cited-nothing text."""
@@ -221,6 +225,8 @@ async def _deliver(
         references_heading=references_heading,
         references_empty_text=references_empty_text,
         references_tables=references_tables,
+        glossary=glossary,
+        data_sources=data_sources or DataSources(text="The topics map."),
     )
 
 

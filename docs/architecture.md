@@ -10,8 +10,57 @@ The [OpenSpec specs](../openspec/specs) are the authority on the behaviour. This
 each section links the specs that own its requirements and quotes only short excerpts from them, so
 when a spec changes the diagram points at the new wording instead of restating stale rules.
 
+- [Data-sources fetch](#data-sources-fetch)
 - [Preparation flow](#preparation-flow)
 - [Research graph](#research-graph)
+
+## Data-sources fetch
+
+Specs: [data-sources-discovery](../openspec/specs/data-sources-discovery/spec.md).
+Code: `app/data_sources.py`, `app/glossary.py`, `app/data_source_calls.py`, `app/completion.py`.
+
+Every turn on a channel with a `statgpt` server starts with one fetch of what that server reports,
+before the preparation agent's first model call. A conversation that already handed off to research
+is refused before it. The fetch has two parts, run concurrently:
+
+- **the datasets**: the list-datasets tool's answer, and, when `dataset_structure_tool` is set, the
+  structure of every listed dataset, one call per dataset, all at once;
+- **the glossary**, when `glossary` is set: the list-terms tool's answer, then the definitions of
+  the listed terms in batches of at most `max_terms_per_definitions_call`, in at most three rounds.
+
+```mermaid
+flowchart LR
+    turn["Turn arrives<br/>(research not yet handed off)"] --> fetch
+    subgraph fetch["Data-sources fetch — once per turn"]
+        direction TB
+        list["list-datasets call"] --> structures["one structure call<br/>per listed dataset"]
+        terms["list-terms call"] --> definitions["definitions batches,<br/>up to three rounds"]
+    end
+    fetch --> string["data-sources string:<br/>data_sources_descriptions,<br/>datasets section, glossary"]
+    string --> prep["preparation agent<br/>and clarity check"]
+    string --> research["every research graph node"]
+    fetch --> catalogue["catalogue seeds<br/>CitationLookups"]
+```
+
+Each list call and each structure call gets up to three attempts, about one and then two seconds
+apart, and every call, its session open included, runs in an MCP session of its own under a
+20-second deadline. The tools are called by their configured names, whatever `tools_to_include`
+says. No failure ends the turn: a failed list becomes the text `failed to obtain list of datasets` or
+`failed to obtain list of terms`, a structure not obtained becomes a failure entry, and a term not
+resolved stays listed with `"definition": null`.
+
+The **data-sources string** is `prompts.data_sources_descriptions`, then the datasets section, then
+the glossary, each after a blank line. It goes to the preparation agent, the clarity check inside
+`update_query`, the playground agent, and every node of the research graph; the plan approval check
+receives none of it. On a channel without a `statgpt` server it is `data_sources_descriptions`
+alone, and no call is made. The research agent and the playground agent are also told which of the
+app's calls failed, so they call those tools themselves, at most three times each; the research
+agent is also told not to repeat a call whose answer the string already shows. When the list of
+datasets failed, the preparation agent is told to plan a search of the available datasets instead of
+naming them.
+
+The playground has a completion of its own and runs the same fetch at the start of its turn. The
+fetched data is never persisted: the next turn fetches it again.
 
 ## Preparation flow
 
@@ -45,6 +94,7 @@ sequenceDiagram
     loop one turn per exchange, until the query is clear
         U->>C: research request, or an answer to the questions
         C->>A: turn — history + PrepState
+        Note over A: every turn starts with the<br/>data-sources fetch, whose string<br/>the agent's prompt carries
         A->>T: update_query "restated or refined query"
         Note over T: a new query discards<br/>any plan and its approval
         T->>L: clarity check
@@ -172,6 +222,15 @@ The spec sentence that owns the rule:
 
 The rest of the loop, in brief — each item is specified in the linked specs:
 
+- **Data sources**: the system prompt of every node — research-agent, research-review, report and
+  report-review — carries the turn's data-sources string in a `<data_sources>` block (see
+  [Data-sources fetch](#data-sources-fetch)). research-agent alone also gets the instruction about
+  which of the app's dataset and glossary calls failed. The report writer may cite a fact from the
+  string with the form of the source it describes, and on a glossary channel it gets the rule to use
+  the glossary's terminology. report-review gets the matching check when the fetch listed a term or
+  research-agent obtained a glossary result; it also receives those results, selected from the
+  transcript by the configured glossary tool names, as its one kind of tool result.
+
 - **Research-review**: an independent structured LLM call judging coverage; an empty next plan means
   research is complete. It runs after every iteration except the last one the cap permits — a
   "continue" verdict there could not be acted on, so that call is not made.
@@ -196,7 +255,7 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   `<cit data-id="…"></cit>`, then the References section is built and appended. Each kind of
   citation has its own condition, and each is about whether the reader can open what the pill points at: a `[doc <id>, page <ix>]` marker converts
   when the file-sharing tool returned a PDF URL for that document, a `[dataset <urn>]` marker
-  converts when the dataset-metadata tool reported that URN with an absolute `http` or `https`
+  converts when the list-datasets tool reported that URN with an absolute `http` or `https`
   URL, and a `[data_query <id>]` marker converts when the turn captured, for exactly that query
   id, a data explorer URL that is absolute `http` or `https` (see the data-query capture bullet
   below). Whether the query returned data is not part of that condition, and a query without a
@@ -204,7 +263,10 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   as the writer wrote it. Markers
   standing next to each other, separated
   only by spaces, commas or semicolons, share one tag and render as one pill, a document and a
-  dataset among them. The post-processed
+  dataset among them. On a glossary channel a `[glossary <term>]` marker becomes no pill: each
+  run's glossary markers leave their place, so the run's other markers fold as if they were absent,
+  and one readable group ends the run, `(<term> - glossary term)` or
+  `("<term 1>", "<term 2>" - glossary terms)`. The post-processed
   text is what is appended **and** what is persisted, so a later turn reads back what the user saw.
   One `custom_content.annotations` array follows the content, one entry per converted citation,
   each naming its tag's id. Every label is a leading part naming the source plus a fixed trailing
@@ -233,9 +295,13 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   The **References section is written by the app**, not by the report writer, from the metadata
   the same step already resolved — so its rows are a server's facts rather than a model's
   recollection. It carries a `##` heading with `references_section_name` and one `###` table per
-  configured MCP server whose sources the report cites, in the order the servers are configured;
-  a server with nothing cited contributes no table, and a report that cited nothing carries
-  `references_section_empty_text` instead. Each table's sub-heading and its
+  configured MCP server whose sources the report cites, in a fixed order — the dataset table, then
+  the document table, whatever order the servers are configured in — and then, on a glossary
+  channel, a glossary table with one row per cited term, configured by `glossary.references_table`.
+  A term's record comes from the fetch, then from research-agent's term-definitions results, then
+  from its list-terms results, one with a definition preferred. A server with nothing cited
+  contributes no table, and a report that cited nothing carries `references_section_empty_text`
+  instead. Each table's sub-heading and its
   ordered columns come from `mcp_servers[].references_table`, each column a heading a reader sees
   and the metadata key or catalogue field it reads. Every cited source gets a row whether or not
   its metadata resolved and whether or not its citations became pills; the first column names the
@@ -281,13 +347,14 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   document URLs come from one call per turn to the tool named by `mcp_servers[].file_sharing_tool`,
   invoked tool-call-shaped so its structured result is reachable, and with the agent tools' error
   handling cleared so a failure reaches the app instead of arriving as result text. The dataset
-  names, page addresses and last-update dates come from one successful call per turn to the tool
-  named by `mcp_servers[].dataset_metadata_tool`, made with no arguments and answered with the
-  channel's whole catalogue, from which the app selects the cited URNs — those of the dataset
-  markers and those of the cited queries with an explorer link — by exact string match. The
-  catalogue answer and the document metadata are read through one `CitationLookups` object per
-  request, which the report review's identifier checks fill first, so the delivery asks only for
-  what no check has looked up. A `statgpt`
+  names, page addresses and last-update dates come from the answer of the tool named by
+  `mcp_servers[].list_datasets_tool`, the channel's whole catalogue, from which the app selects the
+  cited URNs — those of the dataset markers and those of the cited queries with an explorer link —
+  by exact string match. The data-sources fetch's answer seeds the catalogue at the start of the
+  turn; only when that call failed does the first check or the delivery that needs the catalogue
+  call the tool, once successfully per turn. The catalogue and the document metadata are read
+  through one `CitationLookups` object per request, which the report review's identifier checks
+  fill first, so the delivery asks only for what no check has looked up. A `statgpt`
   server must name that tool and only a `statgpt` server may, and it **stays in the research
   agent's tool list**, because a catalogue listing is how the agent discovers which datasets exist;
   its error handling therefore stays the agent's, and the reader takes a server error off the

@@ -257,7 +257,7 @@
             "description": "Key holding a document's human title in this channel's metadata, for example publication_title. The metadata resource answers with each document's metadata under the channel's own key names, so this says which of them to read. A document whose metadata has no usable value under this key keeps the doc <id>, page <ix> label. Set it together with document_metadata_resource, which is required on a generic_rag server; only a generic_rag server may set either.",
             "title": "Document Title Key"
           },
-          "dataset_metadata_tool": {
+          "list_datasets_tool": {
             "anyOf": [
               {
                 "type": "string"
@@ -267,8 +267,108 @@
               }
             ],
             "default": null,
-            "description": "Name of this server's tool listing the datasets this channel exposes. The application calls it when it delivers a report, to learn a cited dataset's name and the address of its page, so a dataset citation becomes a pill that opens that page. The tool takes no arguments and answers with the whole catalogue; the application selects the datasets the report cites. It stays available to the research agent, which uses the same listing to discover which datasets exist, so naming it here only adds a caller. Required on a statgpt server, and only a statgpt server may set it: without it every dataset citation is delivered as a bare URN in square brackets, which names nothing the reader can open.",
-            "title": "Dataset Metadata Tool"
+            "description": "Name of this server's tool listing the datasets this channel exposes. The application calls it at the start of every turn and shows its answer to the models, so they know which datasets exist. It reads the same answer when it delivers a report, to learn a cited dataset's name and the address of its page, so a dataset citation becomes a pill that opens that page. The tool takes no arguments and answers with the whole catalogue. It stays available to the research agent whenever tools_to_include offers it, and the agent calls it when the application's own call failed. Required on a statgpt server, and only a statgpt server may set it: without it every dataset citation is delivered as a bare URN in square brackets, which names nothing the reader can open.",
+            "title": "List Datasets Tool"
+          },
+          "dataset_structure_tool": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Name of this server's tool that returns the structure of one dataset, called with {\"dataset_id\": <id>}, where the id is a record's id in the list_datasets_tool answer. When set, the application calls it for every listed dataset at the start of every turn and shows the structures to the models next to the list. Showing the datasets is designed for a channel with about ten datasets, because the whole list and every structure reach every model call that plans the research, runs it or writes the report. Leave it unset to show the list without the structures. It need not appear in tools_to_include: whether the research agent is offered the tool stays that filter's decision. Only a statgpt server may set it.",
+            "title": "Dataset Structure Tool"
+          },
+          "glossary": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "description": "The glossary tools of a dataset server, and how cited glossary terms are listed.",
+                "properties": {
+                  "list_terms_tool": {
+                    "description": "Name of the server's tool that lists the glossary's terms. The application calls it with no arguments.",
+                    "minLength": 1,
+                    "title": "List Terms Tool",
+                    "type": "string"
+                  },
+                  "definitions_tool": {
+                    "description": "Name of the server's tool that returns the definitions of named terms. The application calls it with {\"terms\": [<term name>, ...]}.",
+                    "minLength": 1,
+                    "title": "Definitions Tool",
+                    "type": "string"
+                  },
+                  "max_terms_per_definitions_call": {
+                    "description": "The largest number of terms one call of the definitions tool may request. Copy it from that tool's argument description: the server rejects a larger request whole, so the application never sends one.",
+                    "minimum": 1,
+                    "title": "Max Terms Per Definitions Call",
+                    "type": "integer"
+                  },
+                  "references_table": {
+                    "description": "How the glossary terms the report cites are listed in its References section: the sub-heading, and columns keyed by fields of a term's record, such as term and definition. The table follows the dataset and document tables.",
+                    "properties": {
+                      "title": {
+                        "description": "The sub-heading this table is written under, for example Documents, Datasets or Glossary. A reader sees it, so write it in the language this channel's readers read.",
+                        "minLength": 1,
+                        "title": "Title",
+                        "type": "string"
+                      },
+                      "columns": {
+                        "description": "The table's columns, in the order they are rendered. The order matters beyond layout: the first column is the one a reader identifies a row by, so it is the one that falls back to the source's identifier — a document id, a dataset's URN, or the cited glossary term — when its key resolves nothing. Put the column naming the source first.",
+                        "items": {
+                          "description": "One column of a References table: the heading a reader sees, and the key it reads.",
+                          "properties": {
+                            "heading": {
+                              "description": "The column's header text in the report's References table. A reader sees it, so write it in the language this channel's readers read.",
+                              "minLength": 1,
+                              "title": "Heading",
+                              "type": "string"
+                            },
+                            "key": {
+                              "description": "The name the value is reported under — a key of a document's metadata object, a field of a dataset's catalogue record, or, in the glossary table, a field of a glossary term's record such as term or definition. A source that reports nothing usable under it leaves the cell empty, except in the first column, which falls back to the source's own identifier, or to the cited term in the glossary table.",
+                              "minLength": 1,
+                              "title": "Key",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "heading",
+                            "key"
+                          ],
+                          "title": "ReferenceColumn",
+                          "type": "object"
+                        },
+                        "minItems": 1,
+                        "title": "Columns",
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "columns"
+                    ],
+                    "title": "ReferencesTable",
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "list_terms_tool",
+                  "definitions_tool",
+                  "max_terms_per_definitions_call",
+                  "references_table"
+                ],
+                "title": "GlossaryTools",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "This server's glossary tools. Set it whenever the server exposes glossary tools that the research agent would be offered anyway, which is when tools_to_include is empty or already names them. With it, the application fetches the glossary at the start of every turn and shows it to the models, tells the report writer to use the glossary's terminology and how to cite a term, and lists the cited terms in the References section. Without it, none of that happens. The tools need not appear in tools_to_include. Only a statgpt server may set it."
           },
           "data_query_meta_key": {
             "anyOf": [
@@ -287,13 +387,13 @@
             "description": "How this server's cited sources are listed in the report's References section: the sub-heading the table is written under, and its columns. The application builds that section itself from what the servers reported about the sources the report cites, so this is where a channel says what a row holds. Required on every server, whatever it serves: a server without a table is a server whose cited sources cannot be listed. The section is built for every report, and the report structure has no say in whether it is — it names only the sections the report writer writes.",
             "properties": {
               "title": {
-                "description": "The sub-heading this table is written under, for example Documents or Datasets. A reader sees it, so write it in the language this channel's readers read.",
+                "description": "The sub-heading this table is written under, for example Documents, Datasets or Glossary. A reader sees it, so write it in the language this channel's readers read.",
                 "minLength": 1,
                 "title": "Title",
                 "type": "string"
               },
               "columns": {
-                "description": "The table's columns, in the order they are rendered. The order matters beyond layout: the first column is the one a reader identifies a row by, so it is the one that falls back to the source's identifier — a document id, or a dataset's URN — when its key resolves nothing. Put the column naming the source first.",
+                "description": "The table's columns, in the order they are rendered. The order matters beyond layout: the first column is the one a reader identifies a row by, so it is the one that falls back to the source's identifier — a document id, a dataset's URN, or the cited glossary term — when its key resolves nothing. Put the column naming the source first.",
                 "items": {
                   "description": "One column of a References table: the heading a reader sees, and the key it reads.",
                   "properties": {
@@ -304,7 +404,7 @@
                       "type": "string"
                     },
                     "key": {
-                      "description": "The name this server reports the value under — a key of a document's metadata object, or a field of a dataset's catalogue record. A source that reports nothing usable under it leaves the cell empty, except in the first column, which falls back to the source's own identifier.",
+                      "description": "The name the value is reported under — a key of a document's metadata object, a field of a dataset's catalogue record, or, in the glossary table, a field of a glossary term's record such as term or definition. A source that reports nothing usable under it leaves the cell empty, except in the first column, which falls back to the source's own identifier, or to the cited term in the glossary table.",
                       "minLength": 1,
                       "title": "Key",
                       "type": "string"
@@ -362,7 +462,7 @@
           "type": "string"
         },
         "data_sources_descriptions": {
-          "description": "A topics map of the data sources available in the knowledge base",
+          "description": "A topics map of the data sources available in the knowledge base. Describe here only what the application does not fetch from the servers itself, such as the publications the document server holds. The application fetches the list of datasets from the dataset server, their structures when a dataset_structure_tool is configured, and the glossary when a glossary is configured, and appends them after this text on every turn, so a dataset described here too is shown to the models twice.",
           "minLength": 1,
           "title": "Data Sources Descriptions",
           "type": "string"

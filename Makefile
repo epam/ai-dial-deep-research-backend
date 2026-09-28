@@ -7,7 +7,7 @@ MYPY_DIRS = src scripts
 # upstream tag rather than tracking `main` / `latest`.
 # The pin is passed inline on `opik-up` (the only command that resolves image tags).
 # `down`/`ps` act on containers by project label, so the variable doesn't need exporting.
-OPIK_VERSION ?= 2.0.17
+OPIK_VERSION ?= 2.2.81
 OPIK_DIR ?= .opik-local
 OPIK_COMPOSE = $(OPIK_DIR)/deployment/docker-compose/docker-compose.yaml
 
@@ -139,10 +139,17 @@ chat-ng-logs: ## Tail logs from the infra + both chat generations
 
 ## -------- opik -------- ##
 
-$(OPIK_DIR):
-	git clone --depth 1 --branch $(OPIK_VERSION) https://github.com/comet-ml/opik.git $(OPIK_DIR)
+# Clones the pinned tag on first use, and moves an existing clone to it when OPIK_VERSION
+# changes, so a bump takes effect without deleting $(OPIK_DIR) by hand.
+opik-checkout:
+	@if [ ! -d $(OPIK_DIR) ]; then \
+		git clone --depth 1 --branch $(OPIK_VERSION) https://github.com/comet-ml/opik.git $(OPIK_DIR); \
+	elif [ "$$(git -C $(OPIK_DIR) describe --tags --exact-match 2>/dev/null)" != "$(OPIK_VERSION)" ]; then \
+		git -C $(OPIK_DIR) fetch --depth 1 origin tag $(OPIK_VERSION) && \
+		git -C $(OPIK_DIR) checkout --quiet $(OPIK_VERSION); \
+	fi
 
-opik-up: $(OPIK_DIR) ## Start the local Opik trace stack (separate Compose project; UI at http://localhost:5173)
+opik-up: opik-checkout ## Start the local Opik trace stack (separate Compose project; UI at http://localhost:5173)
 	OPIK_VERSION=$(OPIK_VERSION) docker compose -f $(OPIK_COMPOSE) --profile opik up -d
 
 opik-down: ## Stop the local Opik trace stack (does NOT touch infra)

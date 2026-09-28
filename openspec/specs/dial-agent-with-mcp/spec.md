@@ -87,11 +87,19 @@ capability), not in middleware over a single agent's control flow.
 The MCP client SHALL NOT be cached across requests, the app SHALL NOT open a
 long-lived SSE listening stream on the MCP endpoint, and the app SHALL NOT issue or
 retain an `Mcp-Session-Id`. Tool-list freshness across requests is achieved by
-re-polling `tools/list` at the start of every turn that constructs a client,
+re-polling `tools/list` at the start of every turn that loads tools for a model,
 matching the generic-RAG server's `stateless_http=True` deployment; persistent-session
 features (long-lived sessions, `Mcp-Session-Id`, `Last-Event-ID` resumability,
 `notifications/tools/list_changed`, `notifications/resources/*`,
 `notifications/prompts/list_changed`) are out of scope for this capability.
+
+A turn on a channel with a dataset server SHALL also construct a per-turn MCP client **before the
+preparation agent runs**, for the data-sources fetch (see **data-sources-discovery**). The rules
+above apply to it: it is not cached across requests and keeps no session. It calls the configured
+list-datasets, dataset-structure and glossary tools by name and does not poll `tools/list` to
+discover tools, because it offers no tool to a model. These tools are not application-called tools in the sense above: the
+app calls them, but they stay in the agent's tools whenever the server's `tools_to_include` filter
+offers them, the way the list-datasets tool does at the citation step.
 
 #### Scenario: research-agent invokes an MCP tool
 
@@ -101,7 +109,7 @@ features (long-lived sessions, `Mcp-Session-Id`, `Last-Event-ID` resumability,
 #### Scenario: research-agent is run only after plan approval
 
 - **WHEN** a chat completion request is processed and no plan has been approved yet
-- **THEN** the research-agent node SHALL NOT run and no MCP client SHALL be constructed for research; the turn SHALL produce only preparation output
+- **THEN** the research-agent node SHALL NOT run and no MCP client SHALL be constructed for research; the turn SHALL produce only preparation output. A client constructed for the data-sources fetch before preparation is not constructed for research
 
 #### Scenario: Per-request agent and MCP scoping
 
@@ -122,6 +130,20 @@ features (long-lived sessions, `Mcp-Session-Id`, `Last-Event-ID` resumability,
 
 - **WHEN** the app loads tools for a server that advertises search tools and a file-sharing tool
 - **THEN** the server's advertised tool list SHALL be fetched for that turn and split into the agent's tools and the application-called tool, without a second `tools/list` round trip for the same server
+
+#### Scenario: A preparation-only turn fetches the data sources
+
+- **WHEN** a turn on a channel with a dataset server ends in preparation, without starting research
+- **THEN** the app SHALL have constructed one per-turn MCP client for the data-sources fetch, SHALL
+  NOT have polled `tools/list` to discover tools, and SHALL NOT reuse that client in a later
+  request
+
+#### Scenario: The fetched tools stay with the agent when the filter offers them
+
+- **WHEN** a channel names a dataset-structure tool and configures a glossary, and its
+  `tools_to_include` names the dataset-structure tool and the term-definitions tool
+- **THEN** research-agent SHALL be offered both tools, and the app SHALL still call them itself in
+  the data-sources fetch
 
 ### Requirement: Tool execution surfaced as timed DIAL stages
 For every tool the agent invokes during a request, the app SHALL emit a single DIAL "result" stage carrying both the input arguments and the tool's output. The one exception is `update_status`, which carries no result and SHALL produce no result stage — it is surfaced as the activity stage described in **Research progress surfaced as one open activity stage**, and the app SHALL NOT render its arguments or its acknowledgement anywhere in the stage channel. Titles follow the normalized form `[TOOL] <tool_name> <emoji> (<elapsed>s, start: HH:MM:SS, end: HH:MM:SS)`, where emoji ∈ `{✅, ❌}` marks success and failure. The mark carries the outcome on its own, so the title SHALL NOT spend width on a word for it. Stage timestamps SHALL bracket the actual execution window (start when the call is dispatched to the MCP server, end when the result is received). When the tool returns an error (caught by `handle_tool_error` instead of bubbling), the stage SHALL be marked ❌ so the failure stands out in the chat UI. Stage content is rendered as markdown by DIAL, so both the input arguments and the tool output SHALL be wrapped in fenced code blocks (single newlines would otherwise collapse), making multi-line payloads — JSON args, plain-text results, error tracebacks — readable verbatim.

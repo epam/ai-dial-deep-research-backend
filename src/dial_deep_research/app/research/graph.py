@@ -15,7 +15,7 @@ from typing import Any
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 
-from dial_deep_research.app_properties import ReportSection
+from dial_deep_research.app_properties import GlossaryTools, ReportSection
 
 from .citation_lookups import CitationLookups
 from .nodes import (
@@ -47,6 +47,10 @@ def build_research_graph(
     max_report_versions: int,
     references_section_name: str,
     citation_lookups: CitationLookups,
+    data_sources: str,
+    data_sources_instructions: str,
+    glossary: GlossaryTools | None,
+    glossary_fetch_listed_terms: bool,
     emit_research_review_result_stage: ResearchReviewResultStageEmitter,
     emit_research_budget_exhausted: ResearchBudgetExhaustedEmitter,
     emit_report_review_result_stage: ReportReviewResultStageEmitter,
@@ -68,11 +72,18 @@ def build_research_graph(
 
     `citation_lookups` is the turn's shared lookups, which the report rules check cited ids
     against; the runner reads the same object at delivery.
+
+    `data_sources` is the turn's data-sources string, which every node's system prompt carries.
+    `data_sources_instructions` goes to research-agent alone. `glossary` is the channel's glossary
+    configuration, and `glossary_fetch_listed_terms` whether this turn's fetch listed any term,
+    which the report reviewer's terminology check depends on.
     """
     research_agent = build_research_agent(
         tools=tools,
         today_date=today_date,
         client_name=client_name,
+        data_sources=data_sources,
+        data_sources_instructions=data_sources_instructions,
     )
 
     builder = StateGraph(ResearchState)
@@ -84,6 +95,7 @@ def build_research_graph(
         action=make_research_review_node(  # type: ignore[call-overload]
             today_date=today_date,
             max_research_iterations=max_research_iterations,
+            data_sources=data_sources,
             emit_result_stage=emit_research_review_result_stage,
             emit_activity=emit_activity,
         ),
@@ -96,6 +108,8 @@ def build_research_graph(
             max_words=max_report_words,
             references_name=references_section_name,
             lookups=citation_lookups,
+            data_sources=data_sources,
+            glossary=glossary,
             emit_revision_failed_stage=emit_report_revision_failed,
             emit_activity=emit_activity,
         ),
@@ -108,6 +122,9 @@ def build_research_graph(
             max_words=max_report_words,
             references_name=references_section_name,
             lookups=citation_lookups,
+            data_sources=data_sources,
+            glossary=glossary,
+            glossary_fetch_listed_terms=glossary_fetch_listed_terms,
             emit_result_stage=emit_report_review_result_stage,
             emit_activity=emit_activity,
         ),

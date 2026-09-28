@@ -117,8 +117,11 @@ def test_valid_properties_reach_the_prep_agent(
         def __init__(self, choice) -> None:
             self._choice = choice
 
-        async def run(self, *, request, dial, prep_state, prompts: Prompts, opik_tracer=None):
+        async def run(
+            self, *, request, dial, prep_state, prompts: Prompts, data_sources, opik_tracer=None
+        ):
             captured["prompts"] = prompts
+            captured["data_sources"] = data_sources
             self._choice.append_content("prep ran")
             return []
 
@@ -130,6 +133,8 @@ def test_valid_properties_reach_the_prep_agent(
     assert _content(response) == "prep ran"
     assert captured["prompts"].agent_name == "Test Deep Research"
     assert captured["prompts"].client_name == "Test Corp"
+    # A channel without a dataset server makes no data-sources call: the string is the text.
+    assert captured["data_sources"].text == "## report\n\nA report."
 
 
 def test_schema_endpoint_serves_unwrapped_schema(client: TestClient) -> None:

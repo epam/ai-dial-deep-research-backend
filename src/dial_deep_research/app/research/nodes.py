@@ -37,7 +37,7 @@ from pydantic import BaseModel
 
 from dial_deep_research.app.middleware import ImageBudgetMiddleware
 from dial_deep_research.app.tool_failures import RetryVerdict, ToolFailureMiddleware
-from dial_deep_research.app_properties import ReportSection
+from dial_deep_research.app_properties import GlossaryTools, ReportSection
 from dial_deep_research.settings import settings
 from dial_deep_research.utils.agent_logging import agent_logging_middleware
 from dial_deep_research.utils.content import (
@@ -57,9 +57,7 @@ from .middleware import ForceToolChoiceMiddleware, IterationCounterMiddleware
 from .prompts import (
     REPORT_REQUEST,
     REPORT_REVIEW_REQUEST,
-    REPORT_REVIEW_SYSTEM_PROMPT,
     REPORT_REVISION_REQUEST,
-    REPORT_SYSTEM_PROMPT,
     RESEARCH_AGENT_SYSTEM_PROMPT,
     RESEARCH_REVIEW_HUMAN_MESSAGE,
     RESEARCH_REVIEW_SYSTEM_PROMPT,
@@ -68,7 +66,9 @@ from .prompts import (
     render_next_instruction,
     render_plan,
     render_protected_section_names,
+    render_report_review_system_prompt,
     render_report_structure,
+    render_report_system_prompt,
 )
 from .report_length import LENGTH_EXEMPTIONS, count_report_words
 from .report_rules import build_report_rules, render_writer_instructions
@@ -92,14 +92,26 @@ REPORT_ACTIVITY = "Writing the report"
 REPORT_REVIEW_ACTIVITY = "Reviewing the report"
 
 
-def build_research_agent(tools: list[BaseTool], today_date: str, client_name: str) -> Any:
-    """Build research-agent: a `create_agent` over the tools, forced to call a tool every step."""
+def build_research_agent(
+    tools: list[BaseTool],
+    today_date: str,
+    client_name: str,
+    data_sources: str,
+    data_sources_instructions: str,
+) -> Any:
+    """Build research-agent: a `create_agent` over the tools, forced to call a tool every step.
+
+    `data_sources` is the turn's data-sources string, and `data_sources_instructions` what the
+    agent is told about the app's own dataset and glossary calls (empty when nothing applies).
+    """
     return create_agent(
         model=get_chat_model(LLMModelConfig()),
         tools=tools,
         system_prompt=RESEARCH_AGENT_SYSTEM_PROMPT.format(
             today_date=today_date,
             client_name=client_name,
+            data_sources=data_sources,
+            data_sources_instructions=data_sources_instructions,
             # The two rules the status tool quotes back when it catches one being broken, so the
             # correction repeats the instruction word for word. The prompt writes its other status
             # rules itself.
@@ -251,6 +263,7 @@ ResearchBudgetExhaustedEmitter = Callable[[ResearchBudgetExhausted], None]
 def make_research_review_node(
     today_date: str,
     max_research_iterations: int,
+    data_sources: str,
     emit_result_stage: ResearchReviewResultStageEmitter,
     emit_activity: ActivityEmitter,
 ) -> ResearchReviewNode:
@@ -276,7 +289,11 @@ def make_research_review_node(
             f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
         )
         review_messages = [
-            SystemMessage(content=RESEARCH_REVIEW_SYSTEM_PROMPT.format(today_date=today_date)),
+            SystemMessage(
+                content=RESEARCH_REVIEW_SYSTEM_PROMPT.format(
+                    today_date=today_date, data_sources=data_sources
+                )
+            ),
             HumanMessage(
                 content=RESEARCH_REVIEW_HUMAN_MESSAGE.format(
                     query=state["original_query"],
@@ -419,10 +436,30 @@ def make_report_node(
     max_words: int,
     references_name: str,
     lookups: CitationLookups,
+    data_sources: str,
+    glossary: GlossaryTools | None,
     emit_revision_failed_stage: ReportRevisionFailureEmitter,
     emit_activity: ActivityEmitter,
 ) -> ReportNode:
-    """Build the report node: it writes the first draft, and every revision after it."""
+    """Build the report node: it writes the first draft, and every revision after it.
+
+    `glossary` is the channel's glossary configuration, which gives the writer the glossary
+    citation form and the terminology rule on every turn, whether or not the fetch succeeded.
+    """
+    system_prompt = render_report_system_prompt(
+        today_date=today_date,
+        rules=render_writer_instructions(
+            build_report_rules(
+                sections=sections,
+                max_words=max_words,
+                references_name=references_name,
+                lookups=lookups,
+            )
+        ),
+        protected_sections=render_protected_section_names(sections),
+        data_sources=data_sources,
+        glossary=glossary is not None,
+    )
 
     async def report(state: ResearchState) -> dict[str, Any]:
         emit_activity(REPORT_ACTIVITY)
@@ -432,20 +469,7 @@ def make_report_node(
         )
         previous_draft = state.get("report")
         report_messages: list[BaseMessage] = [
-            SystemMessage(
-                content=REPORT_SYSTEM_PROMPT.format(
-                    today_date=today_date,
-                    rules=render_writer_instructions(
-                        build_report_rules(
-                            sections=sections,
-                            max_words=max_words,
-                            references_name=references_name,
-                            lookups=lookups,
-                        )
-                    ),
-                    protected_sections=render_protected_section_names(sections),
-                )
-            ),
+            SystemMessage(content=system_prompt),
             *_strip_status_calls(state["messages"]),
             HumanMessage(
                 content=REPORT_REQUEST.format(query=state["original_query"], plans=plans_text)
@@ -521,6 +545,9 @@ def make_report_review_node(
     max_words: int,
     references_name: str,
     lookups: CitationLookups,
+    data_sources: str,
+    glossary: GlossaryTools | None,
+    glossary_fetch_listed_terms: bool,
     emit_result_stage: ReportReviewResultStageEmitter,
     emit_activity: ActivityEmitter,
 ) -> ReportReviewNode:
@@ -534,6 +561,11 @@ def make_report_review_node(
 
     The identifier rules need the cited ids looked up first, and the rules are synchronous, so
     the lookups the draft needs run concurrently with the review call, before the rules.
+
+    On a glossary channel the reviewer also receives the research agent's successful glossary
+    tool results, and the terminology check whenever the app's fetch listed a term
+    (`glossary_fetch_listed_terms`) or there is such a result: otherwise it has no glossary to
+    judge against.
     """
     rules = build_report_rules(
         sections=sections, max_words=max_words, references_name=references_name, lookups=lookups
@@ -546,8 +578,17 @@ def make_report_review_node(
         word_count = count_report_words(draft)
         draft_number = state.get("report_version", 0)
 
+        tool_results = glossary_tool_results(state["messages"], glossary=glossary)
+        system_prompt = render_report_review_system_prompt(
+            today_date=today_date,
+            data_sources=data_sources,
+            glossary=glossary is not None,
+            glossary_check=glossary is not None
+            and (glossary_fetch_listed_terms or bool(tool_results)),
+            glossary_tool_results=tool_results,
+        )
         review_messages = [
-            SystemMessage(content=REPORT_REVIEW_SYSTEM_PROMPT.format(today_date=today_date)),
+            SystemMessage(content=system_prompt),
             HumanMessage(
                 content=REPORT_REVIEW_REQUEST.format(
                     report_structure=render_report_structure(sections),
@@ -626,6 +667,35 @@ def make_report_review_node(
         return {"report_revision_instruction": outcome.revision_instruction}
 
     return report_review
+
+
+def glossary_tool_messages(
+    messages: Sequence[BaseMessage], *, glossary: GlossaryTools | None
+) -> list[ToolMessage]:
+    """The research agent's successful results of the two configured glossary tools, in order.
+
+    Selected by tool name, so nothing about the answers' shape is assumed; a result marked as an
+    error is left out.
+    """
+    if glossary is None:
+        return []
+    names = {glossary.list_terms_tool, glossary.definitions_tool}
+    return [
+        message
+        for message in messages
+        if isinstance(message, ToolMessage) and message.name in names and message.status != "error"
+    ]
+
+
+def glossary_tool_results(
+    messages: Sequence[BaseMessage], *, glossary: GlossaryTools | None
+) -> list[str]:
+    """The text of `glossary_tool_messages`, as the server sent it, for the report reviewer."""
+    return [
+        text
+        for message in glossary_tool_messages(messages, glossary=glossary)
+        if (text := extract_text_from_content(message.content).strip())
+    ]
 
 
 def route_after_research_agent(
