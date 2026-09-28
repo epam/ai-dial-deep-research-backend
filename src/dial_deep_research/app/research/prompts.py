@@ -532,7 +532,13 @@ the report.
 GLOSSARY_TERMINOLOGY_RULE = """\
 Where the report refers to a concept that a glossary term names, it uses that term, spelled as the
 glossary spells it, rather than a synonym or a paraphrase. A glossary term the report has no reason
-to mention is not required. A term whose definition is null still counts, judged by its name."""
+to mention is not required. A term whose definition is null still counts, judged by its name.
+The glossary is the only source of glossary terms and definitions. A phrase is a glossary term only
+when the glossary lists it as a term. A phrase found anywhere else, such as in a dataset
+description, a document or a data-query result, is not a glossary term, however much it reads like
+one: it is never presented as a glossary term, cited as `[glossary <term>]`, or asked for as a
+glossary term. A definition cited as a glossary definition comes from the glossary. A term the
+glossary does not list may be used freely, unless it names a concept that a glossary term names."""
 
 _GLOSSARY_WRITER_RULE = """
 ## Glossary terminology

@@ -385,6 +385,15 @@ def test_the_writer_and_the_reviewer_share_the_terminology_wording() -> None:
     assert "four citation forms" in writer
 
 
+def test_the_terminology_rule_makes_the_glossary_the_only_source_of_terms() -> None:
+    """Both calls read the rule, so it both limits what counts as a glossary term and leaves other
+    terms free to use."""
+    rule = " ".join(GLOSSARY_TERMINOLOGY_RULE.split())
+    assert "The glossary is the only source of glossary terms and definitions." in rule
+    assert "such as in a dataset description, a document or a data-query result" in rule
+    assert "A term the glossary does not list may be used freely" in rule
+
+
 def test_the_writer_is_told_the_data_sources_count_as_retrieved_sources() -> None:
     writer = render_report_system_prompt(
         today_date="d", rules="", protected_sections="Overview", data_sources=_TEXT, glossary=False

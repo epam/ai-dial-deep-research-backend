@@ -1142,6 +1142,13 @@ def test_an_incomplete_glossary_is_rejected(change: dict, field: str) -> None:
     assert field in str(excinfo.value)
 
 
+def test_a_glossary_naming_one_tool_for_both_roles_is_rejected() -> None:
+    glossary = {**_GLOSSARY, "definitions_tool": _GLOSSARY["list_terms_tool"]}
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(_dataset_server(glossary=glossary))
+    assert "list_terms_tool and definitions_tool both name the same tool" in str(excinfo.value)
+
+
 # --- the data-query meta key ---------------------------------------------------------------------
 
 

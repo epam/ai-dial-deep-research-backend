@@ -696,7 +696,9 @@ Alternatives considered:
   availability tool. If the evaluation shows the mistake, the dataset instruction can say it.
 - **[Reviewer false positives]** The terminology check could flag wording that is fine and spend
   report versions on rewrites. → The rule asks for the glossary term only where it names the
-  concept, and `max_report_versions` caps the rewrites.
+  concept, and `max_report_versions` caps the rewrites. The rule also names the glossary as the only
+  source of terms, so a term-like phrase from a dataset description or a document is not
+  demanded.
 - **[A new failure path before preparation]** Every turn on a channel with a dataset server now
   makes MCP calls before the user sees anything. → No failure of the fetch ends the turn (spec
   `data-sources-discovery`), and the failure texts make the gap visible to the models.

@@ -7,6 +7,18 @@ glossary's terminology: where the report refers to a concept that a glossary ter
 use that term, spelled as the glossary spells it, rather than a synonym or a paraphrase. A glossary
 term that the report has no reason to mention is not required.
 
+**The glossary is the only source of glossary terms and definitions.** A phrase counts as a
+glossary term only when it is a term of the glossary: a `term` in the data-sources string's
+`Glossary terms:` list, or a term in the research agent's glossary tool results. A phrase found
+anywhere else, such as a dataset description or structure, a document, a data-query result or
+the knowledge-base descriptions, is not a glossary term, however much it reads like one. The rule
+governs only the concepts the glossary names: a term the glossary does not list, such as "trade
+balance" taken from a document or a dataset description, may be used freely, unless it names a
+concept that a glossary term names, in which case the glossary term applies. The writer SHALL NOT
+present such a phrase as a glossary term or cite it with `[glossary <term>]`, and the reviewer
+SHALL NOT ask for it as a glossary term. The same holds for definitions: a definition cited as a
+glossary definition comes from the glossary. Both calls receive this in the rule's shared wording.
+
 The rule SHALL be given to two calls, in the same wording of what it requires:
 
 - **The report writer**, on every turn of such a channel. Its system prompt SHALL carry the rule
@@ -52,6 +64,19 @@ failed list ends in the failure text.
 - **WHEN** the glossary lists `Primary Commodity Prices`, and a draft refers to the same concept as
   "raw material price levels"
 - **THEN** the review model SHALL report a violation that names the passage and the glossary term
+
+#### Scenario: A term found only outside the glossary is not demanded
+
+- **WHEN** the `Datasets:` part describes `IMF:WEO` as covering the "unemployment rate", no glossary
+  term is "unemployment rate", and a draft writes "the share of the labour force without a job"
+- **THEN** the review model SHALL NOT report a glossary-terminology violation for that passage
+
+#### Scenario: A term the glossary does not list may be used
+
+- **WHEN** a document page the research read uses the term "trade balance", and no glossary term
+  names that concept
+- **THEN** the report writer MAY use "trade balance", and the review model SHALL NOT report its use
+  as a violation
 
 #### Scenario: The reviewer accepts a glossary citation and reports a malformed one
 

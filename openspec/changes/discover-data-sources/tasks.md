@@ -12,6 +12,7 @@
 - [x] 2.3 Rewrite the description of `Prompts.data_sources_descriptions` to say it holds only what the app does not fetch, naming the list of datasets, their structures and the glossary
 - [x] 2.4 Extend the field descriptions of `ReferencesTable` and `ReferenceColumn` to cover the glossary table: a key can be a field of a glossary term's record, and the first column falls back to the cited term
 - [x] 2.5 Add validator tests to `tests/test_app_properties.py`: each new field accepted on a `statgpt` server, rejected on a `generic_rag` server, and an incomplete `glossary` rejected; run `make format` to regenerate `docs/generated-app-schema.json`
+- [x] 2.6 Reject a `GlossaryTools` whose `list_terms_tool` and `definitions_tool` are equal, and test it in `tests/test_app_properties.py` (spec `application-config-schema`, scenario "A glossary naming one tool for both roles is rejected")
 
 ## 3. Shared catalogue parsing and citation seeding (D14)
 
@@ -63,6 +64,7 @@
 - [x] 8.7 Give the report reviewer the `[glossary <term>]` form, the `<glossary_tool_results>` block with the text of the research agent's successful results of the two configured glossary tools, selected from the graph's `messages` by tool name, and the terminology check when the fetch listed terms or that block is not empty
 - [x] 8.8 Extend the prompt tests: each prompt carries the data-sources string, each instruction part appears exactly under its conditions, and no prompt on a channel without a glossary mentions the glossary form
 - [x] 8.9 Tell the research agent not to call the bound glossary tools when the fetch listed the terms and every term resolved, naming each bound tool; never the playground agent; extend the prompt tests (spec "An agent that can call the glossary tools is told which calls are done and which failed", scenarios "A complete glossary tells the research agent not to call the glossary tools" and "The playground is never told not to call a glossary tool")
+- [x] 8.10 Add to `GLOSSARY_TERMINOLOGY_RULE` that the glossary is the only source of glossary terms and definitions, and that a term it does not list may be used freely unless it names a concept a glossary term names, so the writer and the reviewer receive it in the same wording, and extend the prompt tests (spec `report-composition`, "A report uses the glossary's terminology", scenarios "A term found only outside the glossary is not demanded" and "A term the glossary does not list may be used")
 
 ## 9. Citations and the References section (D21)
 

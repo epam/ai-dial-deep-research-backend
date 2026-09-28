@@ -20,6 +20,12 @@ misspelled field fails validation instead of being ignored:
   too: a column's key can be a field of a glossary term's record, and the first column falls back to
   the cited term.
 
+The two tool names SHALL name different tools, and a `glossary` object whose `list_terms_tool` and
+`definitions_tool` are equal SHALL be rejected with a validation error stating that both fields name
+the same tool. The app calls the list tool with no arguments and the definitions tool with
+`{"terms": [...]}`, and the References glossary table tells the research agent's results of the two
+tools apart by name, so one tool configured as both would be called and read with the wrong shape.
+
 The field's description SHALL tell the admin to set the `glossary` object whenever the server
 exposes glossary tools that the research agent would be offered anyway, which is when the server's
 `tools_to_include` is empty or already names the glossary tools. Without the object the app neither
@@ -65,6 +71,11 @@ Because the field is optional, `dial_conf/core/applications-template.json` SHALL
 - **WHEN** a `glossary` object omits `max_terms_per_definitions_call` or `references_table`, or sets
   `max_terms_per_definitions_call` to 0
 - **THEN** validation SHALL fail with an error identifying that field
+
+#### Scenario: A glossary naming one tool for both roles is rejected
+
+- **WHEN** a `glossary` object sets `list_terms_tool` and `definitions_tool` to the same name
+- **THEN** validation SHALL fail with an error stating that both fields name the same tool
 
 #### Scenario: A statgpt server without a glossary is valid
 

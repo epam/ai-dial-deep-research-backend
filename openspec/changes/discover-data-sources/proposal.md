@@ -138,8 +138,8 @@ server already exposes.
 - `src/dial_deep_research/app_properties.py`: the rename of `dataset_metadata_tool` to
   `list_datasets_tool` (the field, its validator and the `ApplicationProperties` accessor), the new
   `dataset_structure_tool` field and its validator, the `GlossaryTools` model (with its
-  `references_table`) and the `glossary` field, and the new description of
-  `Prompts.data_sources_descriptions`.
+  `references_table` and the rule that its two tools differ) and the `glossary` field, and the new
+  description of `Prompts.data_sources_descriptions`.
 - `src/dial_deep_research/app_properties.py` (`references_tables` and its docstring) and
   `app/research/runner.py`: the fixed order of the References tables.
 - `src/dial_deep_research/app_properties.py`: the field descriptions of `ReferencesTable` and

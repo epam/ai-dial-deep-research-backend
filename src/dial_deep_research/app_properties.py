@@ -189,6 +189,18 @@ class GlossaryTools(BaseModel):
         " and definition. The table follows the dataset and document tables.",
     )
 
+    @model_validator(mode="after")
+    def _validate_distinct_tools(self) -> GlossaryTools:
+        """The two tools are called with different arguments, and their results are told apart by
+        name, so one tool named for both roles would be called and read with the wrong shape."""
+        if self.list_terms_tool == self.definitions_tool:
+            raise ValueError(
+                f"list_terms_tool and definitions_tool both name the same tool"
+                f" {self.list_terms_tool!r}: the glossary needs one tool that lists the terms and"
+                " another that returns their definitions"
+            )
+        return self
+
 
 class DatasetStructureTool(BaseModel):
     """The configured dataset-structure tool and the server that advertises it."""
