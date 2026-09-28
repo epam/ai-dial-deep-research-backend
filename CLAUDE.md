@@ -11,6 +11,13 @@ See `pyproject.toml` for `make`-equivalent targets
 generic placeholders are allowed, and what to check before handing work over. It is also what the
 `scripts/check_sensitive_info.sh` checker judges a staged diff against, so keep it self-contained.
 
+## Safety review before every commit
+
+Before every commit, run the `pre-commit-safety-check` subagent on the staged changes, and commit
+only when its verdict allows it. Pass it, in the prompt, every client name, server or tool name,
+dataset id and private path seen in the session, because the subagent cannot see the session. If
+the verdict reports a problem, fix it and run the subagent again before committing.
+
 ## Rules for coding agents (Claude Code, etc)
 
 - Always use simple and clear phrasings, without unnecessary complexity.
