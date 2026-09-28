@@ -4,10 +4,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from dial_deep_research import app_properties
 from dial_deep_research.app_properties import (
     APPLICATION_TYPE_DISPLAY_NAME,
     APPLICATION_TYPE_SCHEMA_ID,
     DIAL_META_SCHEMA,
+    REFERENCES_TABLE_ORDER,
+    SOURCE_KIND_BY_SERVER_TYPE,
     ApplicationProperties,
     MCPClientSettings,
 )
@@ -1322,3 +1325,18 @@ def test_the_references_tables_follow_the_configured_server_order() -> None:
 
     assert [t.table.title for t in tables] == ["Datasets", "Documents"]
     assert [t.source_kind for t in tables] == ["dataset", "document"]
+
+
+def test_every_source_kind_has_a_place_in_the_references_table_order() -> None:
+    assert set(SOURCE_KIND_BY_SERVER_TYPE.values()) <= set(REFERENCES_TABLE_ORDER)
+
+
+def test_a_server_whose_source_kind_has_no_table_place_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app_properties, "REFERENCES_TABLE_ORDER", ("dataset",))
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(_document_server(server_name="docs"))
+    message = str(excinfo.value)
+    assert "'docs'" in message
+    assert "document sources have no place in REFERENCES_TABLE_ORDER" in message
