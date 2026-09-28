@@ -561,6 +561,22 @@ class MCPClientSettings(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _validate_references_table_order(self) -> MCPClientSettings:
+        """The server's References table has a place in the fixed table order.
+
+        The order is written out by source kind, so a server type whose kind it leaves out would
+        otherwise pass validation and fail only when a report's References section is built.
+        """
+        source_kind = SOURCE_KIND_BY_SERVER_TYPE[self.server_type]
+        if source_kind not in REFERENCES_TABLE_ORDER:
+            raise ValueError(
+                f"server {self.server_name!r} is {self.server_type}, whose {source_kind} sources"
+                " have no place in REFERENCES_TABLE_ORDER, so its References table cannot be"
+                " written: add the source kind to that order"
+            )
+        return self
+
+    @model_validator(mode="after")
     def _validate_data_query_meta_key(self) -> MCPClientSettings:
         """The data-query meta key belongs to the dataset server, and it must name one.
 

@@ -80,7 +80,9 @@ async def resolve_documents(
     documents: dict[int, AttachedDocument] = {}
     for document_id, attachment in zip(ATTACHED_DOCUMENT_IDS, attachments, strict=False):
         url = attachment.url
-        assert url is not None  # _pdf_attachments keeps only attachments carrying a URL
+        if url is None:
+            # _pdf_attachments keeps only attachments carrying a URL.
+            raise ValueError("a PDF attachment carries no URL")
         documents[document_id] = await _read_attachment(
             attachment=attachment, url=url, client=client, headers=headers
         )

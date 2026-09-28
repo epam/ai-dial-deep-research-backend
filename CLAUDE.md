@@ -126,6 +126,9 @@ Override `--timeout` as needed.
 - use kwargs whenever possible instead of positional arguments - this improves readability.
   Note that some functions and methods have positional-only arguments - it's ok.
 - use comments to explain non-obvious code. don't write comments that restate the code.
+- **no `assert` in application code — raise an exception.** Python drops `assert` statements when it
+  runs with `-O`, so a check written as one disappears where it was meant to hold. Raise an
+  exception whose message says what went wrong instead. Tests keep pytest's `assert`.
 - **comments describe the code as it is, never how it changed.** no "instead of X", "the old
   rule", "previously", "no longer", "this used to". a reader who does not have the diff cannot
   use such a comment, and it goes stale the moment the next change lands — the reason a rule

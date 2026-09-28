@@ -185,15 +185,19 @@ def render_datasets_section(
 async def fetch_datasets(
     client: MultiServerMCPClient, *, server: MCPClientSettings
 ) -> DatasetsFetch:
-    """Fetch and render the datasets part. No failure raises; cancellation propagates."""
+    """Fetch and render the datasets part. A failed MCP call does not raise; a server that names
+    no `list_datasets_tool` raises `ValueError`; cancellation propagates."""
     started_at = time.monotonic()
     server_name = server.server_name
-    # A statgpt server must name the list tool, so validation has already guaranteed it.
-    assert server.list_datasets_tool is not None
+    list_tool = server.list_datasets_tool
+    if list_tool is None:
+        # Validation requires a statgpt server to name the list tool, so only a caller that
+        # bypassed it gets here.
+        raise ValueError(f"server {server_name!r} names no list_datasets_tool")
     listing = await call_with_attempts(
         client,
         server_name=server_name,
-        tool_name=server.list_datasets_tool,
+        tool_name=list_tool,
         arguments={},
         read=_read_list,
     )
