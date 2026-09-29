@@ -359,8 +359,13 @@ The ceiling SHALL NOT be enforced by truncation:
 - No token cap SHALL be placed on the report model call. Measured behavior, not caution: a capped
   call returns `finish_reason="length"` and stops mid-sentence rather than wrapping up (see
   design.md).
-- A revision that shortens an over-long draft SHALL rewrite it to fit — condensing sections,
-  cutting detail — and SHALL NOT cut a sentence, a list, a table, or a section short.
+- A revision that shortens an over-long draft SHALL rewrite it to fit by stating the same content
+  more concisely — condensing sections, tightening prose, merging overlapping passages — and SHALL
+  NOT cut a sentence, a list, a table, or a section short. It SHALL NOT drop a fact to fit: every
+  value the draft reports, with its citation and its dates, stays in the revision, unless another
+  item of the same revision instruction asks to change it (see **source-selection**, where
+  omitting a relevant value costs more than including one). The length violation's text SHALL ask
+  for exactly this and SHALL NOT ask to cut detail.
 - The delivered report SHALL end at a clean boundary: a complete sentence closing a complete
   section, followed by the References section the app appends.
 
@@ -391,6 +396,12 @@ together as one instruction.
 - **WHEN** an over-long draft is revised to fit the ceiling
 - **THEN** the revised report SHALL contain every configured section that the original filled,
   each ending in a complete sentence, and SHALL NOT end mid-sentence or mid-table
+
+#### Scenario: The length violation asks to condense without dropping a fact
+
+- **WHEN** a draft measures above the ceiling and the app renders the length violation
+- **THEN** the violation text SHALL ask to state the same content more concisely, SHALL say that
+  every reported value stays with its citation and its dates, and SHALL NOT ask to cut detail
 
 #### Scenario: No token cap on the report call
 
@@ -757,8 +768,12 @@ step SHALL read the draft, the configured report structure, the protected sectio
 research question and plan — the last two because they are where a user's formatting instruction
 lives, and without them the step cannot tell a legitimately-followed instruction from an
 override of a protected rule. It SHALL judge the draft against the section content rules, the
-protected sections and their rules, the prohibited meta-annotations, well-formed Markdown, and the
-citation format rules the **research-execution** capability defines. The section structure, the word
+protected sections and their rules, the prohibited meta-annotations, well-formed Markdown, the
+citation format rules the **research-execution** capability defines, and the report-review part of
+every quality rule: the generic source-selection rules and the channel's client rules (see
+**source-selection**). The source-selection parts judge only what the draft shows — how two values
+for one fact are presented, whether a value states its dates, whether a near match says how it
+differs — because the step never sees the sources. The section structure, the word
 ceiling and the absence of hyperlinks are not its to judge — the app checks those itself (see the
 requirement above). The citation-format check becomes load-bearing with this change: the app parses
 those markers out of the delivered report (see **report-citations**), so a draft that adopted
@@ -815,7 +830,10 @@ SHALL mean the first draft is delivered with no review at all.
 
 The review step SHALL judge the report as written. It SHALL NOT re-open evidence coverage or
 request further research — that judgement belongs to research-review — and it SHALL NOT be able to
-route control back to research-agent.
+route control back to research-agent. Its prompt SHALL still list, among what it does not judge,
+whether a claim is true and whether the research was thorough, and SHALL NOT list whether a source
+was the right one to use: how the draft presents the values of several sources is a source-selection
+check it does judge.
 
 Once the loop has settled on the draft to deliver, that draft's wording is final: no later step may
 rewrite, shorten, reorder, or reformat it. The one permitted exception is the citation step, which
@@ -893,6 +911,14 @@ the draft with its markers in place, which is the form the citation rules are wr
 - **WHEN** the review step judges a draft whose Detailed Analysis rests on thin evidence
 - **THEN** it SHALL confine its instructions to the report text and SHALL NOT cause another
   research iteration
+
+#### Scenario: Review reports two differing values merged into a range
+
+- **WHEN** a draft states "global GDP is forecast to grow by 3.3% to 3.5% in 2026" and cites two
+  sources, each of which gives one end of the range
+- **THEN** the review step SHALL report a violation asking for each value to be stated on its own,
+  with its citation, its stated date and the reason for the difference, or the statement that the
+  sources do not explain it
 
 ### Requirement: A report cites only the retrieved sources, and carries no hyperlinks
 

@@ -21,6 +21,7 @@ from dial_deep_research.app.history import Plan, PrepState
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.state import ResearchState, build_initial_state
 from dial_deep_research.app.research.tools import build_finish_iteration_tool
+from tests.mcp_fakes import BOTH_SOURCE_KINDS
 
 
 class _FakeToolCallingModel(GenericFakeChatModel):
@@ -43,6 +44,8 @@ def _one_iteration_graph(monkeypatch: pytest.MonkeyPatch) -> Any:
         lambda model_config: _FakeToolCallingModel(messages=_finish_immediately()),
     )
     agent = nodes.build_research_agent(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         tools=[build_finish_iteration_tool()],
         today_date="2026-07-16",
         client_name="ACME",

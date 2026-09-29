@@ -1,4 +1,8 @@
-"""A stand-in for `MultiServerMCPClient` that the data-sources fetch can open sessions on."""
+"""Test stand-ins for a channel's MCP side.
+
+A `MultiServerMCPClient` the data-sources fetch can open sessions on, and the kinds of source a
+channel with both a document server and a dataset server has.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +13,11 @@ from typing import Any, cast
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from mcp.types import CallToolResult, TextContent
+
+from dial_deep_research.app_properties import SourceKind
+
+# The kinds of source a channel with both a document server and a dataset server has.
+BOTH_SOURCE_KINDS: frozenset[SourceKind] = frozenset({"document", "dataset"})
 
 # A handler receives one call's arguments and returns the result, raises, or never returns.
 Handler = Callable[[dict[str, Any]], CallToolResult | Awaitable[CallToolResult]]

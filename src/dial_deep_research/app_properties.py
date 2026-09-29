@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -21,6 +22,7 @@ from pydantic import (
     Field,
     HttpUrl,
     SecretStr,
+    field_validator,
     model_validator,
 )
 
@@ -672,6 +674,86 @@ DEFAULT_REPORT_STRUCTURE: list[ReportSection] = [
 ]
 
 
+class RuleStep(StrEnum):
+    """The research steps a quality rule can instruct. Each value is the rule's field for it."""
+
+    RESEARCH_AGENT = "research_agent"
+    RESEARCH_REVIEW = "research_review"
+    REPORT_WRITER = "report_writer"
+    REPORT_REVIEW = "report_review"
+
+
+class QualityRule(BaseModel):
+    """One rule, as the instruction it gives each research step.
+
+    A rule's parts live together so that they cannot drift apart: what the research agent is asked
+    to retrieve, what research review counts as a gap, what the writer presents and what report
+    review checks are one edit. The application's generic rules and a channel's client rules share
+    this shape.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(
+        min_length=1,
+        description="The rule's name. Each step's prompt shows the rule's part under this name.",
+    )
+    research_agent: str | None = Field(
+        default=None,
+        min_length=1,
+        description="What the research agent does for this rule. The research agent can only call"
+        " tools, so ask it only to search, list, query or read, never to write, note, summarise or"
+        " compare.",
+    )
+    research_review: str | None = Field(
+        default=None,
+        min_length=1,
+        description="What research review counts as a gap for this rule, or does not. A next step it"
+        " writes becomes the research agent's instruction, so it asks only for retrievals.",
+    )
+    report_writer: str | None = Field(
+        default=None,
+        min_length=1,
+        description="What the report writer does for this rule.",
+    )
+    report_review: str | None = Field(
+        default=None,
+        min_length=1,
+        description="What report review checks for this rule. It sees the draft, not the sources, so"
+        " a check must be decidable from the draft.",
+    )
+
+    def part(self, step: RuleStep) -> str | None:
+        """The rule's instruction to `step`, or `None` when it gives that step none."""
+        value: str | None = getattr(self, step.value)
+        return value
+
+    @field_validator("name", *(step.value for step in RuleStep))
+    @classmethod
+    def _validate_not_blank(cls, value: str | None) -> str | None:
+        # `min_length` counts spaces, and a blank part would render as a heading with no text.
+        if value is not None and not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name_is_one_line(cls, value: str) -> str:
+        # The name is rendered as a `###` heading, which a line break would split.
+        if "\n" in value or "\r" in value:
+            raise ValueError("must be a single line")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_some_part_is_set(self) -> QualityRule:
+        if all(self.part(step) is None for step in RuleStep):
+            raise ValueError(
+                f"quality rule {self.name!r} sets no part; set at least one of"
+                f" {[step.value for step in RuleStep]}"
+            )
+        return self
+
+
 class Prompts(BaseModel):
     """Per-instance content injected into the prompt templates."""
 
@@ -692,6 +774,23 @@ class Prompts(BaseModel):
         " and the glossary when a glossary is configured, and appends them after this text on"
         " every turn, so a dataset described here too is shown to the models twice.",
     )
+    client_rules: list[QualityRule] = Field(
+        default_factory=list,
+        description="This channel's own rules: what the research steps must do differently for this"
+        " channel's sources, such as how its datasets document their methodology, which tool"
+        " lists its documents, or which metadata key holds a publication's date. Each rule gives"
+        " any of the four steps an instruction. A step's prompt shows these rules after the"
+        " application's generic rules, and a client rule is followed where it is more specific than"
+        " a generic one. Rule names must be unique.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_unique_client_rule_names(self) -> Prompts:
+        names = [rule.name for rule in self.client_rules]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ValueError(f"duplicate client rule name(s): {duplicates}")
+        return self
 
 
 class ApplicationProperties(BaseModel):
@@ -919,6 +1018,14 @@ class ApplicationProperties(BaseModel):
                 if (source := server.document_metadata) is not None
             ),
             None,
+        )
+
+    @property
+    def source_kinds(self) -> frozenset[SourceKind]:
+        """The kinds of source this channel's configured servers give it: documents, datasets,
+        or both."""
+        return frozenset(
+            SOURCE_KIND_BY_SERVER_TYPE[server.server_type] for server in self.mcp_servers
         )
 
     @property

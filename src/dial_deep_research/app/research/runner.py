@@ -365,6 +365,8 @@ class ResearchRunner:
             data_sources_instructions=data_sources_instructions,
             glossary=glossary_tools,
             glossary_fetch_listed_terms=bool(data_sources.glossary_listed),
+            client_rules=properties.prompts.client_rules,
+            source_kinds=properties.source_kinds,
             emit_research_review_result_stage=self._emit_research_review_result_stage,
             emit_research_budget_exhausted=self._emit_research_budget_exhausted_stage,
             emit_report_review_result_stage=self._emit_report_review_result_stage,

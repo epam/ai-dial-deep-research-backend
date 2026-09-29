@@ -22,6 +22,11 @@ That one rule prevents most of what follows.
   sensitive even when it names nobody, because it says who we work with and how.
 - **Evaluation content**: real client queries, expected answers and test cases drawn from client
   work.
+- **Examples modeled on a client's material**: an example built from a client's publications or
+  from what an eval run returned, even with every name changed, such as a figure, a quote or a
+  topic taken from one of its documents. Take examples from public statistics instead. A generic
+  publishing pattern is not client material: an annual report revised by an interim update, or an
+  issue number with its year, may stay.
 
 ## What is allowed
 

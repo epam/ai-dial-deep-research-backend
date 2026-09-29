@@ -113,6 +113,8 @@ def test_the_correction_repeats_the_wording_the_prompt_showed() -> None:
         verdict_retry_now=RetryVerdict.RETRY_NOW,
         verdict_retry_later=RetryVerdict.RETRY_LATER,
         verdict_will_not_help=RetryVerdict.WILL_NOT_HELP,
+        source_selection="",
+        client_rules="",
     )
     description = build_update_status_tool().description
 

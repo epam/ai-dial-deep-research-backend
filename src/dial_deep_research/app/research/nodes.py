@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Collection, Sequence
 from typing import Any
 
 from langchain.agents import create_agent
@@ -37,7 +37,13 @@ from pydantic import BaseModel
 
 from dial_deep_research.app.middleware import ImageBudgetMiddleware
 from dial_deep_research.app.tool_failures import RetryVerdict, ToolFailureMiddleware
-from dial_deep_research.app_properties import GlossaryTools, ReportSection
+from dial_deep_research.app_properties import (
+    GlossaryTools,
+    QualityRule,
+    ReportSection,
+    RuleStep,
+    SourceKind,
+)
 from dial_deep_research.settings import settings
 from dial_deep_research.utils.agent_logging import agent_logging_middleware
 from dial_deep_research.utils.content import (
@@ -46,6 +52,7 @@ from dial_deep_research.utils.content import (
 )
 from dial_deep_research.utils.llm import (
     LLMModelConfig,
+    ReasoningEffortEnum,
     format_token_usage,
     get_chat_model,
     stream_drop_retry_middleware,
@@ -63,12 +70,14 @@ from .prompts import (
     RESEARCH_REVIEW_SYSTEM_PROMPT,
     ReportReview,
     ResearchReview,
+    render_client_rules,
     render_next_instruction,
     render_plan,
     render_protected_section_names,
     render_report_review_system_prompt,
     render_report_structure,
     render_report_system_prompt,
+    render_source_selection,
 )
 from .report_length import LENGTH_EXEMPTIONS, count_report_words
 from .report_rules import build_report_rules, render_writer_instructions
@@ -98,11 +107,16 @@ def build_research_agent(
     client_name: str,
     data_sources: str,
     data_sources_instructions: str,
+    source_kinds: Collection[SourceKind],
+    client_rules: Sequence[QualityRule],
 ) -> Any:
     """Build research-agent: a `create_agent` over the tools, forced to call a tool every step.
 
     `data_sources` is the turn's data-sources string, and `data_sources_instructions` what the
     agent is told about the app's own dataset and glossary calls (empty when nothing applies).
+    `client_rules` is the channel's own rules, whose research-agent parts follow the generic ones.
+    `source_kinds` is the kinds of source the channel's servers give it; the generic rules are
+    told them, so their parts about a missing kind do not apply.
     """
     return create_agent(
         model=get_chat_model(LLMModelConfig()),
@@ -112,6 +126,10 @@ def build_research_agent(
             client_name=client_name,
             data_sources=data_sources,
             data_sources_instructions=data_sources_instructions,
+            source_selection=render_source_selection(
+                step=RuleStep.RESEARCH_AGENT, source_kinds=source_kinds
+            ),
+            client_rules=render_client_rules(client_rules, step=RuleStep.RESEARCH_AGENT),
             # The two rules the status tool quotes back when it catches one being broken, so the
             # correction repeats the instruction word for word. The prompt writes its other status
             # rules itself.
@@ -266,12 +284,22 @@ def make_research_review_node(
     data_sources: str,
     emit_result_stage: ResearchReviewResultStageEmitter,
     emit_activity: ActivityEmitter,
+    source_kinds: Collection[SourceKind],
+    client_rules: Sequence[QualityRule],
 ) -> ResearchReviewNode:
     """Build the research-review node: judge coverage, emit its result stage, plan what remains.
 
     `max_research_iterations` is not a bound this node enforces — the router does that before the
     node is reached. It is here for the stage, which states the cap beside the iteration number.
     """
+    system_prompt = RESEARCH_REVIEW_SYSTEM_PROMPT.format(
+        today_date=today_date,
+        data_sources=data_sources,
+        source_selection=render_source_selection(
+            step=RuleStep.RESEARCH_REVIEW, source_kinds=source_kinds
+        ),
+        client_rules=render_client_rules(client_rules, step=RuleStep.RESEARCH_REVIEW),
+    )
 
     async def research_review(state: ResearchState) -> dict[str, Any]:
         emit_activity(RESEARCH_REVIEW_ACTIVITY)
@@ -281,19 +309,15 @@ def make_research_review_node(
         # as `parsing_error` instead of raising inside the chain, so we re-raise below to keep
         # the previous fail-loud behavior.
         llm = with_stream_drop_retry(
-            get_chat_model(LLMModelConfig()).with_structured_output(
-                ResearchReview, include_raw=True
-            )
+            get_chat_model(
+                LLMModelConfig(reasoning_effort=ReasoningEffortEnum.MEDIUM)
+            ).with_structured_output(ResearchReview, include_raw=True)
         )
         plans_text = "\n\n".join(
             f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
         )
         review_messages = [
-            SystemMessage(
-                content=RESEARCH_REVIEW_SYSTEM_PROMPT.format(
-                    today_date=today_date, data_sources=data_sources
-                )
-            ),
+            SystemMessage(content=system_prompt),
             HumanMessage(
                 content=RESEARCH_REVIEW_HUMAN_MESSAGE.format(
                     query=state["original_query"],
@@ -440,6 +464,8 @@ def make_report_node(
     glossary: GlossaryTools | None,
     emit_revision_failed_stage: ReportRevisionFailureEmitter,
     emit_activity: ActivityEmitter,
+    source_kinds: Collection[SourceKind],
+    client_rules: Sequence[QualityRule],
 ) -> ReportNode:
     """Build the report node: it writes the first draft, and every revision after it.
 
@@ -459,6 +485,8 @@ def make_report_node(
         protected_sections=render_protected_section_names(sections),
         data_sources=data_sources,
         glossary=glossary is not None,
+        client_rules=client_rules,
+        source_kinds=source_kinds,
     )
 
     async def report(state: ResearchState) -> dict[str, Any]:
@@ -550,12 +578,15 @@ def make_report_review_node(
     glossary_fetch_listed_terms: bool,
     emit_result_stage: ReportReviewResultStageEmitter,
     emit_activity: ActivityEmitter,
+    source_kinds: Collection[SourceKind],
+    client_rules: Sequence[QualityRule],
 ) -> ReportReviewNode:
     """Build the report-review node: judge the draft, emit its result stage, decide the next step.
 
     Two judgements meet here. The app's own rules (`report_rules`) are checked in Python over the
     draft text, and the review model judges what needs a reader — padding, banned annotations,
-    protected-section rules, citation format. It sees the draft, the configuration and the query
+    protected-section rules, citation format, and the report-review parts of the quality rules
+    (`client_rules` holds the channel's own). It sees the draft, the configuration and the query
     and plan, never the research findings, which is why it cannot reopen evidence coverage. A
     failing call never fails the turn: the rules still run and their violations still stand.
 
@@ -586,6 +617,8 @@ def make_report_review_node(
             glossary_check=glossary is not None
             and (glossary_fetch_listed_terms or bool(tool_results)),
             glossary_tool_results=tool_results,
+            client_rules=client_rules,
+            source_kinds=source_kinds,
         )
         review_messages = [
             SystemMessage(content=system_prompt),
@@ -605,9 +638,9 @@ def make_report_review_node(
             llm_start = time.monotonic()
             try:
                 llm = with_stream_drop_retry(
-                    get_chat_model(LLMModelConfig()).with_structured_output(
-                        ReportReview, include_raw=True
-                    )
+                    get_chat_model(
+                        LLMModelConfig(reasoning_effort=ReasoningEffortEnum.MEDIUM)
+                    ).with_structured_output(ReportReview, include_raw=True)
                 )
                 result: dict[str, Any] = await llm.ainvoke(review_messages)
                 llm_duration = time.monotonic() - llm_start

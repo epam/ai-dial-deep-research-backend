@@ -36,6 +36,7 @@ from dial_deep_research.app import tool_failures
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.tools import build_finish_iteration_tool
 from dial_deep_research.app.tool_failures import RetryVerdict
+from tests.mcp_fakes import BOTH_SOURCE_KINDS
 
 # Shaped like a DIAL Core deployment URL, so an HTTP error's own message carries an internal-looking
 # host and a deployment id — the two things the relayed result must never repeat.
@@ -172,6 +173,8 @@ class _Harness:
         async with self.server.session_manager.run():
             tools = await self.client.get_tools()
             agent = nodes.build_research_agent(
+                source_kinds=BOTH_SOURCE_KINDS,
+                client_rules=(),
                 tools=[*tools, build_finish_iteration_tool()],
                 today_date="2026-09-22",
                 client_name="ACME",

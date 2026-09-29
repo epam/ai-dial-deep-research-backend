@@ -23,6 +23,7 @@ from dial_deep_research.app.research.prompts import (
 )
 from dial_deep_research.app_properties import DEFAULT_REPORT_STRUCTURE, GlossaryTools
 from tests.citation_fakes import no_lookups
+from tests.mcp_fakes import BOTH_SOURCE_KINDS
 
 _LIST_TOOL = "list_datasets"
 _STRUCTURE_TOOL = "describe_dataset"
@@ -239,6 +240,8 @@ def test_the_research_agent_carries_the_data_sources_and_the_instruction() -> No
         verdict_retry_now="v1",
         verdict_retry_later="v2",
         verdict_will_not_help="v3",
+        source_selection="",
+        client_rules="",
     )
     assert (
         f"<data_sources>\n{_TEXT}\n</data_sources>\n\nThe instruction.\n\n## Tools usage" in prompt
@@ -279,6 +282,8 @@ async def test_research_review_carries_the_data_sources(monkeypatch: pytest.Monk
     )
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: llm)
     node = nodes.make_research_review_node(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         today_date="2026-09-27",
         max_research_iterations=3,
         data_sources=_TEXT,
@@ -299,6 +304,8 @@ def _review_node(monkeypatch: pytest.MonkeyPatch, *, listed: bool) -> tuple[Any,
     )
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: llm)
     node = nodes.make_report_review_node(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         today_date="2026-09-27",
         sections=DEFAULT_REPORT_STRUCTURE,
         max_words=2750,
@@ -367,9 +374,17 @@ async def test_a_listed_glossary_gives_the_reviewer_the_check(
 
 def test_the_writer_and_the_reviewer_share_the_terminology_wording() -> None:
     writer = render_report_system_prompt(
-        today_date="d", rules="", protected_sections="Overview", data_sources=_TEXT, glossary=True
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
+        today_date="d",
+        rules="",
+        protected_sections="Overview",
+        data_sources=_TEXT,
+        glossary=True,
     )
     reviewer = render_report_review_system_prompt(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         today_date="d",
         data_sources=_TEXT,
         glossary=True,
@@ -396,7 +411,13 @@ def test_the_terminology_rule_makes_the_glossary_the_only_source_of_terms() -> N
 
 def test_the_writer_is_told_the_data_sources_count_as_retrieved_sources() -> None:
     writer = render_report_system_prompt(
-        today_date="d", rules="", protected_sections="Overview", data_sources=_TEXT, glossary=False
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
+        today_date="d",
+        rules="",
+        protected_sections="Overview",
+        data_sources=_TEXT,
+        glossary=False,
     )
     assert f"<data_sources>\n{_TEXT}\n</data_sources>" in writer
     assert "counts as grounded in a retrieved source" in writer
@@ -405,9 +426,17 @@ def test_the_writer_is_told_the_data_sources_count_as_retrieved_sources() -> Non
 
 def test_no_prompt_on_a_channel_without_a_glossary_mentions_the_glossary() -> None:
     writer = render_report_system_prompt(
-        today_date="d", rules="", protected_sections="Overview", data_sources=_TEXT, glossary=False
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
+        today_date="d",
+        rules="",
+        protected_sections="Overview",
+        data_sources=_TEXT,
+        glossary=False,
     )
     reviewer = render_report_review_system_prompt(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         today_date="d",
         data_sources=_TEXT,
         glossary=False,

@@ -231,9 +231,19 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   research-agent obtained a glossary result; it also receives those results, selected from the
   transcript by the configured glossary tool names, as its one kind of tool result.
 
+- **Quality rules**: the system prompt of every node also carries its part of each quality rule — a
+  rule is one bundle of four instructions, one per node, so what research-agent retrieves, what
+  research-review counts as a gap, what the report writer presents and what report-review checks
+  are defined together (`app/research/source_selection.py`). The generic rules come first, opened
+  by a sentence naming the kinds of source the channel's servers give it (publications, datasets
+  or both), so a part about a kind the channel lacks does not apply; a channel's
+  `prompts.client_rules` follow in a `<client_rules>` block. See
+  [source-selection](../openspec/specs/source-selection/spec.md).
+
 - **Research-review**: an independent structured LLM call judging coverage; an empty next plan means
-  research is complete. It runs after every iteration except the last one the cap permits — a
-  "continue" verdict there could not be acted on, so that call is not made.
+  the plan and the gaps the quality rules define are covered, so research is complete. It runs
+  after every iteration except the last one the cap permits — a "continue" verdict there could not
+  be acted on, so that call is not made.
 - **Iteration cap**: `max_research_iterations` (an application property). The last permitted
   iteration hands its findings straight to the report, unreviewed, so a turn always ends with a
   report; the hand-off is logged.

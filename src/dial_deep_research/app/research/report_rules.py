@@ -330,10 +330,12 @@ a complete sentence closing a complete section."""
 
 
 _LENGTH_VIOLATION = """\
-The draft is {word_count} words, over the {max_words}-word ceiling — a count that already leaves \
-out {length_exemptions}. Shorten it to fit by condensing and rewriting — cut detail, tighten \
-prose, merge overlapping passages. Do not truncate: every section that the draft filled stays \
-present, and the report still ends at a complete sentence."""
+The draft is {word_count} words, over the {max_words}-word ceiling — a count that already leaves
+out {length_exemptions}. Shorten it to fit by stating the same content more concisely — tighten
+prose, merge overlapping passages. Keep every value the draft reports, with the citation and the
+dates the draft gives it, unless another item of this list asks to change it. Do not truncate:
+every section that the draft filled stays present, and the report still ends at a complete
+sentence."""
 
 
 _HYPERLINK_INSTRUCTION = """\

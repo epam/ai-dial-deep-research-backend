@@ -243,8 +243,12 @@ def _stub_graph_build(monkeypatch: MonkeyPatch, captured: dict[str, Any]) -> Non
             data_queries=DataQueryStore(),
         )
 
+    def _build_graph(**kwargs: Any) -> _GraphStub:
+        captured["graph_arguments"] = kwargs
+        return _GraphStub(captured)
+
     monkeypatch.setattr(runner_module, "load_mcp_tools", _no_tools)
-    monkeypatch.setattr(runner_module, "build_research_graph", lambda **_kw: _GraphStub(captured))
+    monkeypatch.setattr(runner_module, "build_research_graph", _build_graph)
 
 
 async def test_step_budget_comes_from_the_channel_properties(monkeypatch: MonkeyPatch) -> None:
@@ -273,6 +277,35 @@ async def test_step_budget_defaults_to_500(monkeypatch: MonkeyPatch) -> None:
     )
 
     assert captured["config"]["recursion_limit"] == 500
+
+
+async def test_the_channels_rules_and_kinds_of_source_reach_the_graph(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    _stub_graph_build(monkeypatch, captured)
+    runner, _ = _make_runner()
+    properties = _properties(
+        prompts={
+            "client_name": "Test Corp",
+            "agent_name": "Test Deep Research",
+            "data_sources_descriptions": "## report\n\nA report.",
+            "client_rules": [
+                {"name": "Dataset methodology", "research_agent": "Read the methodology pages."}
+            ],
+        }
+    )
+
+    await runner.run(
+        _approved_prep_state(),
+        properties=properties,
+        data_sources=DataSources(text="The topics map."),
+    )
+
+    arguments = captured["graph_arguments"]
+    assert arguments["client_rules"] == properties.prompts.client_rules
+    assert len(arguments["client_rules"]) == 1
+    assert arguments["source_kinds"] == frozenset({"document"})
 
 
 def test_the_runner_renders_an_exhausted_report_budget() -> None:

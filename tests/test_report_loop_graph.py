@@ -21,8 +21,9 @@ from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.graph import build_research_graph
 from dial_deep_research.app.research.prompts import ReportReview
 from dial_deep_research.app.research.state import build_initial_state
-from dial_deep_research.app_properties import ReportSection
+from dial_deep_research.app_properties import QualityRule, ReportSection
 from tests.citation_fakes import no_lookups
+from tests.mcp_fakes import BOTH_SOURCE_KINDS
 
 pytestmark = pytest.mark.asyncio
 
@@ -108,28 +109,74 @@ def _build(
     llm = _FakeChatModel(drafts, reviews)
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: llm)
     stages: list[Any] = []
-    compiled = build_research_graph(
-        tools=[],
-        today_date="2026-07-31",
-        max_research_iterations=10,
-        client_name="ACME",
-        report_structure=_SECTIONS,
+    compiled = _compile(
         max_report_words=max_report_words,
         max_report_versions=max_report_versions,
-        references_section_name="References",
-        citation_lookups=no_lookups(),
-        data_sources="The topics map.",
-        data_sources_instructions="",
-        glossary=None,
-        glossary_fetch_listed_terms=False,
-        emit_research_review_result_stage=lambda _outcome: None,
-        emit_research_budget_exhausted=lambda _outcome: None,
         emit_report_review_result_stage=stages.append,
-        emit_report_revision_failed=lambda _outcome: None,
-        emit_report_budget_exhausted=lambda _outcome: None,
-        emit_activity=lambda _title: None,
     )
     return compiled, llm, stages
+
+
+def _compile(**overrides: Any) -> Any:
+    arguments: dict[str, Any] = {
+        "tools": [],
+        "today_date": "2026-07-31",
+        "max_research_iterations": 10,
+        "client_name": "ACME",
+        "report_structure": _SECTIONS,
+        "max_report_words": 2750,
+        "max_report_versions": 3,
+        "references_section_name": "References",
+        "citation_lookups": no_lookups(),
+        "data_sources": "The topics map.",
+        "data_sources_instructions": "",
+        "glossary": None,
+        "glossary_fetch_listed_terms": False,
+        "client_rules": (),
+        "source_kinds": BOTH_SOURCE_KINDS,
+        "emit_research_review_result_stage": lambda _outcome: None,
+        "emit_research_budget_exhausted": lambda _outcome: None,
+        "emit_report_review_result_stage": lambda _outcome: None,
+        "emit_report_revision_failed": lambda _outcome: None,
+        "emit_report_budget_exhausted": lambda _outcome: None,
+        "emit_activity": lambda _title: None,
+    }
+    return build_research_graph(**{**arguments, **overrides})
+
+
+async def test_the_channels_rules_and_kinds_of_source_reach_every_node(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    received: dict[str, dict[str, Any]] = {}
+
+    def recording(builder_name: str) -> Any:
+        def build(**kwargs: Any) -> Any:
+            received[builder_name] = kwargs
+
+            async def node(_state: Any) -> dict[str, Any]:
+                return {}
+
+            return node
+
+        return build
+
+    builder_names = (
+        "build_research_agent",
+        "make_research_review_node",
+        "make_report_node",
+        "make_report_review_node",
+    )
+    for builder_name in builder_names:
+        monkeypatch.setattr(graph_module, builder_name, recording(builder_name))
+    rules = (QualityRule(name="Dataset methodology", research_agent="Read the methodology pages."),)
+    kinds = frozenset({"dataset"})
+
+    _compile(client_rules=rules, source_kinds=kinds)
+
+    assert set(received) == set(builder_names)
+    for kwargs in received.values():
+        assert kwargs["client_rules"] == rules
+        assert kwargs["source_kinds"] == kinds
 
 
 def _initial_state() -> dict[str, Any]:

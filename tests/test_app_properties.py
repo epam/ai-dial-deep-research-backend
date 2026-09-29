@@ -74,6 +74,64 @@ def test_empty_prompt_string_is_rejected(field: str) -> None:
     assert any(err["loc"] == ("prompts", field) for err in excinfo.value.errors())
 
 
+def _with_client_rules(rules: list[dict]) -> dict:
+    return {**VALID_PROPERTIES, "prompts": {**VALID_PROPERTIES["prompts"], "client_rules": rules}}
+
+
+def test_client_rules_default_to_empty() -> None:
+    properties = ApplicationProperties.model_validate(VALID_PROPERTIES)
+    assert properties.prompts.client_rules == []
+
+
+def test_client_rule_with_one_part_validates() -> None:
+    properties = ApplicationProperties.model_validate(
+        _with_client_rules([{"name": "Dataset methodology", "research_agent": "Do this."}])
+    )
+    (rule,) = properties.prompts.client_rules
+    assert rule.research_agent == "Do this."
+    assert rule.research_review is None
+    assert rule.report_writer is None
+    assert rule.report_review is None
+
+
+def test_client_rule_without_parts_is_rejected() -> None:
+    with pytest.raises(ValidationError, match="'Dates' sets no part"):
+        ApplicationProperties.model_validate(_with_client_rules([{"name": "Dates"}]))
+
+
+@pytest.mark.parametrize("part", ["", "   ", "\n"])
+def test_blank_client_rule_part_is_rejected(part: str) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(
+            _with_client_rules([{"name": "Dates", "report_writer": part}])
+        )
+    assert any(err["loc"][-1] == "report_writer" for err in excinfo.value.errors())
+
+
+@pytest.mark.parametrize("name", ["  ", "Two\nlines"])
+def test_blank_or_multiline_client_rule_name_is_rejected(name: str) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(
+            _with_client_rules([{"name": name, "report_writer": "One."}])
+        )
+    assert any(err["loc"][-1] == "name" for err in excinfo.value.errors())
+
+
+def test_duplicate_client_rule_names_are_rejected() -> None:
+    rules = [
+        {"name": "Dates", "report_writer": "One."},
+        {"name": "Dates", "report_review": "Two."},
+    ]
+    with pytest.raises(ValidationError, match=r"duplicate client rule name\(s\): \['Dates'\]"):
+        ApplicationProperties.model_validate(_with_client_rules(rules))
+
+
+def test_unknown_client_rule_field_is_rejected() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(_with_client_rules([{"name": "Dates", "writer": "x"}]))
+    assert any(err["type"] == "extra_forbidden" for err in excinfo.value.errors())
+
+
 def test_missing_prompts_is_rejected() -> None:
     with pytest.raises(ValidationError) as excinfo:
         ApplicationProperties.model_validate({})
@@ -372,6 +430,12 @@ def test_one_server_of_each_type_is_accepted() -> None:
         "generic_rag",
         "statgpt",
     ]
+    assert properties.source_kinds == frozenset({"document", "dataset"})
+
+
+def test_a_channel_with_one_server_has_one_kind_of_source() -> None:
+    properties = ApplicationProperties.model_validate(VALID_PROPERTIES)
+    assert properties.source_kinds == frozenset({"document"})
 
 
 def test_two_servers_of_one_type_are_rejected() -> None:
