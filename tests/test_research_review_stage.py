@@ -33,6 +33,7 @@ from dial_deep_research.app.research.state import build_initial_state
 from dial_deep_research.app_properties import ReportSection
 from tests.citation_fakes import no_lookups
 from tests.dial_spies import ChoiceSpy
+from tests.mcp_fakes import BOTH_SOURCE_KINDS
 
 pytestmark = pytest.mark.asyncio
 
@@ -78,6 +79,8 @@ def _review_node(
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: _FakeReviewModel(review))
     outcomes: list[ResearchReviewOutcome] = []
     node = nodes.make_research_review_node(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         today_date="2026-08-14",
         max_research_iterations=max_research_iterations,
         data_sources="The topics map.",
@@ -185,6 +188,8 @@ async def test_a_failed_review_call_emits_nothing_and_ends_the_turn(
     monkeypatch.setattr(nodes, "get_chat_model", _boom)
     outcomes: list[ResearchReviewOutcome] = []
     node = nodes.make_research_review_node(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         today_date="2026-08-14",
         max_research_iterations=10,
         data_sources="The topics map.",
@@ -261,6 +266,8 @@ async def _run_graph_with_the_cap_reached(
         data_sources_instructions="",
         glossary=None,
         glossary_fetch_listed_terms=False,
+        client_rules=(),
+        source_kinds=BOTH_SOURCE_KINDS,
         emit_research_review_result_stage=lambda outcome: (
             findings.append(outcome),
             order.append("findings"),

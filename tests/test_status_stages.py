@@ -27,6 +27,7 @@ from dial_deep_research.app.research.state import build_initial_state
 from dial_deep_research.app_properties import DEFAULT_REPORT_STRUCTURE, ApplicationProperties
 from tests.citation_fakes import no_lookups
 from tests.dial_spies import ChoiceSpy
+from tests.mcp_fakes import BOTH_SOURCE_KINDS
 
 _STATUS = "update_status"
 
@@ -329,6 +330,8 @@ async def test_research_review_names_its_work_before_calling_a_model(
     _no_model(monkeypatch)
     seen: list[str] = []
     node = nodes.make_research_review_node(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         today_date="2026-08-14",
         max_research_iterations=10,
         data_sources="The topics map.",
@@ -348,6 +351,8 @@ async def test_the_report_node_names_its_work_before_calling_a_model(
     _no_model(monkeypatch)
     seen: list[str] = []
     node = nodes.make_report_node(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         today_date="2026-08-14",
         sections=DEFAULT_REPORT_STRUCTURE,
         max_words=2750,
@@ -371,6 +376,8 @@ async def test_report_review_names_its_work_before_calling_a_model(
     _no_model(monkeypatch)
     seen: list[str] = []
     node = nodes.make_report_review_node(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         today_date="2026-08-14",
         sections=DEFAULT_REPORT_STRUCTURE,
         max_words=2750,

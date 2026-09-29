@@ -17,7 +17,7 @@ The repository SHALL define a pydantic model (`ApplicationProperties`) that is t
 source of per-channel configuration, replacing the YAML-loaded `ChannelConfig`. The model
 SHALL expose:
 
-- `max_research_iterations: int` — default `10`, constrained `ge=1`; the cap on
+- `max_research_iterations: int` — default `5`, constrained `ge=1`; the cap on
   research-agent → research-review loops before the report is forced.
 - `max_research_graph_steps: int` — default `500`, constrained `ge=1`; the per-graph-run step
   ceiling passed to LangGraph as `recursion_limit` (see the **research-execution**
@@ -77,6 +77,8 @@ SHALL expose:
   structures when a dataset-structure tool is configured, and the glossary when one is configured
   (see **data-sources-discovery**). The app appends what it fetched after this text, so a channel
   that also describes its datasets here shows the models each dataset twice.
+  `prompts` SHALL also carry the optional `client_rules` list, empty by default, specified in
+  **Prompts carry the channel's client rules** below.
 
 The model SHALL NOT carry a deployment id (`channel_name` is dropped — instance identity
 lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
@@ -86,7 +88,7 @@ lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
 
 - **WHEN** `ApplicationProperties.model_validate` receives an object with the three prompt
   strings and no `max_research_iterations`
-- **THEN** validation SHALL succeed and `max_research_iterations` SHALL equal `10`
+- **THEN** validation SHALL succeed and `max_research_iterations` SHALL equal `5`
 
 #### Scenario: Empty prompt field is rejected
 
@@ -976,3 +978,66 @@ Because the field is optional, `dial_conf/core/applications-template.json` SHALL
 
 - **WHEN** a `statgpt` server entry sets no `dataset_structure_tool`
 - **THEN** validation SHALL pass, and no structure call SHALL be made by the app for that channel
+
+### Requirement: Prompts carry the channel's client rules
+
+`prompts` SHALL carry an optional `client_rules` field: a list of quality rules, empty by default.
+A client rule is the channel's own rule, in the same shape as the application's generic rules
+(see **source-selection**). It SHALL have these fields, and SHALL reject unknown ones
+(`extra="forbid"`):
+
+- `name: str` — required, not blank, and a single line; the heading the rule's parts are shown
+  under in each step's prompt, which a line break would split.
+- `research_agent`, `research_review`, `report_writer`, `report_review` — each an optional string
+  that is not blank, `null` by default; the rule's instruction to that step. A step that the rule
+  gives no part receives nothing from it. A string of whitespace alone is blank.
+
+Validation SHALL reject a rule that sets none of the four parts, since such a rule reaches no
+step, and SHALL reject two rules with the same `name`, since each step shows the parts under the
+name and a duplicate makes two rules indistinguishable. Each error SHALL name the offending rule.
+
+The field description SHALL tell the admin what a client rule is for: what a step must do
+differently for this channel's sources, such as how its datasets document their methodology. It
+SHALL say that a client rule is shown after the application's generic rules and takes precedence
+where it is more specific.
+
+`client_rules` has a default, so the committed `applications-template.json` SHALL NOT set it (see
+**local-stack**).
+
+#### Scenario: A channel without client rules validates
+
+- **WHEN** `ApplicationProperties.model_validate` receives `prompts` with the three required
+  strings and no `client_rules`
+- **THEN** validation SHALL succeed and `prompts.client_rules` SHALL be an empty list
+
+#### Scenario: A client rule with one part validates
+
+- **WHEN** `prompts.client_rules` holds one rule named "Dataset methodology" whose only part is
+  `research_agent`
+- **THEN** validation SHALL succeed, and the rule's other three parts SHALL be `null`
+
+#### Scenario: A client rule with no part is rejected
+
+- **WHEN** `prompts.client_rules` holds a rule that sets only `name`
+- **THEN** validation SHALL raise a pydantic `ValidationError` naming that rule and stating that at
+  least one part must be set
+
+#### Scenario: An empty part is rejected
+
+- **WHEN** a client rule sets `report_writer` to an empty string, or to a string of spaces
+- **THEN** validation SHALL raise a pydantic `ValidationError` identifying the field
+
+#### Scenario: A rule name with a line break is rejected
+
+- **WHEN** a client rule's `name` contains a line break
+- **THEN** validation SHALL raise a pydantic `ValidationError` identifying the field
+
+#### Scenario: Duplicate client rule names are rejected
+
+- **WHEN** `prompts.client_rules` holds two rules named "Dates"
+- **THEN** validation SHALL raise a pydantic `ValidationError` naming the duplicated name
+
+#### Scenario: An unknown field of a client rule is rejected
+
+- **WHEN** a client rule carries a field `writer` instead of `report_writer`
+- **THEN** validation SHALL raise a pydantic `ValidationError` naming the unknown field

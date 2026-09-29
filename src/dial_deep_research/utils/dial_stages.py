@@ -97,7 +97,8 @@ class DialStageResearchReviewFormatter:
             lines.extend(f"{i}. {step}" for i, step in enumerate(next_steps, start=1))
         else:
             lines.append(
-                "**Next steps** none — every plan item is covered, so research is complete."
+                "**Next steps** none — the plan and the quality rules are covered, so research is"
+                " complete."
             )
         return "\n".join(lines)
 

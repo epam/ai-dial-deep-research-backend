@@ -466,6 +466,84 @@
           "minLength": 1,
           "title": "Data Sources Descriptions",
           "type": "string"
+        },
+        "client_rules": {
+          "description": "This channel's own rules: what the research steps must do differently for this channel's sources, such as how its datasets document their methodology, which tool lists its documents, or which metadata key holds a publication's date. Each rule gives any of the four steps an instruction. A step's prompt shows these rules after the application's generic rules, and a client rule is followed where it is more specific than a generic one. Rule names must be unique.",
+          "items": {
+            "additionalProperties": false,
+            "description": "One rule, as the instruction it gives each research step.\n\nA rule's parts live together so that they cannot drift apart: what the research agent is asked\nto retrieve, what research review counts as a gap, what the writer presents and what report\nreview checks are one edit. The application's generic rules and a channel's client rules share\nthis shape.",
+            "properties": {
+              "name": {
+                "description": "The rule's name. Each step's prompt shows the rule's part under this name.",
+                "minLength": 1,
+                "title": "Name",
+                "type": "string"
+              },
+              "research_agent": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "What the research agent does for this rule. The research agent can only call tools, so ask it only to search, list, query or read, never to write, note, summarise or compare.",
+                "title": "Research Agent"
+              },
+              "research_review": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "What research review counts as a gap for this rule, or does not. A next step it writes becomes the research agent's instruction, so it asks only for retrievals.",
+                "title": "Research Review"
+              },
+              "report_writer": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "What the report writer does for this rule.",
+                "title": "Report Writer"
+              },
+              "report_review": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "What report review checks for this rule. It sees the draft, not the sources, so a check must be decidable from the draft.",
+                "title": "Report Review"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "title": "QualityRule",
+            "type": "object"
+          },
+          "title": "Client Rules",
+          "type": "array"
         }
       },
       "required": [

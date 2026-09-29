@@ -57,6 +57,7 @@ from dial_deep_research.app_properties import (
 )
 from dial_deep_research.utils.content import count_image_blocks, count_words
 from tests.citation_fakes import no_lookups
+from tests.mcp_fakes import BOTH_SOURCE_KINDS
 
 _TODAY = "2026-07-16"
 
@@ -133,6 +134,8 @@ def _report_node(
 ) -> Any:
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: RunnableLambda(llm))
     return nodes.make_report_node(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         today_date=_TODAY,
         sections=sections if sections is not None else DEFAULT_REPORT_STRUCTURE,
         max_words=max_words,
@@ -351,6 +354,8 @@ def _review_node(
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: llm)
     stages: list[ReportReviewOutcome] = []
     node = nodes.make_report_review_node(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         today_date=_TODAY,
         sections=sections if sections is not None else DEFAULT_REPORT_STRUCTURE,
         max_words=max_words,
@@ -777,6 +782,8 @@ def test_the_length_exemption_is_the_citations_whatever_the_structure() -> None:
 
 def test_report_system_prompt_states_the_ceiling_and_the_protected_names() -> None:
     prompt = render_report_system_prompt(
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
         today_date=_TODAY,
         rules=render_writer_instructions(
             build_report_rules(

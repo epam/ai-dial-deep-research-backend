@@ -127,7 +127,19 @@ original query, all prior iteration plans, and the accumulated research-agent me
 item. It SHALL emit the plan for the next iteration as an ordered list of steps; an
 **empty** list SHALL mean research is complete. Research-review SHALL be prompted to
 include only genuinely uncovered work judged against the existing findings, and
-SHALL NOT expand scope to manufacture new iterations. Research-review's structured
+SHALL NOT expand scope to manufacture new iterations. What counts as uncovered work is the plan's
+items and the gaps that the research-review parts of the quality rules define (see
+**source-selection**): a gap such a rule defines, such as a fact with no check for a later edition,
+is part of fulfilling the plan and SHALL NOT be treated as new scope. Every text that tells the
+model when research is complete SHALL say so: the prompt's task sentence, its list of gaps, its
+sentence on returning an empty next plan, its scope paragraph and its "prefer to finish" guidance,
+and the output schema's own description and its two field descriptions, which the model receives
+with the output schema.
+"Prefer to finish" SHALL apply only once both the plan and those rules are substantively covered.
+Every next step SHALL be a retrieval the research agent can carry out with its tools; the prompt
+SHALL say that a summary, a comparison, a note or a calculation is the report writer's and is
+never a next step.
+Research-review's structured
 output SHALL place its reasoning before its next-plan list. When the next plan is
 non-empty, the node SHALL record it (appending to the plan list) and inject it into
 the message stream as a `HumanMessage` that becomes the next research-agent iteration's
@@ -140,8 +152,16 @@ instruction.
 
 #### Scenario: Full coverage completes research
 
-- **WHEN** research-review finds every plan item supported by the findings
+- **WHEN** research-review finds every plan item supported by the findings, and none of the gaps
+  the quality rules define is open
 - **THEN** it SHALL return an empty next plan and the graph SHALL route to the report node
+
+#### Scenario: A source-selection gap is not new scope
+
+- **WHEN** every plan item has evidence, but a forecast the plan asks about was found in one
+  publication and the findings show no check for a later edition
+- **THEN** research-review SHALL return a next plan asking for that check, even though the plan
+  does not name it
 
 ### Requirement: Every research review's findings are visible as a DIAL stage
 
@@ -537,6 +557,10 @@ is part of the contract, not an accident of implementation.
   carry the instruction that says, for each bound dataset tool, whether the app's own calls
   succeeded: the agent does not call a tool again for an answer the datasets section shows, and
   calls it when the app's calls failed, with at most three calls (see **data-sources-discovery**).
+- System prompt, additionally: the research-agent part of every generic quality rule, after the
+  statement of the kinds of source the channel's configured servers give it, and, when
+  a rule of the channel's `prompts.client_rules` has a research-agent part, those parts in a
+  `<client_rules>` block after them (see **source-selection**).
 - Messages: the graph's accumulated `messages` — the seed instruction (the aligned query and the
   approved plan), every `AIMessage` and `ToolMessage` of the turn so far **including image
   content blocks**, and each research-review-injected next-plan instruction. Image blocks are
@@ -562,6 +586,14 @@ is part of the contract, not an accident of implementation.
 - System prompt, additionally: the turn's data-sources string in a `<data_sources>` block, the
   same string research-agent receives, so the next-iteration plan this call writes points at the
   data sources that exist.
+- System prompt, additionally: the research-review part of every generic quality rule, which
+  defines gaps beyond the plan items, after the statement of the kinds of source the channel's
+  configured servers give it, and, when a rule of the channel's `prompts.client_rules` has
+  a research-review part, those parts in a `<client_rules>` block after them (see
+  **source-selection**).
+- Model: the default chat model with reasoning effort `medium`, where the other research calls
+  use none. The gaps the quality rules define need the call to weigh each fact of the question
+  against the findings, and without reasoning it closed research on a listing or a title alone.
 - Output: a structured verdict — the assessment, then the next-iteration steps (empty means
   research is complete).
 
@@ -575,6 +607,10 @@ is part of the contract, not an accident of implementation.
   glossary, they also carry the rule that the report uses the glossary's terminology, whether or
   not the app's glossary fetch succeeded (see **report-composition**). They carry no instruction to request missing definitions, because this
   call has no tools.
+- System prompt, additionally: the report-writer part of every generic quality rule, after the
+  statement of the kinds of source the channel's configured servers give it, and, when a
+  rule of the channel's `prompts.client_rules` has a report-writer part, those parts in a
+  `<client_rules>` block after them (see **source-selection**).
 - Messages: the accumulated `messages` transcript **including images** (already clamped by
   the image budget) with the `update_status` calls and their acknowledgements removed, then the
   report request carrying the aligned query and the plans pursued. Removal is deterministic, so
@@ -606,6 +642,11 @@ is part of the contract, not an accident of implementation.
   marked as an error is left out. The block is absent when there is no such result. This is the one
   kind of tool result this call receives: it is the glossary the check judges against when the
   app's own fetch missed terms or definitions.
+- System prompt, additionally: the report-review part of every generic quality rule, as checks
+  beside the numbered ones, after the statement of the kinds of source the channel's configured
+  servers give it, and, when a rule of the channel's `prompts.client_rules` has a
+  report-review part, those parts in a `<client_rules>` block after them (see
+  **source-selection**).
 - Messages: one human message, assembled **stable content first** so successive review calls in a run
   share a byte prefix (the same rule as research-review's assembly, see **prompt-caching**): the
   configured report structure with each section's description, the protected sections, the aligned
@@ -620,6 +661,9 @@ is part of the contract, not an accident of implementation.
 - **The research findings are NOT included** — no transcript, no tool results other than the
   glossary tool results above, no images, and so no status announcements either. Every criterion this call judges is decidable from the draft, the
   configuration, the query and plan, and the data-sources string.
+- Model: the default chat model with reasoning effort `medium`. The call judges every
+  numbered check and every source-selection check in one pass, and without reasoning it passed
+  drafts that broke the dates checks and misread a year column as a missing period.
 - Output: a structured verdict — one list of report violations, where an empty list is the
   approval. There is no separate approval field, so a remark the model does not want acted on
   cannot be expressed and forces a revision instead.

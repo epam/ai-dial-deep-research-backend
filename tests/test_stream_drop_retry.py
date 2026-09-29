@@ -22,6 +22,7 @@ from dial_deep_research.utils.llm import (
     with_stream_drop_retry,
 )
 from tests.citation_fakes import no_lookups
+from tests.mcp_fakes import BOTH_SOURCE_KINDS
 
 
 @pytest.fixture(autouse=True)
@@ -112,6 +113,8 @@ def _make_report_node() -> Any:
         glossary=None,
         emit_revision_failed_stage=lambda _outcome: None,
         emit_activity=lambda _title: None,
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
     )
 
 

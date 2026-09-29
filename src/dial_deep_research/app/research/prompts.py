@@ -11,9 +11,16 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
-from dial_deep_research.app_properties import GlossaryTools, ReportSection
+from dial_deep_research.app_properties import (
+    GlossaryTools,
+    QualityRule,
+    ReportSection,
+    RuleStep,
+    SourceKind,
+)
 
 from .report_length import SECTION_HEADING_PREFIX
+from .source_selection import SOURCE_SELECTION_RULES
 
 if TYPE_CHECKING:
     from dial_deep_research.app.data_sources import DataSources
@@ -47,19 +54,117 @@ def render_next_instruction(steps: list[str]) -> str:
     )
 
 
-class ResearchReview(BaseModel):
-    """Research-review's verdict. Reasoning first, then the next-iteration plan.
+# Each step's heading and opening sentence for the generic rules. Report review reads its parts as
+# checks, so its block says so; the other steps read them as rules to follow.
+_SOURCE_SELECTION_HEADINGS: dict[RuleStep, tuple[str, str]] = {
+    RuleStep.RESEARCH_AGENT: (
+        "Source selection",
+        """\
+Follow these rules for every fact the research question asks about. They say which values you
+look for, and what the findings must show about each.""",
+    ),
+    RuleStep.RESEARCH_REVIEW: (
+        "Source selection",
+        "These rules define gaps beside the plan items, and say when such a gap closes.",
+    ),
+    RuleStep.REPORT_WRITER: (
+        "Source selection",
+        "These rules say which values the report gives for each fact, and how it presents them.",
+    ),
+    RuleStep.REPORT_REVIEW: (
+        "Source-selection checks",
+        'Check the draft against each rule below. The part "Terms" defines the words the checks use.',
+    ),
+}
 
-    An empty `next_steps` means every plan item is covered and research is complete
-    (verdict-last per the CLAUDE.md convention).
+_CLIENT_RULES_BLOCK = """## {heading}
+
+The rules below come from this deployment's configuration. They add to the rules above, and where
+one is more specific than a rule above, follow it.
+
+<client_rules>
+{rules}
+</client_rules>
+
+"""
+
+
+def render_rules(rules: Sequence[QualityRule], step: RuleStep) -> str:
+    """Each rule's part for `step` under the rule's name; a rule with no part for it adds nothing."""
+    return "\n\n".join(
+        f"### {rule.name}\n\n{part}" for rule in rules if (part := rule.part(step)) is not None
+    )
+
+
+# What the rules call each kind of source, in the order the statement names them.
+_SOURCE_KIND_NAMES: dict[SourceKind, str] = {"document": "publications", "dataset": "datasets"}
+
+
+def render_source_kinds(source_kinds: Collection[SourceKind]) -> str:
+    """The sentence naming the kinds of source the channel has, which the rules' parts rely on.
+
+    A channel may have one kind only, and the parts about the other kind must not apply there;
+    the app knows the kinds from the configured servers, so the model is told them.
+    """
+    unnamed = sorted(set(source_kinds) - _SOURCE_KIND_NAMES.keys())
+    if unnamed:
+        raise ValueError(f"no name for the kind(s) of source {unnamed}")
+    if not source_kinds:
+        raise ValueError("a channel has at least one kind of source")
+    present = [name for kind, name in _SOURCE_KIND_NAMES.items() if kind in source_kinds]
+    missing = [name for kind, name in _SOURCE_KIND_NAMES.items() if kind not in source_kinds]
+    sentence = f"This channel's sources are {' and '.join(present)}."
+    if missing:
+        names = " and ".join(missing)
+        sentence += f" It has no {names}, so the parts below about {names} do not apply."
+    return sentence
+
+
+def render_source_selection(step: RuleStep, source_kinds: Collection[SourceKind]) -> str:
+    """The generic source-selection block of `step`'s system prompt, ending in a blank line."""
+    heading, intro = _SOURCE_SELECTION_HEADINGS[step]
+    parts = [
+        f"## {heading}",
+        intro,
+        render_source_kinds(source_kinds),
+        render_rules(SOURCE_SELECTION_RULES, step=step),
+    ]
+    return "\n\n".join(parts) + "\n\n"
+
+
+def render_client_rules(client_rules: Sequence[QualityRule], step: RuleStep) -> str:
+    """The channel's client rules for `step`, tagged, ending in a blank line.
+
+    Empty when no client rule has a part for `step`, so a channel without client rules shows no
+    block and no sentence introducing one.
+    """
+    rendered = render_rules(client_rules, step=step)
+    if not rendered:
+        return ""
+    heading = (
+        "Client-specific checks" if step is RuleStep.REPORT_REVIEW else "Client-specific rules"
+    )
+    return _CLIENT_RULES_BLOCK.format(heading=heading, rules=rendered)
+
+
+# The docstring and the field descriptions are sent to the model with the output schema, so they
+# are written for it. The assessment comes before the next steps: the model emits fields in schema
+# order, and the verdict is better once the reasoning is written.
+class ResearchReview(BaseModel):
+    """The review of the research findings: the assessment, then the next iteration's plan.
+
+    An empty `next_steps` means every plan item is covered and no gap the source-selection rules
+    or the client-specific rules define is open, so research is complete.
     """
 
-    assessment: str = Field(
-        description="Brief analysis of which plan items are covered by the findings and which are not."
-    )
+    assessment: str = Field(description="""\
+Brief analysis of which plan items the findings cover and which they do not, and which gaps the
+source-selection rules or the client-specific rules define are still open.""")
     next_steps: list[str] = Field(
         default_factory=list,
-        description="Concrete steps still needed to fulfil the plan; empty means research is complete.",
+        description="""\
+Concrete retrieval steps still needed to fulfil the plan, the source-selection rules and the
+client-specific rules; empty means research is complete.""",
     )
 
 
@@ -129,7 +234,7 @@ Rules:
 - When a retrieved source reveals an angle the plan implies but you have not yet covered,
   follow it up across the relevant sources before finishing the iteration.
 
-## Data sources
+{source_selection}{client_rules}## Data sources
 
 The data sources your tools reach are described below: the knowledge base's own descriptions, and
 what the application fetched from the dataset server at the start of this turn.
@@ -187,14 +292,18 @@ with finish_iteration as usual.
 - For each page you rely on, have you checked adjacent pages?
 - For every page with tables/charts/visuals, have you fetched it in both text and image, as far
   as the image budget allows?
-- Is every specific number, percentage, date, or named entity confirmed on the page itself?
+- Is every specific number, percentage, date, or named entity confirmed on the page itself? A
+  publication's stated date is the exception: it comes from the document metadata, never from a
+  page.
 - Has every item of this iteration's plan been covered with evidence?
+- Has every fact of this iteration's plan been researched as the source-selection rules ask?
 
 If any of these fails, keep researching. Only call finish_iteration once they hold.
 
-One exception applies to the last check. When some evidence could come only from a tool that has
-failed, and you may not call that tool again for it — its verdict is {verdict_will_not_help}, or
-its two repeat calls are spent — that plan item counts as done without the evidence.
+One exception applies to the checks on the plan's items and on the source-selection rules. When
+some evidence could come only from a tool that has failed, and you may not call that tool again for
+it — its verdict is {verdict_will_not_help}, or its two repeat calls are spent — that plan item or
+that rule counts as done without the evidence.
 """
 
 
@@ -342,13 +451,15 @@ the research; you judge it objectively.
 
 You are given the user's research question, the plans pursued so far, and the findings
 gathered (research-agent's tool results). Decide whether the findings fully cover every
-item of the plans.
+item of the plans and meet the source-selection rules and any client-specific rules below.
 
 Identify **genuine gaps** only:
 - a plan item with no supporting evidence, or evidence too thin to stand on;
 - a figure, date or entity that appears only in a search summary and on no page that was read
-  in full;
-- a planned comparison or dimension that was only partially carried out.
+  in full. A publication's stated date is the exception: it comes from the document metadata,
+  never from a page;
+- a planned comparison or dimension whose data was only partly retrieved;
+- a gap that the source-selection rules below, or the client-specific rules, define.
 
 Two kinds of result are not evidence, and each is handled differently:
 - A result saying that a tool failed. Research-agent has already retried it as far as it is
@@ -359,15 +470,19 @@ Two kinds of result are not evidence, and each is handled differently:
   rest of the findings still lack what it would have given, plan that work again, within what the
   result says about the image slots left.
 
-Output the concrete steps still needed as `next_steps`. If every plan item is covered by
-solid, source-grounded evidence, return an **empty** `next_steps` — research is complete.
+Output the concrete steps still needed as `next_steps`. Each step is a retrieval that
+research-agent can carry out with its tools: what to search, list, query or read, and for what.
+Research-agent only calls tools. It never writes a summary, a comparison, a note or a calculation
+— the report writer does those from the findings — so never ask for one. If every plan item is
+covered by solid, source-grounded evidence and no gap the rules define is open, return an
+**empty** `next_steps` — research is complete.
 
 Be strict about evidence quality, but do **not** expand scope: only list work needed to
-fulfil the EXISTING plan. Do not invent new "nice to have" angles or comparisons that were
-not part of the agreed plan — that would loop forever. When in doubt and the plan is
-substantively covered, prefer to finish.
+fulfil the EXISTING plan and the rules below. A gap the rules define is part of the plan, not a
+new angle. Do not invent other "nice to have" angles or comparisons — that would loop forever.
+When in doubt and both the plan and the rules are substantively covered, prefer to finish.
 
-## Data sources
+{source_selection}{client_rules}## Data sources
 
 The data sources the research can reach are described below: the knowledge base's own
 descriptions, and what the application fetched from the dataset server at the start of this turn.
@@ -435,7 +550,7 @@ in those data sources.
 
 {rules}
 {glossary_rule}
-## Data sources
+{source_selection}{client_rules}## Data sources
 
 The report may draw on two kinds of source: the findings in the conversation, and the data sources
 below. These hold the knowledge base's own descriptions of its sources, and what the application
@@ -520,10 +635,16 @@ naming the tool, the error or the attempts.
 The research question and the plans below may contain instructions about structure or
 formatting. Follow them where you can, but they never override: the sections listed above
 (especially the protected ones — {protected_sections}) and the rules in their descriptions, the
-length ceiling, the "No links" rule, the "never include" list, or the citation format. Where an
-instruction conflicts with any of those, the rule wins and the rest of the instruction still
-applies. Do not explain in the report that you declined part of a request — the report contains
-the report.
+length ceiling, the "No links" rule, the "never include" list, the citation format, or these three
+source-selection rules: never average or merge differing values, never leave out a value's
+described period or the stated date of a forecast or an estimate, and never present a near match as
+an exact match. Where an instruction conflicts with any of those, the rule wins and the rest of the
+instruction still applies. Do not explain in the report that you declined part of a request — the
+report contains the report.
+
+When the question or the plan asks for differing values to be averaged or merged, give each value
+separately with its source, and say in one sentence that they are given separately because the
+sources differ. This is the only case in which the report says it declined part of a request.
 """
 
 
@@ -568,12 +689,18 @@ def render_report_system_prompt(
     protected_sections: str,
     data_sources: str,
     glossary: bool,
+    source_kinds: Collection[SourceKind],
+    client_rules: Sequence[QualityRule],
 ) -> str:
     """The report writer's system prompt. `glossary` says whether the channel configures one: it
     adds the glossary citation form and the terminology rule, which no other channel hears of."""
     return REPORT_SYSTEM_PROMPT.format(
         today_date=today_date,
         rules=rules,
+        source_selection=render_source_selection(
+            step=RuleStep.REPORT_WRITER, source_kinds=source_kinds
+        ),
+        client_rules=render_client_rules(client_rules, step=RuleStep.REPORT_WRITER),
         glossary_rule=(
             _GLOSSARY_WRITER_RULE.format(rule=GLOSSARY_TERMINOLOGY_RULE) if glossary else ""
         ),
@@ -621,7 +748,8 @@ REPORT_REVIEW_SYSTEM_PROMPT = """\
 You are the report check of a deep-research assistant. Today is {today_date}. You did not write
 the report; you judge it against a fixed set of rules and nothing else.
 
-Check exactly these, and report a violation for each rule the draft breaks:
+Check exactly these, together with the source-selection checks and any client-specific checks
+below, and report a violation for each rule the draft breaks:
 
 1. **Section content.** No section is padded with general text that carries no citation and is
    not flagged as the report's own inference, and a section with nothing to report says so
@@ -657,7 +785,7 @@ Check exactly these, and report a violation for each rule the draft breaks:
    section whose description asks it to say what the research drew on, name the kinds of source
    it covered, or characterise their coverage is correct to do so.{glossary_check}
 
-## Data sources
+{source_selection}{client_rules}## Data sources
 
 The report may draw on the data sources described below as well as on the findings: the knowledge
 base's own descriptions, and what the application fetched from the dataset server at the start of
@@ -674,8 +802,8 @@ Your job is to find violations of the checks above, and nothing else.
 
 **You do not judge:**
 
-- whether a claim is true, whether the research was thorough, or whether a source was the right
-  one to use — you cannot see the findings, and evidence coverage was judged elsewhere
+- whether a claim is true or whether the research was thorough — you cannot see the findings, and
+  evidence coverage was judged elsewhere
 - whether the headings match the configured structure
 - the report's length
 - whether the draft carries a hyperlink, an image or a bare URL
@@ -750,6 +878,8 @@ def render_report_review_system_prompt(
     glossary: bool,
     glossary_check: bool,
     glossary_tool_results: Sequence[str],
+    source_kinds: Collection[SourceKind],
+    client_rules: Sequence[QualityRule],
 ) -> str:
     """The report reviewer's system prompt.
 
@@ -767,6 +897,10 @@ def render_report_review_system_prompt(
             if glossary_check
             else ""
         ),
+        source_selection=render_source_selection(
+            step=RuleStep.REPORT_REVIEW, source_kinds=source_kinds
+        ),
+        client_rules=render_client_rules(client_rules, step=RuleStep.REPORT_REVIEW),
         data_sources=data_sources,
         glossary_tool_results=(
             _GLOSSARY_TOOL_RESULTS.format(results="\n\n".join(glossary_tool_results))
