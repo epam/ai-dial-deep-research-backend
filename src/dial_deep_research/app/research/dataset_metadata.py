@@ -1,11 +1,16 @@
 """Calling the configured list-datasets tool, and reading the catalogue it answers with.
 
 A dataset citation needs three things the app does not hold: the dataset's human name, which
-labels the pill and the card and leads its References row; the address of its page, which is what
-the pill's card opens; and its last-update date, which that card carries when the server knows
-one. All three come from one MCP tool. The contract that tool must satisfy — no arguments, a
-`datasets` array as its structured result, `url` and `lastUpdated` optional per record — is stated
-by the report-citations capability; this module depends on nothing else about it.
+labels the pill and the card and leads its References row; the address the pill's card opens; and
+its last-update date, which that card carries when the server knows one. All three come from one
+MCP tool. The contract that tool must satisfy — no arguments, a `datasets` array as its structured
+result, `url` and `lastUpdated` optional per record, and an optional `_meta` payload carrying each
+dataset's data explorer link — is stated by the report-citations capability; this module depends on
+nothing else about it.
+
+The address is the dataset's data explorer link when the `_meta` payload reports a usable one, and
+the record's `url` (the dataset's page) otherwise. It is decided once, here, so every reader of a
+record opens the same URL.
 
 The tool answers with the channel's whole catalogue, so selecting the cited datasets happens
 here. A cited URN is matched against a record's `id` character for character, as the
@@ -23,12 +28,10 @@ what may be said about it (counts, never a name or a URL).
 
 from __future__ import annotations
 
-import uuid
 from collections.abc import Mapping, Sequence
 from typing import Annotated, Any
 
-from langchain_core.messages import ToolMessage
-from langchain_core.tools import BaseTool
+from langchain_mcp_adapters.client import MultiServerMCPClient
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, ValidationError
 
 from dial_deep_research.app.research.citations import DatasetSource
@@ -83,6 +86,15 @@ class _Catalogue(BaseModel):
     datasets: list[_DatasetRecord]
 
 
+class _ExplorerLink(BaseModel):
+    """One element of the `_meta` payload's `datasets`: where that dataset opens in the explorer."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: _OptionalText = None
+    data_explorer_url: _OptionalText = Field(default=None, alias="dataExplorerUrl")
+
+
 class DatasetMetadataError(Exception):
     """The call did not produce a readable catalogue.
 
@@ -95,77 +107,83 @@ class DatasetMetadataError(Exception):
         self.kind = kind
 
 
-async def read_dataset_sources(
-    *, tool: BaseTool, dataset_ids: Sequence[str]
-) -> dict[str, DatasetSource]:
-    """What the catalogue reports about each cited dataset, by URN.
+class CatalogueTool(BaseModel):
+    """Where the catalogue is fetched from: the dataset server, the name of its list-datasets
+    tool, and the `_meta` key the tool's explorer links are under (`None` reads no links)."""
 
-    Every record whose `id` is cited is kept, whatever it carries: the pill is not the only thing
-    that reads one, and the report's References section lists a cited dataset whether or not it can
-    be opened. A dataset the answer omits is simply absent from the result, and its References row
-    is built from its URN alone.
+    model_config = ConfigDict(frozen=True)
 
-    Raises what `read_catalogue` raises.
-    """
-    return select_cited(await read_catalogue(tool=tool), dataset_ids=dataset_ids)
+    server_name: str
+    tool_name: str
+    client_meta_key: str | None = None
 
 
 def select_cited(
     catalogue: Mapping[str, DatasetSource], *, dataset_ids: Sequence[str]
 ) -> dict[str, DatasetSource]:
-    """The catalogue's records for the cited URNs, each matched character for character."""
+    """The catalogue's records for the cited URNs, each matched character for character.
+
+    Every record whose `id` is cited is kept, whatever it carries: the pill is not the only thing
+    that reads one, and the report's References section lists a cited dataset whether or not it can
+    be opened. A dataset the catalogue omits is simply absent from the result, and its References
+    row is built from its URN alone.
+    """
     return {urn: catalogue[urn] for urn in dataset_ids if urn in catalogue}
 
 
-async def read_catalogue(*, tool: BaseTool) -> dict[str, DatasetSource]:
+async def read_catalogue(
+    *, client: MultiServerMCPClient, tool: CatalogueTool
+) -> dict[str, DatasetSource]:
     """Every dataset the catalogue reports, by URN.
 
     What a missing field costs is decided where that field is used — a record with no usable name
-    is labelled from the URN, and one whose URL a browser cannot open carries no URL, so its
+    is labelled from the URN, and one with no URL a browser can open carries no URL, so its
     citations keep the marker text the report writer wrote. A record with no usable `id` matches no
     cited URN and is skipped.
 
-    The tool is invoked **tool-call-shaped** for the reason `share_documents` is: a
-    plain-argument call returns no `ToolMessage`, and the structured result travels in that
-    message's artifact.
+    The tool is called in an MCP session of its own rather than through its LangChain tool,
+    because the tool message the adapter builds carries the structured result and drops `_meta`,
+    where the explorer links are.
 
     Raises:
         DatasetMetadataError: the tool reported an error, returned no structured result, or
             returned one carrying no readable `datasets` array.
-        Exception: whatever the tool call itself raised.
+        Exception: whatever opening the session or the call itself raised.
     """
-    result = await tool.ainvoke(
-        {
-            "name": tool.name,
-            "args": {},
-            "id": f"dataset-metadata-{uuid.uuid4().hex}",
-            "type": "tool_call",
-        }
-    )
-    # This tool stays in the research agent's tool list, so it keeps the agent's error handling:
-    # an MCP error arrives as an error `ToolMessage` rather than as an exception. Reading the
-    # status is what makes such a failure reach the caller.
-    if isinstance(result, ToolMessage) and result.status == "error":
+    async with client.session(tool.server_name) as session:
+        result = await session.call_tool(tool.tool_name, {})
+    if result.isError:
         raise DatasetMetadataError(KIND_DATASET_CALL_FAILED)
-    artifact = result.artifact if isinstance(result, ToolMessage) else None
-    if not isinstance(artifact, dict) or "structured_content" not in artifact:
+    if result.structuredContent is None:
         # No structured result: MCP sends one only for a tool that declares an output schema,
         # which the contract requires. The text copy of the catalogue MCP also carries is
         # deliberately not read — a second read path, for a case no server we can test against
         # produces, would decide silently which copy an answer came from.
         raise DatasetMetadataError(KIND_DATASET_NO_STRUCTURED_RESULT)
-    return parse_catalogue(artifact["structured_content"])
+    return parse_catalogue(
+        result.structuredContent,
+        client_payload=read_client_payload(result.meta, client_meta_key=tool.client_meta_key),
+    )
 
 
-def parse_catalogue(structured: Any) -> dict[str, DatasetSource]:
-    """Every dataset a list-datasets structured result reports, by URN.
+def read_client_payload(meta: Any, *, client_meta_key: str | None) -> Any:
+    """The value a result's `_meta` carries under the key, or `None` when it carries none."""
+    if client_meta_key is None or not isinstance(meta, dict):
+        return None
+    return meta.get(client_meta_key)
 
-    Shared by the citation path, which reads the structured result off a `ToolMessage`, and by the
-    data-sources fetch at the start of the turn, which reads it off the MCP result directly, so
-    one set of rules decides which records are usable.
+
+def parse_catalogue(structured: Any, *, client_payload: Any = None) -> dict[str, DatasetSource]:
+    """Every dataset a list-datasets result reports, by URN.
+
+    `structured` is the result's structured content and `client_payload` what its `_meta`
+    carries under the client meta key. Shared by the citation path and by the data-sources fetch
+    at the start of the turn, so one set of rules decides which records are usable and which URL
+    each one opens.
 
     Raises:
-        DatasetMetadataError: the result carries no readable `datasets` array.
+        DatasetMetadataError: the structured content carries no readable `datasets` array. The
+            payload never raises: one that cannot be read costs the explorer links alone.
     """
     try:
         catalogue = _Catalogue.model_validate(structured)
@@ -173,21 +191,52 @@ def parse_catalogue(structured: Any) -> dict[str, DatasetSource]:
         raise DatasetMetadataError(KIND_DATASET_UNREADABLE_RESULT) from error
 
     raw_by_id = _raw_records_by_id(structured)
+    explorer_links = _explorer_links_by_id(client_payload)
     sources: dict[str, DatasetSource] = {}
     for record in catalogue.datasets:
         if record.id is None:
             continue
-        # A URL the client could not follow is normalized away here rather than carried inward: a
-        # pill that opens nothing is worse than a marker that at least names its source, and every
-        # later reader of this record would otherwise have to re-decide the same question.
-        url = record.url if record.url is not None and is_web_url(record.url) else None
         sources[record.id] = DatasetSource(
-            url=url,
+            url=explorer_links.get(record.id) or _web_url(record.url),
             name=record.name,
             last_updated=record.last_updated,
             raw_fields=raw_by_id.get(record.id, {}),
         )
     return sources
+
+
+def _web_url(url: str | None) -> str | None:
+    """The URL when a browser can open it, and `None` otherwise.
+
+    A URL the client could not follow is normalized away here rather than carried inward: a pill
+    that opens nothing is worse than a marker that at least names its source, and every later
+    reader of the record would otherwise have to re-decide the same question.
+    """
+    return url if url is not None and is_web_url(url) else None
+
+
+def _explorer_links_by_id(payload: Any) -> dict[str, str]:
+    """Each dataset's usable data explorer link, by URN, read element by element.
+
+    A payload that is not an object carrying a `datasets` array yields no links, and an element
+    that cannot be read, or whose link a browser cannot open, yields none for its dataset: either
+    way those datasets open their page instead.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    elements = payload.get("datasets")
+    if not isinstance(elements, list):
+        return {}
+    links: dict[str, str] = {}
+    for element in elements:
+        try:
+            link = _ExplorerLink.model_validate(element)
+        except ValidationError:
+            continue
+        url = _web_url(link.data_explorer_url)
+        if link.id is not None and url is not None:
+            links[link.id] = url
+    return links
 
 
 def _raw_records_by_id(structured: Any) -> dict[str, dict[str, Any]]:

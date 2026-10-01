@@ -23,8 +23,9 @@ BOTH_SOURCE_KINDS: frozenset[SourceKind] = frozenset({"document", "dataset"})
 Handler = Callable[[dict[str, Any]], CallToolResult | Awaitable[CallToolResult]]
 
 
-def structured(value: Any) -> CallToolResult:
-    """A successful result carrying `value` as its structured content, as StatGPT sends one.
+def structured(value: Any, *, meta: dict[str, Any] | None = None) -> CallToolResult:
+    """A successful result carrying `value` as its structured content, and `meta` as its
+    `_meta`, as StatGPT sends one.
 
     Built without validation, because `mcp` refuses structured content that is not an object
     while parsing the response, and a test needs to hand the app such a value to check its own
@@ -34,6 +35,7 @@ def structured(value: Any) -> CallToolResult:
         content=[TextContent(type="text", text="as JSON")],
         structuredContent=value,
         isError=False,
+        meta=meta,
     )
 
 
@@ -64,6 +66,24 @@ class FakeMcpServer:
         if inspect.isawaitable(result):
             return await result
         return result
+
+    def client(self) -> MultiServerMCPClient:
+        return cast(MultiServerMCPClient, self)
+
+
+class CombinedClient:
+    """A client whose resource reads go to one stand-in and whose tool sessions go to another,
+    as one turn's client serves both the document-metadata read and the catalogue call."""
+
+    def __init__(self, *, resources: Any, tools: FakeMcpServer) -> None:
+        self._resources = resources
+        self._tools = tools
+
+    async def get_resources(self, server_name: str, *, uris: list[str]) -> Any:
+        return await self._resources.get_resources(server_name, uris=uris)
+
+    def session(self, server_name: str) -> Any:
+        return self._tools.session(server_name)
 
     def client(self) -> MultiServerMCPClient:
         return cast(MultiServerMCPClient, self)

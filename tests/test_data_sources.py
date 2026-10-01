@@ -42,7 +42,7 @@ def _server(**overrides: Any) -> MCPClientSettings:
             "server_type": "statgpt",
             "deployment_id": "statgpt-mcp",
             "list_datasets_tool": _LIST_TOOL,
-            "data_query_meta_key": "acme.example.org/client",
+            "client_meta_key": "acme.example.org/client",
             "references_table": {"title": "Datasets", "columns": [{"heading": "N", "key": "name"}]},
             **overrides,
         }
@@ -332,7 +332,6 @@ def _properties(*servers: dict[str, Any]) -> ApplicationProperties:
             "prompts": {
                 "client_name": "ACME",
                 "agent_name": "ACME Deep Research",
-                "data_sources_descriptions": _DESCRIPTIONS,
             },
             "mcp_servers": list(servers),
         }
@@ -347,10 +346,11 @@ _DOCUMENT_SERVER: dict[str, Any] = {
     "document_metadata_resource": "documents://metadata/{document_ids}",
     "document_title_key": "publication_title",
     "references_table": {"title": "Documents", "columns": [{"heading": "T", "key": "t"}]},
+    "description": _DESCRIPTIONS,
 }
 
 
-async def test_a_channel_without_a_dataset_server_makes_no_call(
+async def test_a_channel_with_nothing_to_fetch_makes_no_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def no_client(*_args: Any, **_kwargs: Any) -> Any:
@@ -360,11 +360,13 @@ async def test_a_channel_without_a_dataset_server_makes_no_call(
 
     fetched = await fetch_data_sources(_properties(_DOCUMENT_SERVER))
 
-    assert fetched == DataSources(text=_DESCRIPTIONS)
+    assert fetched == DataSources(
+        text=f"<documents_description>\n{_DESCRIPTIONS}\n</documents_description>"
+    )
     assert fetched.dataset_list_failed is False
 
 
-async def test_the_data_sources_string_joins_the_descriptions_and_the_datasets(
+async def test_the_data_sources_string_joins_the_description_and_the_datasets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake = _fake()
@@ -374,7 +376,8 @@ async def test_the_data_sources_string_joins_the_descriptions_and_the_datasets(
     fetched = await fetch_data_sources(_properties(_DOCUMENT_SERVER, server))
 
     assert fetched.text == (
-        f"{_DESCRIPTIONS}\n\nDatasets:\n{json.dumps(_LIST, ensure_ascii=False)}"
+        f"<documents_description>\n{_DESCRIPTIONS}\n</documents_description>\n\n"
+        f"Datasets:\n{json.dumps(_LIST, ensure_ascii=False)}"
     )
     assert fetched.glossary is None
     assert fetched.catalogue is not None
@@ -415,9 +418,36 @@ async def test_an_unreachable_server_still_gives_a_data_sources_string(
     fetched = await fetch_data_sources(_properties(server))
 
     assert fetched.text == (
-        f"{_DESCRIPTIONS}\n\nDatasets:\nfailed to obtain list of datasets\n\n"
+        "Datasets:\nfailed to obtain list of datasets\n\n"
         "Glossary terms:\nfailed to obtain list of terms"
     )
     assert fetched.dataset_list_failed is True
     assert fetched.glossary_list_failed is True
     assert fetched.glossary_listed is None
+
+
+_EXPLORER = "https://x.example.org/explorer?urn=IMF:WEO(1.0.0)"
+_LINKS = {"acme.example.org/client": {"datasets": [{"id": _WEO, "dataExplorerUrl": _EXPLORER}]}}
+
+
+async def test_the_explorer_links_reach_the_catalogue_and_not_the_section() -> None:
+    fake = _fake(list_handler=lambda _args: structured(_LIST, meta=_LINKS))
+
+    fetched = await fetch_datasets(fake.client(), server=_server())
+
+    assert fetched.catalogue is not None
+    assert fetched.catalogue[_WEO].url == _EXPLORER
+    assert fetched.catalogue[_DOTS].url is None
+    assert fetched.section == f"Datasets:\n{json.dumps(_LIST, ensure_ascii=False)}"
+    assert "explorer" not in fetched.section
+    assert len(fake.calls_of(_LIST_TOOL)) == 1
+
+
+async def test_a_list_without_explorer_links_is_not_retried() -> None:
+    fake = _fake(list_handler=lambda _args: structured(_LIST, meta={"other": {}}))
+
+    fetched = await fetch_datasets(fake.client(), server=_server())
+
+    assert len(fake.calls_of(_LIST_TOOL)) == 1
+    assert fetched.catalogue is not None
+    assert fetched.catalogue[_WEO].url == "https://x.example.org/w"

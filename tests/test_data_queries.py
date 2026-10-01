@@ -180,6 +180,19 @@ async def test_another_servers_result_contributes_nothing() -> None:
     assert store.records == {}
 
 
+async def test_a_list_datasets_payload_under_the_same_key_is_not_a_data_query_payload() -> None:
+    """The list-datasets tool carries its explorer links under the same key, with no queries."""
+    result = _result(
+        meta={_KEY: {"datasets": [{"id": "IMF:WEO(1.0.0)", "dataExplorerUrl": _URL_1}]}},
+        structured={"datasets": [{"id": "IMF:WEO(1.0.0)", "name": "World Economic Outlook"}]},
+    )
+    store, returned = await _capture(result)
+
+    assert store.records == {}
+    assert store.unreadable_payloads == 0
+    assert returned is result
+
+
 async def test_an_unreadable_payload_costs_only_its_own_records() -> None:
     store, _ = await _capture(_two_queries())
     await _capture(_result(meta={_KEY: {"queries": "not a list"}}), store=store)

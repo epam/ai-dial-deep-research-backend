@@ -186,7 +186,11 @@ such a channel cites no dataset, so warning on every report it delivers would re
 configuration as a fault. A
 **dataset the catalogue reports without a page URL** SHALL NOT warn at all — whether a dataset has a
 portal page is the channel's own data rather than a fault — and the gap between the requested and
-resolved dataset counts on the (8c) event is the whole record of it.
+resolved dataset counts on the (8c) event is the whole record of it. A **dataset the list-datasets
+tool reports without an explorer link**, and a list-datasets result whose `_meta` payload is
+missing or unreadable, SHALL NOT warn either: the dataset then opens its page, which costs the
+reader nothing a missing pill would, and whether a channel enables the payload is its own
+configuration. Neither is recorded above DEBUG.
 
 A **data-query citation that could not be resolved** is recorded at the citation step, because the
 records it resolves against are captured throughout the research turn and only the citation step
@@ -197,7 +201,7 @@ one query id. Each SHALL have a message of its own that states the outcome in wo
 shared message told apart by a token: these are outcomes of the turn, not failures of one call.
 
 - **nothing captured** — the turn captured no data-query record at all. It has three causes: a
-  `data_query_meta_key` that matches nothing the server sends, a server that does not emit the
+  `client_meta_key` that matches nothing the server sends, a server that does not emit the
   payload, and a turn whose research ran no data query while the report still cites a query id. The
   first two are configuration faults that cost every data-query pill; the third is a writer that
   invented ids and a review that did not catch them, its version budget spent. The message cannot
@@ -209,7 +213,9 @@ shared message told apart by a token: these are outcomes of the turn, not failur
   be emitted on a turn that warns **nothing captured**: every cited id is then uncaptured, and one
   cause SHALL yield one warning.
 - **unreadable payloads** — one or more tool results carried a payload under the configured
-  `_meta` key that could not be read as a list of query records. The warning carries how many tool
+  `_meta` key that carries a `queries` field and could not be read as a list of query records. A
+  payload without a `queries` field, which is what the list-datasets tool sends under the same key,
+  is not a data-query payload and SHALL NOT count. The warning carries how many tool
   results did, never the payload.
 
 A cited query id that the turn captured SHALL NOT warn, whether or not the query has an explorer

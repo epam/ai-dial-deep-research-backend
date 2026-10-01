@@ -17,16 +17,24 @@ when a spec changes the diagram points at the new wording instead of restating s
 ## Data-sources fetch
 
 Specs: [data-sources-discovery](../openspec/specs/data-sources-discovery/spec.md).
-Code: `app/data_sources.py`, `app/glossary.py`, `app/data_source_calls.py`, `app/completion.py`.
+Code: `app/data_sources.py`, `app/glossary.py`, `app/document_stats.py`,
+`app/data_source_calls.py`, `app/completion.py`.
 
-Every turn on a channel with a `statgpt` server starts with one fetch of what that server reports,
-before the preparation agent's first model call. A conversation that already handed off to research
-is refused before it. The fetch has two parts, run concurrently:
+Every turn on a channel with a `statgpt` server, or with a `generic_rag` server that sets
+`document_stats`, starts with one fetch of what those servers report, before the preparation
+agent's first model call. A conversation that already handed off to research is refused before it.
+The fetch has up to three parts, run concurrently:
 
-- **the datasets**: the list-datasets tool's answer, and, when `dataset_structure_tool` is set, the
-  structure of every listed dataset, one call per dataset, all at once;
-- **the glossary**, when `glossary` is set: the list-terms tool's answer, then the definitions of
-  the listed terms in batches of at most `max_terms_per_definitions_call`, in at most three rounds.
+- **the datasets**, on a channel with a `statgpt` server: the list-datasets tool's answer, and, when
+  `dataset_structure_tool` is set, the structure of every listed dataset, one call per dataset, all
+  at once;
+- **the glossary**, when the `statgpt` server sets `glossary`: the list-terms tool's answer, then
+  the definitions of the listed terms in batches of at most `max_terms_per_definitions_call`, in at
+  most three rounds;
+- **the documents**, when the `generic_rag` server sets `document_stats`: the list-documents tool's
+  pages of `page_size` documents, one after another until the first page's `total_count` is
+  reached, at most `MAX_DOCUMENT_PAGES` pages, reduced to the document count and the
+  publication-date range, overall and per type.
 
 ```mermaid
 flowchart LR
@@ -35,29 +43,36 @@ flowchart LR
         direction TB
         list["list-datasets call"] --> structures["one structure call<br/>per listed dataset"]
         terms["list-terms call"] --> definitions["definitions batches,<br/>up to three rounds"]
+        pages["list-documents pages,<br/>one after another"] --> stats["document statistics"]
     end
-    fetch --> string["data-sources string:<br/>data_sources_descriptions,<br/>datasets section, glossary"]
+    fetch --> string["data-sources string:<br/>document statistics, document server's description,<br/>datasets section, dataset server's description, glossary"]
     string --> prep["preparation agent<br/>and clarity check"]
     string --> research["every research graph node"]
     fetch --> catalogue["catalogue seeds<br/>CitationLookups"]
 ```
 
-Each list call and each structure call gets up to three attempts, about one and then two seconds
-apart, and every call, its session open included, runs in an MCP session of its own under a
+Each list call, structure call and page call gets up to three attempts, about one and then two
+seconds apart, and every call, its session open included, runs in an MCP session of its own under a
 20-second deadline. The tools are called by their configured names, whatever `tools_to_include`
-says. No failure ends the turn: a failed list becomes the text `failed to obtain list of datasets` or
-`failed to obtain list of terms`, a structure not obtained becomes a failure entry, and a term not
-resolved stays listed with `"definition": null`.
+says. No failure ends the turn: a failed list becomes the text `failed to obtain list of datasets`
+or `failed to obtain list of terms`, a structure not obtained becomes a failure entry, a term not
+resolved stays listed with `"definition": null`, and an incomplete documents listing becomes
+`failed to obtain list of documents`.
 
-The **data-sources string** is `prompts.data_sources_descriptions`, then the datasets section, then
-the glossary, each after a blank line. It goes to the preparation agent, the clarity check inside
-`update_query`, the playground agent, and every node of the research graph; the plan approval check
-receives none of it. On a channel without a `statgpt` server it is `data_sources_descriptions`
-alone, and no call is made. The research agent and the playground agent are also told which of the
-app's calls failed, so they call those tools themselves, at most three times each; the research
-agent is also told not to repeat a call whose answer the string already shows. When the list of
-datasets failed, the preparation agent is told to plan a search of the available datasets instead of
-naming them.
+The **data-sources string** is the document statistics, the document server's `description`, the
+datasets section, the dataset server's `description` and the glossary, in that order. Each part is
+present only when its server is configured and the part has content, and the parts are joined by
+blank lines. Each description is wrapped in a tag of its own, `<documents_description>` or
+`<datasets_description>`, so the Markdown headings an admin writes in it do not take in the part
+that follows. The string goes to the preparation agent, the clarity check inside `update_query`,
+the playground agent, and every node of the research graph; the plan approval check receives none
+of it. A `generic_rag` server must set a `description`, `document_stats`, or both. A channel with
+neither a `statgpt` server nor `document_stats` makes no call, and its string carries the servers'
+descriptions alone. The research agent and the playground agent are also told which of the app's
+calls failed, so they call those tools themselves, at most three times each; the research agent is
+also told not to repeat a call whose answer the string already shows. When the list of datasets
+failed, the preparation agent is told to plan a search of the available datasets instead of naming
+them.
 
 The playground has a completion of its own and runs the same fetch at the start of its turn. The
 fetched data is never persisted: the next turn fetches it again.
@@ -265,8 +280,8 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   `<cit data-id="…"></cit>`, then the References section is built and appended. Each kind of
   citation has its own condition, and each is about whether the reader can open what the pill points at: a `[doc <id>, page <ix>]` marker converts
   when the file-sharing tool returned a PDF URL for that document, a `[dataset <urn>]` marker
-  converts when the list-datasets tool reported that URN with an absolute `http` or `https`
-  URL, and a `[data_query <id>]` marker converts when the turn captured, for exactly that query
+  converts when the list-datasets tool reported, for that URN, an absolute `http` or `https`
+  data explorer link or page URL (the explorer link wins when both are usable), and a `[data_query <id>]` marker converts when the turn captured, for exactly that query
   id, a data explorer URL that is absolute `http` or `https` (see the data-query capture bullet
   below). Whether the query returned data is not part of that condition, and a query without a
   URL never falls back to its dataset's page. A marker whose condition fails keeps its text exactly
@@ -357,18 +372,20 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   document URLs come from one call per turn to the tool named by `mcp_servers[].file_sharing_tool`,
   invoked tool-call-shaped so its structured result is reachable, and with the agent tools' error
   handling cleared so a failure reaches the app instead of arriving as result text. The dataset
-  names, page addresses and last-update dates come from the answer of the tool named by
+  names, addresses and last-update dates come from the answer of the tool named by
   `mcp_servers[].list_datasets_tool`, the channel's whole catalogue, from which the app selects the
   cited URNs — those of the dataset markers and those of the cited queries with an explorer link —
-  by exact string match. The data-sources fetch's answer seeds the catalogue at the start of the
+  by exact string match. A dataset's address is the data explorer link the answer's `_meta` payload
+  reports for it under `mcp_servers[].client_meta_key`, and the record's `url` (its page) when the
+  payload reports no usable link; `parse_catalogue` decides it once, so the pill, the References row
+  and the resolved count all read the same `DatasetSource.url`. The data-sources fetch's answer seeds the catalogue at the start of the
   turn; only when that call failed does the first check or the delivery that needs the catalogue
-  call the tool, once successfully per turn. The catalogue and the document metadata are read
+  call the tool, once successfully per turn, in an MCP session of its own, because the tool message
+  the agent would read drops `_meta`. The catalogue and the document metadata are read
   through one `CitationLookups` object per request, which the report review's identifier checks
   fill first, so the delivery asks only for what no check has looked up. A `statgpt`
   server must name that tool and only a `statgpt` server may, and it **stays in the research
-  agent's tool list**, because a catalogue listing is how the agent discovers which datasets exist;
-  its error handling therefore stays the agent's, and the reader takes a server error off the
-  returned message's `status`. Each metadata surface is required of the server type whose citation
+  agent's tool list**, because a catalogue listing is how the agent discovers which datasets exist. Each metadata surface is required of the server type whose citation
   ids it resolves, so a channel that resolves none of a kind is one that configures no server of
   that kind: it converts nothing of that kind and records the absence at DEBUG. Every other failure — a tool the
   server does not advertise, a failed call, an unreadable answer, an id the answer omitted, and a
@@ -525,8 +542,8 @@ The rest of the loop, in brief — each item is specified in the linked specs:
 - **Data-query capture** (`app/mcp_tools.py`, `app/research/data_queries.py`): the per-request MCP
   client carries a tool-call interceptor on the `statgpt` server, because the MCP adapter drops a
   tool result's `_meta` before any tool message exists. The interceptor awaits the call, and on a
-  successful result whose `_meta` carries the key named by `mcp_servers[].data_query_meta_key` it
-  keeps one record per query id: that query's element of the `_meta` payload and its element of the
+  successful result whose `_meta` carries, under the key named by `mcp_servers[].client_meta_key`,
+  a payload with a `queries` field, it keeps one record per query id: that query's element of the `_meta` payload and its element of the
   structured result (or a candidate dataset's `query`), each whole, joined by `queryId`. It returns
   the same result object, so what the agent reads is unchanged, and a payload it cannot read costs
   that result's records alone. The records live on `LoadedMcpTools.data_queries` for the rest of

@@ -1,0 +1,345 @@
+## MODIFIED Requirements
+
+### Requirement: INFO request skeleton
+
+At INFO level the service SHALL emit a metadata-only request lifecycle skeleton, each event a
+stable message prefix plus `key=value` fields: (1) request received — deployment, message count,
+owned by the chat completion; (1a) datasets fetched — server name, list-datasets attempts, dataset
+count (absent when the list failed), structures requested, obtained and not obtained, and duration, owned
+by the data-sources fetch and fired on every turn of a channel with a dataset server; (1b) glossary
+fetched — the fields **data-sources-discovery** lists for it, owned by the same fetch and fired on
+every turn of a channel that configures a glossary; (2) preparation completed — duration, `research_started`, plan
+step count, outstanding question count, owned by `DeepResearchCompletion`; (3) model call
+completed — agent name, duration, message count, finish kind, requested tool names, content
+length, token usage when available including the cached-input-token count, owned by a model-call
+logging middleware attached to every `create_agent` graph (preparation, research-agent,
+playground); (4) tool call completed — tool name, tool_call_id, duration, outcome
+(`success`/`error`), owned by the runner choke point that creates the DIAL stage; (5) query
+clarity checked — duration, message count, outstanding question count, token usage when available
+including the cached-input-token count, owned by the `update_query` preparation tool; (6) plan
+approval checked — duration, message count, approval outcome, token usage when available including
+the cached-input-token count, owned by the `approve_plan` preparation tool; (7) research iteration reviewed — iteration number,
+duration, message count, verdict (`continue`/`report`), next-plan step count, token usage when
+available including the cached-input-token count, owned by the research-review node; (7a)
+research iteration budget exhausted — iteration count and the configured cap, owned by the
+research router: the last permitted iteration gets no review call, so no
+research-iteration-reviewed event can carry the hand-off, and both numbers are needed to read the
+event without knowing the channel's configuration; (8) report generated — draft ordinal (1 for
+the first draft, incrementing per revision), duration, message count, report length in characters
+and in measured words, token usage when available including the cached-input-token count, owned
+by the report node; (8a) report reviewed — draft ordinal, duration, message count, the `outcome`
+(`deliver`/`revise`), an `error` field naming the exception kind when the review call failed and
+nothing when it succeeded, the draft's measured word count, the configured ceiling, the
+**number** of violations recorded against the draft, and token usage when available including the
+cached-input-token count, owned by the report-review node. That number counts one combined list —
+the app's own rule violations followed by the review model's — because that list is what a
+revision acts on. The violations themselves are LLM response text and SHALL NOT appear in this
+record or any other, at any level — they are carried to the user in a DIAL stage instead (see
+**report-composition**); (8b) report delivered without review — draft ordinal, the configured
+version budget, the draft's measured word count, owned by the report router: an exhausted budget
+makes no review call, so no report-reviewed event can carry it, and the router that decides the
+hand-off is where its research counterpart (7a) is owned too; (8c) report citations resolved —
+the number of distinct document ids the step requested, which is the documents cited where a pill
+can be drawn rather than every document the report names, the number of those the file-sharing
+tool returned a URL for, the number of those a publication title resolved for through the
+document-metadata resource, the number of distinct dataset ids the step requested and the number of
+those the list-datasets tool reported a usable page URL for, the number of distinct query ids the
+step requested and the number of those the turn captured as queries with an explorer link — a
+usable data explorer URL — the number of citations converted
+into annotations — which leaves out the annotations of References rows that became pills, since a
+row is not a citation — the number of citation
+markers left in the delivered text as written, the number of hyperlinks the step removed from the
+draft — links, images, autolinks and bare URLs counted together, since the same pass removes them
+all and a delivered report may reach a reader having had one taken out with no review record behind
+it — and the step's duration, owned by the citation step
+(see **report-citations**), and fired on every turn that delivers a report, including one that
+converted nothing. The titled count is bounded by the resolved count rather than by the requested
+one. The step asks the metadata resource about every cited document, so that read need not wait on
+the file-sharing call, and then counts only the titles of documents that resolved a URL — so what
+this count reports is titles actually shown on pills, rather than every title the answer carried. The two being equal is the ordinary case, and a
+gap between them is how a channel with incomplete metadata reads. The
+step is shared with the annotations demo completion, so the event fires there
+too; its resolved-document count means documents a URL was obtained for, by whatever means that
+caller uses, and its titled count means documents a title was obtained for, the demo taking each
+title from the caller's attachment rather than from the metadata resource; (9) request completed — outcome
+(`completed`/`failed`), total duration, and on failure the same `error_reference` as the ERROR
+record. Neither the `finish_iteration` sentinel tool nor the `update_status` tool SHALL produce a
+tool-call event above DEBUG: neither performs research, and `update_status` is surfaced to the user
+as the activity stage instead (see **dial-agent-with-mcp**).
+
+Each event's message-count and duration fields follow the LLM-call-logging requirement above.
+
+One `outcome` field carries the decision because the review model has no verdict field of its own:
+an empty violation list is its approval (see **report-composition**), and the app folds its own
+rule violations into that list before the decision is taken. The record therefore states that a
+revision was required and how many violations it acts on, not whether the app's rules or the
+review model raised them.
+
+A report delivered with the review still unsatisfied SHALL be visible in the logs: an exhausted
+version budget fires the report-delivered-without-review event, and a populated `error` field on
+the report-reviewed event marks a review call that did not produce a verdict; such a call SHALL
+additionally log a WARNING naming the failure kind.
+
+A **failed revision** is recorded differently, because neither of the two report events can carry it:
+the report-review node never runs for it (the graph leaves the loop instead, see
+**research-execution**), and the report-generated event SHALL NOT fire for a draft that was never
+produced. Its record SHALL therefore be a WARNING owned by the report node, naming the failure kind,
+the ordinal of the revision that failed, the ordinal of the draft delivered in its place, and —
+per the LLM-call-logging requirement — the failed call's duration and message count. The
+delivered report is the one an earlier report-generated event already recorded.
+None of these SHALL log report text — counts, outcomes, and durations only, per the content
+allowlist.
+
+A **citation that could not be resolved** is recorded as one WARNING owned by the citation step,
+naming the failure kind — a tool the server does not advertise, a failed call, an unreadable
+response, or ids the response omitted — beside the (8c) event, which fires either way. The warning
+does not wait for the step to resolve nothing: a response that answered two of three ids still cost
+the third document its pills, and the (8c) counts alone would leave that reading as a report that
+happened to cite less. The one case in that family that is **not** a warning is an instance naming
+no file-sharing tool at all, which only a deployment with no document server can be: it has no
+document citations to convert, so this is a routine expected outcome of every turn it serves and is
+recorded at DEBUG (see **report-citations**).
+
+A **dataset that could not be resolved** is recorded the way an unresolved document is, because it
+costs the same thing — a pill. The list-datasets call raising, an answer carrying no structured
+result, and an answer that cannot be read as a list of dataset records SHALL each be one WARNING
+naming the failure kind, beside the (8c) event. A channel that configures **no dataset server**, and so no
+list-datasets tool, SHALL be recorded at DEBUG, for the reason the absent file-sharing tool is:
+such a channel cites no dataset, so warning on every report it delivers would report its
+configuration as a fault. A
+**dataset the catalogue reports without a page URL** SHALL NOT warn at all — whether a dataset has a
+portal page is the channel's own data rather than a fault — and the gap between the requested and
+resolved dataset counts on the (8c) event is the whole record of it. A **dataset the list-datasets
+tool reports without an explorer link**, and a list-datasets result whose `_meta` payload is
+missing or unreadable, SHALL NOT warn either: the dataset then opens its page, which costs the
+reader nothing a missing pill would, and whether a channel enables the payload is its own
+configuration. Neither is recorded above DEBUG.
+
+A **data-query citation that could not be resolved** is recorded at the citation step, because the
+records it resolves against are captured throughout the research turn and only the citation step
+knows which of them the report cites. Capturing a record SHALL log nothing above DEBUG: a data-query
+tool is called many times per turn, and most of what it reports is never cited. Three outcomes
+SHALL each be one WARNING, beside the (8c) event, and only on a turn whose report cites at least
+one query id. Each SHALL have a message of its own that states the outcome in words, rather than a
+shared message told apart by a token: these are outcomes of the turn, not failures of one call.
+
+- **nothing captured** — the turn captured no data-query record at all. It has three causes: a
+  `client_meta_key` that matches nothing the server sends, a server that does not emit the
+  payload, and a turn whose research ran no data query while the report still cites a query id. The
+  first two are configuration faults that cost every data-query pill; the third is a writer that
+  invented ids and a review that did not catch them, its version budget spent. The message cannot
+  tell them apart, so the code that logs it SHALL document all three. The warning carries how many
+  query ids the report cites.
+- **ids not captured** — the turn captured at least one record, and the report cites one or more
+  query ids that match none of them. That is a writer that cited an id no tool reported, past the
+  review's check. The warning carries how many such ids the report cites, never an id. It SHALL NOT
+  be emitted on a turn that warns **nothing captured**: every cited id is then uncaptured, and one
+  cause SHALL yield one warning.
+- **unreadable payloads** — one or more tool results carried a payload under the configured
+  `_meta` key that carries a `queries` field and could not be read as a list of query records. A
+  payload without a `queries` field, which is what the list-datasets tool sends under the same key,
+  is not a data-query payload and SHALL NOT count. The warning carries how many tool
+  results did, never the payload.
+
+A cited query id that the turn captured SHALL NOT warn, whether or not the query has an explorer
+link and whether or not it returned data. A query without a link — a candidate, or a query that was
+constructed but did not run — is cited only by a writer that broke its instructions past the
+review's check, and the gap between the requested and resolved query counts on the (8c) event is
+the whole record of it.
+
+A **lookup the report review makes for its identifier checks** — the catalogue call, or a
+document-metadata read — SHALL, when it fails, be one WARNING naming the same failure kind the
+delivery would report, marked as made during review, and SHALL NOT be repeated for every draft: a
+failed lookup is retried by the next check, and each failure is one record. The review's records
+name how many ids a check found unknown, never an id.
+
+The dataset counts keep counting **dataset markers** alone. A dataset reached only through a cited
+query is read from the catalogue and listed in the References section, but it SHALL NOT be counted
+among the dataset ids requested or resolved, so the two dataset counts keep describing the report's
+`[dataset <urn>]` citations and the two query counts describe its `[data_query <id>]` ones.
+
+A **title that could not be resolved** is graded one step lower throughout, because it costs a label
+and never a pill. The document-metadata read raising, and an answer that cannot be read as an
+id-to-metadata object, SHALL each be one WARNING naming the failure kind, beside the (8c) event. A
+channel that configures no document server, and so no document-metadata resource, SHALL be recorded
+at DEBUG, for the reason the absent file-sharing tool is: it has no document citations to label. A **document that simply carries no title** SHALL NOT
+warn at all — a channel's metadata schema is its own and a key missing there is data variance rather
+than a fault — and the gap between the resolved count and the titled count on the (8c) event is the
+whole record of it.
+
+Every record
+of this step describes what it cites by count alone: the service's own call sites SHALL NOT log a
+returned URL or any part of one, a file name taken from one, a document title, a cited document's
+id, a dataset's name, a dataset's page URL, a cited dataset's id, a query id, a data explorer URL,
+or a filter value of a query, at any level. Each of the four
+answers — the file-sharing mapping, the document-metadata object, the dataset catalogue and the
+data-query records captured from tool results — is a tool or resource response body, which the content allowlist keeps out of
+every record, and how many ids a response omitted says everything a reader of the logs can act on.
+
+#### Scenario: Successful research turn reads as a skeleton at INFO
+
+- **WHEN** a turn runs preparation, hands off to research, and delivers a report on an instance
+  whose version budget is above one, with all log levels at INFO
+- **THEN** the log contains the request-received, preparation-completed, model-call, tool-call,
+  research-iteration-reviewed, report-generated, report-reviewed, and request-completed events, none
+  carrying message bodies or tool arguments
+
+#### Scenario: Tool failure is visible in the skeleton
+
+- **WHEN** an MCP tool execution returns a `ToolMessage` with `status == "error"`
+- **THEN** the tool-call event fires at INFO with `outcome=error`
+
+#### Scenario: finish_iteration stays out of the INFO skeleton
+
+- **WHEN** research-agent calls the `finish_iteration` sentinel
+- **THEN** no INFO tool-call event is emitted for it
+
+#### Scenario: update_status stays out of the INFO skeleton
+
+- **WHEN** research-agent calls `update_status`
+- **THEN** no INFO tool-call event is emitted for it
+
+#### Scenario: Failed turn closes the narrative
+
+- **WHEN** a turn fails after the request-received event
+- **THEN** the request-completed event fires with `outcome=failed` and the same
+  `error_reference` carried by the ERROR record
+
+#### Scenario: Cached input tokens are visible in token usage
+
+- **WHEN** a model response reports cached input tokens (LangChain
+  `usage_metadata.input_token_details["cache_read"]`)
+- **THEN** the corresponding model-call, query-clarity-checked, plan-approval-checked,
+  research-iteration-reviewed, report-generated, or report-reviewed event's token-usage field includes the
+  cached count (counts only — no payload content)
+
+#### Scenario: Usage absent stays graceful
+
+- **WHEN** a model response carries no usage metadata
+- **THEN** the event still fires, with its token-usage field marked unavailable
+
+#### Scenario: An exhausted iteration budget is readable without the configuration
+
+- **WHEN** an instance permits 10 iterations and the tenth finishes, so no review call is made
+- **THEN** one INFO record SHALL carry both the iteration reached and the cap of 10, and no
+  research-iteration-reviewed event SHALL fire for that iteration
+
+#### Scenario: Model-call message count reflects the actual request
+
+- **WHEN** a `create_agent` graph's model-call-completed event fires for a call whose assembled
+  request carried the system message plus 12 conversation messages
+- **THEN** the event's message count is 13, and no message body appears in the record
+
+#### Scenario: Single-turn calls report a fixed message count
+
+- **WHEN** research-review, report-review, `update_query`, or `approve_plan` makes its
+  independent LLM call — a system message plus one rendered request message, regardless of how
+  much the research transcript, report draft, or conversation has grown
+- **THEN** the corresponding event's message count is 2, and the record contains no message body
+
+#### Scenario: Report-generated message count includes the transcript
+
+- **WHEN** the report node assembles its request — a system message, the research transcript, a
+  report request, and (for a revision) a revision request — and invokes the model
+- **THEN** the report-generated event's message count equals the length of that assembled list
+
+#### Scenario: The citation step is readable in the skeleton
+
+- **WHEN** a turn delivers a report citing three documents, the file-sharing tool resolves two of them, both of those resolve a title, and nine citations are annotated
+- **THEN** the (8c) event SHALL state three document ids requested, two resolved, two titled, nine annotations emitted however many References rows became pills, the number of markers left in the text, the number of hyperlinks removed, and the step's duration — and SHALL carry no URL, no document title and no report text
+
+#### Scenario: A citation step that resolved nothing still reports
+
+- **WHEN** the file-sharing tool call fails and the report is delivered with every marker in place
+- **THEN** the (8c) event SHALL fire with zero resolved documents, zero titled documents and zero annotations, and one WARNING SHALL name the failure kind
+
+#### Scenario: A partial response warns even though the other pills were drawn
+
+- **WHEN** the file-sharing tool answers with URLs for two of the three cited documents
+- **THEN** the (8c) event SHALL state three document ids requested and two resolved, and one WARNING SHALL name the failure kind and the number of ids the response omitted — one — because that document's citations lost their pills; it SHALL NOT carry the id itself, the file name, or the URL
+
+#### Scenario: An instance with no citation tool does not warn on every turn
+
+- **WHEN** an instance configured with no document server — and so with no file-sharing tool — delivers a report carrying dataset citation markers
+- **THEN** the (8c) event SHALL fire with zero resolved documents and zero annotations, the record naming the absent configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
+
+#### Scenario: A missing title is a count, not a warning
+
+- **WHEN** three documents resolve URLs and the metadata answer carries a usable title for two of them
+- **THEN** the (8c) event SHALL state three resolved and two titled, and no WARNING SHALL be emitted for the third, whose citations keep their marker label
+
+#### Scenario: A channel serving no documents does not warn on every turn
+
+- **WHEN** an instance configured with no document server — and so with no document-metadata resource — delivers a report carrying dataset citations
+- **THEN** the (8c) event SHALL fire with zero documents requested and zero titled, the record naming the absent configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
+
+#### Scenario: A link removed from an unreviewed draft is still visible in the logs
+
+- **WHEN** an instance whose version budget is 1 delivers its first draft and the deterministic pass removes a bare URL from it
+- **THEN** the (8c) event SHALL report one hyperlink removed, so the removal is readable even though no report-reviewed event exists for that draft
+
+#### Scenario: A turn citing datasets reads the dataset counts in the skeleton
+
+- **WHEN** a turn delivers a report citing two documents and three datasets, the file-sharing tool
+  resolves both documents, and the list-datasets tool reports a page URL for two of the three
+  datasets
+- **THEN** the (8c) event SHALL state three dataset ids requested and two resolved, beside the
+  document counts, and SHALL carry no dataset name, no page URL and no dataset id
+
+#### Scenario: A channel serving no datasets does not warn on every turn
+
+- **WHEN** an instance configured with no dataset server — and so with no list-datasets tool —
+  delivers a report that carries a dataset citation marker all the same
+- **THEN** the (8c) event SHALL fire with zero datasets resolved, the record naming the absent
+  configuration SHALL be DEBUG, and no WARNING SHALL be emitted for it
+
+#### Scenario: A dataset with no portal page is not a warning
+
+- **WHEN** the list-datasets tool answers with a record for every cited dataset, one of which
+  carries no URL
+- **THEN** no WARNING SHALL be emitted for that dataset, and the gap between the requested and
+  resolved dataset counts on the (8c) event SHALL be the only record of it
+
+#### Scenario: A turn citing data queries reads the query counts in the skeleton
+
+- **WHEN** a turn delivers a report citing three distinct query ids, two of which the turn captured
+  with a data explorer URL
+- **THEN** the (8c) event SHALL state three query ids requested and two resolved, and SHALL carry no
+  query id, no URL and no filter value
+
+#### Scenario: A meta key matching nothing warns once
+
+- **WHEN** a report cites two query ids and the turn captured no data-query record under the
+  configured key
+- **THEN** one WARNING SHALL state that nothing was captured, beside the (8c) event, no WARNING
+  SHALL state that cited ids match no captured query, and the event SHALL state zero query ids
+  resolved
+
+#### Scenario: Ids the writer invented warn once with their count
+
+- **WHEN** a report cites one query id the turn captured with an explorer link and two it never
+  captured
+- **THEN** the (8c) event SHALL state three requested and one resolved, and one WARNING SHALL state
+  that cited ids match no captured query and carry the count `2`, with no query id
+
+#### Scenario: A captured query without a link is a count, not a warning
+
+- **WHEN** a report cites one query id the turn captured with an explorer link and one it captured
+  without one
+- **THEN** the (8c) event SHALL state two requested and one resolved, and no WARNING SHALL be
+  emitted about the second id
+
+#### Scenario: A report citing only data queries counts no datasets
+
+- **WHEN** a report cites two queries with an explorer link run against one dataset and no
+  `[dataset <urn>]`
+  marker, and the catalogue reports a page URL for that dataset
+- **THEN** the (8c) event SHALL state zero dataset ids requested and zero resolved, and two query
+  ids requested and two resolved
+
+#### Scenario: A failed review-time lookup is one warning
+
+- **WHEN** the report review's document-metadata read fails for a draft, and the next draft's read
+  succeeds
+- **THEN** exactly one WARNING SHALL name the failure kind and say that the read was made during
+  review, and it SHALL carry no document id

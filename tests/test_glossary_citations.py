@@ -256,11 +256,12 @@ async def test_a_channel_without_a_glossary_has_no_glossary_table() -> None:
 def test_the_dataset_table_comes_before_the_document_table() -> None:
     properties = ApplicationProperties.model_validate(
         {
-            "prompts": {"client_name": "A", "agent_name": "B", "data_sources_descriptions": "C"},
+            "prompts": {"client_name": "A", "agent_name": "B"},
             "mcp_servers": [
                 {
                     "server_name": "documents",
                     "server_type": "generic_rag",
+                    "description": "## report\n\nA report.",
                     "deployment_id": "rag",
                     "file_sharing_tool": "get_citation_url",
                     "document_metadata_resource": "documents://metadata/{document_ids}",
@@ -275,7 +276,7 @@ def test_the_dataset_table_comes_before_the_document_table() -> None:
                     "server_type": "statgpt",
                     "deployment_id": "statgpt",
                     "list_datasets_tool": "list_datasets",
-                    "data_query_meta_key": "acme.example.org/client",
+                    "client_meta_key": "acme.example.org/client",
                     "references_table": {
                         "title": "Datasets",
                         "columns": [{"heading": "N", "key": "name"}],

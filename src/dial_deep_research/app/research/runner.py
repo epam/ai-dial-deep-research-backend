@@ -235,7 +235,7 @@ def _warn_data_query_outcomes(*, query_ids: Sequence[str], data_queries: DataQue
     """The data-query outcomes of the turn worth a WARNING, each with a message of its own.
 
     Only on a turn whose report cites a query id, and never naming one. "Nothing captured" has
-    three causes the message cannot tell apart: a `data_query_meta_key` that matches nothing the
+    three causes the message cannot tell apart: a `client_meta_key` that matches nothing the
     server sends, a dataset server whose channel does not enable the payload, and a research turn
     that ran no data query while the report still cites query ids. The first two cost every
     data-query pill; the third is a writer that invented ids past the review's check. "Ids not
@@ -788,9 +788,9 @@ class ResearchRunner:
         no datasets, and warning on every report it delivers would report its configuration as a
         failure.
 
-        A dataset the catalogue reports without a page URL is no failure at all — whether a
-        dataset has a portal page is the channel's own data — and the gap between the requested
-        and resolved counts on the step's own event is the whole record of it.
+        A dataset the catalogue reports with neither an explorer link nor a page URL is no failure
+        at all — whether a dataset can be opened is the channel's own data — and the gap between
+        the requested and resolved counts on the step's own event is the whole record of it.
 
         Read through the turn's lookups, so a catalogue the data-sources fetch obtained at the
         start of the turn, or the report review fetched, is not fetched again.

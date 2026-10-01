@@ -28,6 +28,7 @@ from langchain_mcp_adapters.interceptors import ToolCallInterceptor
 from langchain_mcp_adapters.sessions import Connection
 
 from dial_deep_research.app.research.data_queries import DataQueryCapture, DataQueryStore
+from dial_deep_research.app.research.dataset_metadata import CatalogueTool
 from dial_deep_research.app_properties import MCPClientSettings
 from dial_deep_research.settings import settings
 from dial_deep_research.utils.json_schema_fixes import hoist_defs_to_root
@@ -55,7 +56,8 @@ class LoadedMcpTools(NamedTuple):
     the tools the configuration named for the application to call at report delivery, each
     `None` when no server named one or the named tool is absent from what its server advertises
     — the caller tells those two apart by the configured name, and warns only for the second
-    (see the report-citations capability).
+    (see the report-citations capability). The list-datasets tool is carried as what calling it
+    in a session of its own needs, because its LangChain tool drops the result's `_meta`.
 
     The two differ in what naming them does to the agent: the file-sharing tool is taken out of
     `agent_tools`, while the list-datasets tool stays in it whenever the server's filter would
@@ -72,7 +74,7 @@ class LoadedMcpTools(NamedTuple):
 
     agent_tools: list[BaseTool]
     file_sharing_tool: BaseTool | None
-    list_datasets_tool: BaseTool | None
+    list_datasets_tool: CatalogueTool | None
     client: MultiServerMCPClient
     data_queries: DataQueryStore
 
@@ -89,17 +91,17 @@ def build_mcp_client(
     present) as `Authorization: Bearer`; direct mode uses the server's bundled `connection`
     URL and api-key.
 
-    With `data_queries`, every server naming a `data_query_meta_key` gets a capture that keeps
+    With `data_queries`, every server naming a `client_meta_key` gets a capture that keeps
     its tool results' data-query records in that store.
     """
     connections: dict[str, Connection] = {}
     interceptors: list[ToolCallInterceptor] = []
     for server in mcp_servers:
-        if data_queries is not None and server.data_query_meta_key:
+        if data_queries is not None and server.client_meta_key:
             interceptors.append(
                 DataQueryCapture(
                     server_name=server.server_name,
-                    meta_key=server.data_query_meta_key,
+                    meta_key=server.client_meta_key,
                     store=data_queries,
                 )
             )
@@ -157,13 +159,19 @@ async def load_mcp_tools(
     mcp_client = build_mcp_client(mcp_servers, bearer_token=bearer_token, data_queries=data_queries)
     agent_tools: list[BaseTool] = []
     file_sharing_tool: BaseTool | None = None
-    list_datasets_tool: BaseTool | None = None
+    list_datasets_tool: CatalogueTool | None = None
     for server in mcp_servers:
         server_tools = await mcp_client.get_tools(server_name=server.server_name)
         available = [t.name for t in server_tools]
         if server.list_datasets_tool:
-            list_datasets_tool = next(
-                (t for t in server_tools if t.name == server.list_datasets_tool), None
+            list_datasets_tool = (
+                CatalogueTool(
+                    server_name=server.server_name,
+                    tool_name=server.list_datasets_tool,
+                    client_meta_key=server.client_meta_key,
+                )
+                if server.list_datasets_tool in available
+                else None
             )
             logger.info(
                 "MCP server '%s': list-datasets tool '%s' %s; it stays in the agent's tools",
@@ -236,9 +244,6 @@ async def load_mcp_tools(
         # handler on every tool it builds, which turns an MCP error into ordinary result
         # content. The app reads this tool's result itself and needs the failure to reach it.
         file_sharing_tool.handle_tool_error = False
-    # The list-datasets tool's error handling is deliberately left as the agent's, because it
-    # is the same object the agent is offered and one setting cannot serve both callers. Its
-    # reader takes the failure off the returned message's `status` instead.
     return LoadedMcpTools(
         agent_tools=agent_tools,
         file_sharing_tool=file_sharing_tool,
