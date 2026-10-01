@@ -51,9 +51,7 @@ async def test_query_clarity_checked_logs_the_message_count(
     monkeypatch.setattr(
         tools_module, "get_chat_model", lambda model_config: _FakeStructuredLLM(parsed)
     )
-    prep_tools = PrepTools(
-        PrepState(), today_date="2026-08-21", data_sources_descriptions="publications"
-    )
+    prep_tools = PrepTools(PrepState(), today_date="2026-08-21", data_sources="publications")
     update_query = prep_tools.build()[0]
     caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
 
@@ -80,7 +78,7 @@ async def test_plan_approval_checked_logs_the_message_count(
     state = PrepState(
         current_query="q", clarification=Clarification(questions=[]), plan=Plan(steps=["step one"])
     )
-    prep_tools = PrepTools(state, today_date="2026-08-21", data_sources_descriptions="publications")
+    prep_tools = PrepTools(state, today_date="2026-08-21", data_sources="publications")
     approve_plan = prep_tools.build()[2]
     caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
 

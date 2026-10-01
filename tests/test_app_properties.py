@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -40,12 +41,12 @@ VALID_PROPERTIES: dict = {
     "prompts": {
         "client_name": "Test Corp",
         "agent_name": "Test Deep Research",
-        "data_sources_descriptions": "## report\n\nA report.",
     },
     "mcp_servers": [
         {
             "server_name": "rag",
             "server_type": "generic_rag",
+            "description": "## report\n\nA report.",
             "references_table": {
                 "title": "Documents",
                 "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -66,7 +67,7 @@ def test_valid_properties_load_with_default_iterations() -> None:
     assert properties.prompts.client_name == "Test Corp"
 
 
-@pytest.mark.parametrize("field", ["client_name", "agent_name", "data_sources_descriptions"])
+@pytest.mark.parametrize("field", ["client_name", "agent_name"])
 def test_empty_prompt_string_is_rejected(field: str) -> None:
     data = {"prompts": {**VALID_PROPERTIES["prompts"], field: ""}}
     with pytest.raises(ValidationError) as excinfo:
@@ -356,7 +357,7 @@ def test_schema_inlines_nested_models() -> None:
     assert "$defs" not in schema
     prompts = schema["properties"]["prompts"]
     assert "$ref" not in prompts
-    assert set(prompts["required"]) == {"client_name", "agent_name", "data_sources_descriptions"}
+    assert set(prompts["required"]) == {"client_name", "agent_name"}
 
 
 def test_schema_inlines_list_item_model() -> None:
@@ -403,6 +404,7 @@ def test_one_server_of_each_type_is_accepted() -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": {
                     "title": "Documents",
                     "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -446,6 +448,7 @@ def test_two_servers_of_one_type_are_rejected() -> None:
             {
                 "server_name": "rag-a",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": {
                     "title": "Documents",
                     "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -458,6 +461,7 @@ def test_two_servers_of_one_type_are_rejected() -> None:
             {
                 "server_name": "rag-b",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": {
                     "title": "Documents",
                     "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -519,6 +523,7 @@ def test_a_document_server_must_name_its_file_sharing_tool() -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "deployment_id": "x",
                 "references_table": _DOCUMENTS_TABLE,
             }
@@ -551,6 +556,7 @@ def test_a_server_with_no_connection_reports_that_before_the_missing_tool() -> N
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": _DOCUMENTS_TABLE,
             }
         )
@@ -564,6 +570,7 @@ def test_one_server_may_name_a_file_sharing_tool() -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": {
                     "title": "Documents",
                     "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -644,6 +651,7 @@ def test_no_configuration_can_name_two_file_sharing_tools() -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": {
                     "title": "Documents",
                     "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -676,6 +684,7 @@ def test_duplicate_server_names_are_rejected() -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": {
                     "title": "Documents",
                     "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -708,6 +717,7 @@ def test_deployment_mode_server_loads() -> None:
         {
             "server_name": "rag",
             "server_type": "generic_rag",
+            "description": "## report\n\nA report.",
             "references_table": {
                 "title": "Documents",
                 "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -728,6 +738,7 @@ def test_direct_mode_server_loads(direct_mode: None) -> None:
         {
             "server_name": "rag",
             "server_type": "generic_rag",
+            "description": "## report\n\nA report.",
             "references_table": {
                 "title": "Documents",
                 "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -751,6 +762,7 @@ def test_connection_and_deployment_id_together_are_rejected(direct_mode: None) -
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": {
                     "title": "Documents",
                     "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -768,6 +780,7 @@ def test_no_mode_configured_is_rejected() -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": _DOCUMENTS_TABLE,
             }
         )
@@ -798,6 +811,7 @@ def test_default_placeholder_form_is_rejected(direct_mode: None) -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": {
                     "title": "Documents",
                     "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -827,6 +841,7 @@ def test_malformed_connection_bundle_is_rejected(
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": {
                     "title": "Documents",
                     "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -845,6 +860,7 @@ def test_unresolved_env_placeholder_fails_validation(
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": {
                     "title": "Documents",
                     "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -917,6 +933,7 @@ def _document_server(**overrides: object) -> dict[str, object]:
     return {
         "server_name": "rag",
         "server_type": "generic_rag",
+        "description": "## report\n\nA report.",
         "references_table": {
             "title": "Documents",
             "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -945,6 +962,7 @@ def test_a_document_server_naming_no_title_source_is_rejected() -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": {
                     "title": "Documents",
                     "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -964,6 +982,7 @@ def test_one_title_field_without_the_other_is_rejected(field: str) -> None:
             {
                 "server_name": "rag",
                 "server_type": "generic_rag",
+                "description": "## report\n\nA report.",
                 "references_table": {
                     "title": "Documents",
                     "columns": [{"heading": "Documents", "key": "publication_title"}],
@@ -1290,6 +1309,7 @@ def _server(**overrides: object) -> dict:
     data: dict = {
         "server_name": "rag",
         "server_type": "generic_rag",
+        "description": "## report\n\nA report.",
         "deployment_id": "x",
         "file_sharing_tool": "get_citation_url",
         "document_metadata_resource": "documents://metadata/{document_ids}",
@@ -1413,3 +1433,107 @@ def test_a_server_whose_source_kind_has_no_table_place_is_rejected(
     message = str(excinfo.value)
     assert "'docs'" in message
     assert "document sources have no place in REFERENCES_TABLE_ORDER" in message
+
+
+# --- the server description and the document statistics ----------------------------------------
+
+
+def test_prompts_reject_a_data_sources_descriptions_field() -> None:
+    data = {
+        **VALID_PROPERTIES,
+        "prompts": {**VALID_PROPERTIES["prompts"], "data_sources_descriptions": "## report"},
+    }
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(data)
+    assert "data_sources_descriptions" in str(excinfo.value)
+    assert "extra_forbidden" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("server", [_document_server, _dataset_server])
+def test_any_server_may_describe_its_sources(server: Callable[..., dict[str, object]]) -> None:
+    assert MCPClientSettings.model_validate(server(description="## report")).description == (
+        "## report"
+    )
+
+
+def test_a_dataset_server_without_a_description_is_valid() -> None:
+    assert MCPClientSettings.model_validate(_dataset_server()).description is None
+
+
+def test_a_document_server_with_statistics_needs_no_description() -> None:
+    server = _document_server(document_stats=_DOCUMENT_STATS)
+    del server["description"]
+    assert MCPClientSettings.model_validate(server).description is None
+
+
+def test_a_document_server_with_neither_is_rejected() -> None:
+    server = _document_server(server_name="docs")
+    del server["description"]
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(server)
+    message = str(excinfo.value)
+    assert "'docs'" in message
+    assert "sets neither description nor document_stats" in message
+
+
+@pytest.mark.parametrize("description", ["", " \n\t"])
+def test_an_empty_or_blank_description_is_rejected(description: str) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(_document_server(description=description))
+    assert "description" in str(excinfo.value)
+
+
+_DOCUMENT_STATS: dict = {
+    "list_documents_tool": "list_documents",
+    "document_date_key": "publication_date",
+    "document_type_key": "publication_type",
+}
+
+
+def test_a_document_server_configures_document_statistics() -> None:
+    data = {**VALID_PROPERTIES, "mcp_servers": [_document_server(document_stats=_DOCUMENT_STATS)]}
+    server = ApplicationProperties.model_validate(data).document_server
+    assert server is not None
+    assert server.document_stats is not None
+    assert server.document_stats.document_date_key == "publication_date"
+    assert server.document_stats.page_size == 1000
+
+
+def test_the_type_key_is_optional() -> None:
+    stats = {key: value for key, value in _DOCUMENT_STATS.items() if key != "document_type_key"}
+    server = MCPClientSettings.model_validate(_document_server(document_stats=stats))
+    assert server.document_stats is not None
+    assert server.document_stats.document_type_key is None
+
+
+def test_only_a_document_server_may_configure_document_statistics() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(
+            _dataset_server(server_name="data", document_stats=_DOCUMENT_STATS)
+        )
+    message = str(excinfo.value)
+    assert "'data'" in message
+    assert "only a generic_rag server may configure document statistics" in message
+
+
+@pytest.mark.parametrize(
+    ("change", "field"),
+    [
+        ({"document_date_key": None}, "document_date_key"),
+        ({"list_documents_tool": None}, "list_documents_tool"),
+        ({"page_size": 0}, "page_size"),
+        ({"document_type_key": ""}, "document_type_key"),
+        ({"unknown_field": "x"}, "unknown_field"),
+    ],
+)
+def test_incomplete_document_statistics_are_rejected(change: dict, field: str) -> None:
+    stats = {**_DOCUMENT_STATS, **change}
+    stats = {key: value for key, value in stats.items() if value is not None}
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(_document_server(document_stats=stats))
+    assert field in str(excinfo.value)
+
+
+def test_a_channel_without_a_document_server_has_none() -> None:
+    data = {**VALID_PROPERTIES, "mcp_servers": [_dataset_server()]}
+    assert ApplicationProperties.model_validate(data).document_server is None

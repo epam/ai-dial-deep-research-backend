@@ -204,6 +204,46 @@ class GlossaryTools(BaseModel):
         return self
 
 
+# The most pages one document-statistics listing requests. Each page is one sequential call before
+# preparation starts, so the cap bounds how long the listing delays the turn's first reply. With
+# the default page size it covers ten thousand documents.
+MAX_DOCUMENT_PAGES = 10
+
+
+class DocumentStats(BaseModel):
+    """How the document server's collection is listed for the document statistics."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    list_documents_tool: str = Field(
+        min_length=1,
+        description="Name of the server's tool that lists the indexed documents with their"
+        ' metadata. The application calls it with {"offset": <n>, "limit": <page_size>} and reads'
+        " total_count and results from its answer, the shape of the Generic RAG list_documents"
+        " tool.",
+    )
+    document_date_key: str = Field(
+        min_length=1,
+        description="The metadata key that holds a document's publication date, for example"
+        " publication_date. A value that is not an ISO 8601 date, or a date and time, is ignored.",
+    )
+    document_type_key: str | None = Field(
+        default=None,
+        min_length=1,
+        description="The metadata key that holds a document's type, for example publication_type."
+        " Set it to also report the statistics per type. A document whose value under this key"
+        " is not a string belongs to no type.",
+    )
+    page_size: int = Field(
+        default=1000,
+        ge=1,
+        description="How many documents one call of the list tool requests. Set it to cover the"
+        " whole collection where the server allows, so one call lists every document: further"
+        " pages are requested one after another, each delaying the turn's first reply, and a"
+        f" collection that {MAX_DOCUMENT_PAGES} pages do not cover gets no statistics.",
+    )
+
+
 class DatasetStructureTool(BaseModel):
     """The configured dataset-structure tool and the server that advertises it."""
 
@@ -287,6 +327,19 @@ class MCPClientSettings(BaseModel):
         default_factory=list,
         description="Names of tools to include from this server. If empty, all tools are included.",
     )
+    description: str | None = Field(
+        default=None,
+        min_length=1,
+        description="What the models are told about this server's sources, on every turn: for a"
+        " document server, typically a topics map of the publications it holds. Write here only"
+        " what the application does not fetch itself. It fetches and shows the list of datasets,"
+        " their structures when a dataset_structure_tool is configured, the glossary when a"
+        " glossary is configured, and the number of documents and the publication dates they"
+        " cover when document_stats is configured. A fact it fetches that is also written here is"
+        " shown to the models twice, and goes stale when the server's content changes. The text"
+        " may use Markdown headings: the models see it inside a tag of its own. A generic_rag"
+        " server must set this field, document_stats, or both.",
+    )
     file_sharing_tool: str | None = Field(
         default=None,
         description="Name of this server's tool that copies a cited document into the DIAL"
@@ -359,6 +412,18 @@ class MCPClientSettings(BaseModel):
         " glossary's terminology and how to cite a term, and lists the cited terms in the"
         " References section. Without it, none of that happens. The tools need not appear in"
         " tools_to_include. Only a statgpt server may set it.",
+    )
+
+    document_stats: DocumentStats | None = Field(
+        default=None,
+        description="How to list this server's documents for the document statistics. With it,"
+        " the application lists every document at the start of every turn and shows the models"
+        " how many documents there are and which publication dates they cover, overall and per"
+        f" type when document_type_key is set. It requests at most {MAX_DOCUMENT_PAGES} pages. When"
+        f" a page cannot be listed, or {MAX_DOCUMENT_PAGES} pages do not reach the total, the models are told for that turn that the"
+        " list of documents could not be obtained. Without it, the application makes no document"
+        " call. The list tool need not appear in tools_to_include. Only a generic_rag server may"
+        " set it.",
     )
 
     client_meta_key: str | None = Field(
@@ -566,6 +631,41 @@ class MCPClientSettings(BaseModel):
             )
         return self
 
+    @field_validator("description")
+    @classmethod
+    def _validate_description_not_blank(cls, value: str | None) -> str | None:
+        # `min_length` counts spaces, and a blank description would tell the models nothing.
+        if value is not None and not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_documents_are_described(self) -> MCPClientSettings:
+        """A document server must tell the models something about its documents: the preparation
+        prompt says nothing outside the listed data sources is reachable during research."""
+        if (
+            self.server_type == "generic_rag"
+            and self.description is None
+            and self.document_stats is None
+        ):
+            raise ValueError(
+                f"server {self.server_name!r} is a generic_rag server and sets neither description"
+                " nor document_stats: set at least one, so the models are told what documents it"
+                " holds"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_document_stats(self) -> MCPClientSettings:
+        """Only the document server may configure document statistics: it serves the documents."""
+        if self.server_type != "generic_rag" and self.document_stats is not None:
+            raise ValueError(
+                f"server {self.server_name!r} is {self.server_type}, and only a generic_rag server"
+                " may configure document statistics: the documents are served by the document"
+                " server"
+            )
+        return self
+
     @model_validator(mode="after")
     def _validate_references_table_order(self) -> MCPClientSettings:
         """The server's References table has a place in the fixed table order.
@@ -759,7 +859,14 @@ class QualityRule(BaseModel):
 
 
 class Prompts(BaseModel):
-    """Per-instance content injected into the prompt templates."""
+    """Per-instance content injected into the prompt templates.
+
+    Unknown fields are rejected, so a field set in the wrong place fails validation instead of
+    being dropped silently. What the models are told about a server's sources is that server's
+    `description`, not a field of this model.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     client_name: str = Field(
         min_length=1,
@@ -768,15 +875,6 @@ class Prompts(BaseModel):
     agent_name: str = Field(
         min_length=1,
         description="Name the agent uses to introduce itself in prompts",
-    )
-    data_sources_descriptions: str = Field(
-        min_length=1,
-        description="A topics map of the data sources available in the knowledge base. Describe"
-        " here only what the application does not fetch from the servers itself, such as the"
-        " publications the document server holds. The application fetches the list of datasets"
-        " from the dataset server, their structures when a dataset_structure_tool is configured,"
-        " and the glossary when a glossary is configured, and appends them after this text on"
-        " every turn, so a dataset described here too is shown to the models twice.",
     )
     client_rules: list[QualityRule] = Field(
         default_factory=list,
@@ -1055,6 +1153,16 @@ class ApplicationProperties(BaseModel):
         """
         return next(
             (server for server in self.mcp_servers if server.server_type == "statgpt"), None
+        )
+
+    @property
+    def document_server(self) -> MCPClientSettings | None:
+        """The configured `generic_rag` server, or `None` when the channel serves no documents.
+
+        At most one server of each type is configured, so there is nothing to choose between.
+        """
+        return next(
+            (server for server in self.mcp_servers if server.server_type == "generic_rag"), None
         )
 
     @property

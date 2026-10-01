@@ -218,6 +218,20 @@
             "title": "Tools To Include",
             "type": "array"
           },
+          "description": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "What the models are told about this server's sources, on every turn: for a document server, typically a topics map of the publications it holds. Write here only what the application does not fetch itself. It fetches and shows the list of datasets, their structures when a dataset_structure_tool is configured, the glossary when a glossary is configured, and the number of documents and the publication dates they cover when document_stats is configured. A fact it fetches that is also written here is shown to the models twice, and goes stale when the server's content changes. The text may use Markdown headings: the models see it inside a tag of its own. A generic_rag server must set this field, document_stats, or both.",
+            "title": "Description"
+          },
           "file_sharing_tool": {
             "anyOf": [
               {
@@ -370,6 +384,60 @@
             "default": null,
             "description": "This server's glossary tools. Set it whenever the server exposes glossary tools that the research agent would be offered anyway, which is when tools_to_include is empty or already names them. With it, the application fetches the glossary at the start of every turn and shows it to the models, tells the report writer to use the glossary's terminology and how to cite a term, and lists the cited terms in the References section. Without it, none of that happens. The tools need not appear in tools_to_include. Only a statgpt server may set it."
           },
+          "document_stats": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "description": "How the document server's collection is listed for the document statistics.",
+                "properties": {
+                  "list_documents_tool": {
+                    "description": "Name of the server's tool that lists the indexed documents with their metadata. The application calls it with {\"offset\": <n>, \"limit\": <page_size>} and reads total_count and results from its answer, the shape of the Generic RAG list_documents tool.",
+                    "minLength": 1,
+                    "title": "List Documents Tool",
+                    "type": "string"
+                  },
+                  "document_date_key": {
+                    "description": "The metadata key that holds a document's publication date, for example publication_date. A value that is not an ISO 8601 date, or a date and time, is ignored.",
+                    "minLength": 1,
+                    "title": "Document Date Key",
+                    "type": "string"
+                  },
+                  "document_type_key": {
+                    "anyOf": [
+                      {
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "The metadata key that holds a document's type, for example publication_type. Set it to also report the statistics per type. A document whose value under this key is not a string belongs to no type.",
+                    "title": "Document Type Key"
+                  },
+                  "page_size": {
+                    "default": 1000,
+                    "description": "How many documents one call of the list tool requests. Set it to cover the whole collection where the server allows, so one call lists every document: further pages are requested one after another, each delaying the turn's first reply, and a collection that 10 pages do not cover gets no statistics.",
+                    "minimum": 1,
+                    "title": "Page Size",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "list_documents_tool",
+                  "document_date_key"
+                ],
+                "title": "DocumentStats",
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "How to list this server's documents for the document statistics. With it, the application lists every document at the start of every turn and shows the models how many documents there are and which publication dates they cover, overall and per type when document_type_key is set. It requests at most 10 pages. When a page cannot be listed, or 10 pages do not reach the total, the models are told for that turn that the list of documents could not be obtained. Without it, the application makes no document call. The list tool need not appear in tools_to_include. Only a generic_rag server may set it."
+          },
           "client_meta_key": {
             "anyOf": [
               {
@@ -447,7 +515,8 @@
       }
     },
     "prompts": {
-      "description": "Per-instance content injected into the prompt templates.",
+      "additionalProperties": false,
+      "description": "Per-instance content injected into the prompt templates.\n\nUnknown fields are rejected, so a field set in the wrong place fails validation instead of\nbeing dropped silently. What the models are told about a server's sources is that server's\n`description`, not a field of this model.",
       "properties": {
         "client_name": {
           "description": "Name of the client using the Deep Research",
@@ -459,12 +528,6 @@
           "description": "Name the agent uses to introduce itself in prompts",
           "minLength": 1,
           "title": "Agent Name",
-          "type": "string"
-        },
-        "data_sources_descriptions": {
-          "description": "A topics map of the data sources available in the knowledge base. Describe here only what the application does not fetch from the servers itself, such as the publications the document server holds. The application fetches the list of datasets from the dataset server, their structures when a dataset_structure_tool is configured, and the glossary when a glossary is configured, and appends them after this text on every turn, so a dataset described here too is shown to the models twice.",
-          "minLength": 1,
-          "title": "Data Sources Descriptions",
           "type": "string"
         },
         "client_rules": {
@@ -548,8 +611,7 @@
       },
       "required": [
         "client_name",
-        "agent_name",
-        "data_sources_descriptions"
+        "agent_name"
       ],
       "title": "Prompts",
       "type": "object",

@@ -25,13 +25,13 @@ VALID_PROPERTIES: dict = {
     "prompts": {
         "client_name": "Test Corp",
         "agent_name": "Test Deep Research",
-        "data_sources_descriptions": "## report\n\nA report.",
     },
     "mcp_servers": [
         {
             "server_name": "rag",
             "server_type": "generic_rag",
             "deployment_id": "generic-rag-mcp",
+            "description": "## report\n\nA report.",
             "file_sharing_tool": "get_citation_url",
             "document_metadata_resource": "documents://metadata/{document_ids}",
             "document_title_key": "publication_title",
@@ -82,7 +82,7 @@ def test_invalid_properties_record_carries_no_property_values(
         "prompts": {
             **VALID_PROPERTIES["prompts"],
             "client_name": "",
-            "data_sources_descriptions": secret_prompt,
+            "agent_name": secret_prompt,
         }
     }
     _post_completion(client, headers={"X-DIAL-APPLICATION-PROPERTIES": json.dumps(invalid)})
@@ -134,7 +134,9 @@ def test_valid_properties_reach_the_prep_agent(
     assert captured["prompts"].agent_name == "Test Deep Research"
     assert captured["prompts"].client_name == "Test Corp"
     # A channel without a dataset server makes no data-sources call: the string is the text.
-    assert captured["data_sources"].text == "## report\n\nA report."
+    assert captured["data_sources"].text == (
+        "<documents_description>\n## report\n\nA report.\n</documents_description>"
+    )
 
 
 def test_schema_endpoint_serves_unwrapped_schema(client: TestClient) -> None:

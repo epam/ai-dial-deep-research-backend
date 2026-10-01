@@ -27,7 +27,7 @@ def render_prep_agent_system(*, agent_name: str, today_date: str, data_sources: 
     return PREP_AGENT_SYSTEM.format(
         agent_name=agent_name,
         today_date=today_date,
-        data_sources_descriptions=data_sources.text,
+        data_sources=data_sources.text,
         dataset_list_failed_instruction=(
             DATASET_LIST_FAILED_INSTRUCTION if data_sources.dataset_list_failed else ""
         ),
@@ -44,12 +44,12 @@ def build_prep_agent(
     stream-drop retry, and the hook that ends the run once research has started. `PrepState` is mutated only by the tools (which
     close over `state`), never by the model. `prompts` is the instance's per-request
     prompt content, and `data_sources` the turn's data-sources fetch, whose string the agent and
-    the query clarity check receive in place of `prompts.data_sources_descriptions`.
+    the query clarity check receive as the description of the channel's data sources.
     """
     tools = PrepTools(
         state=state,
         today_date=today_date,
-        data_sources_descriptions=data_sources.text,
+        data_sources=data_sources.text,
     ).build()
     return create_agent(
         model=get_chat_model(LLMModelConfig()),

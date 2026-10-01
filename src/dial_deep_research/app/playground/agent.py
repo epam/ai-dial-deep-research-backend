@@ -34,8 +34,8 @@ def build_playground_agent(
     its middleware is the logging pair, the transient stream-drop retry, the image budget
     (its MCP tools can return images), and the tool-failure retry and relay.
 
-    `data_sources` is the turn's data-sources string, which the prompt carries in place of
-    `prompts.data_sources_descriptions`, and `data_sources_instructions` what the agent is told
+    `data_sources` is the turn's data-sources string, which the prompt carries as the description
+    of the channel's data sources, and `data_sources_instructions` what the agent is told
     about the app's failed dataset and glossary calls (empty when nothing failed).
     """
     return create_agent(
@@ -44,7 +44,7 @@ def build_playground_agent(
         system_prompt=PLAYGROUND_SYSTEM.format(
             agent_name=prompts.agent_name,
             today_date=today_date,
-            data_sources_descriptions=data_sources,
+            data_sources=data_sources,
             data_sources_instructions=data_sources_instructions,
         ),
         middleware=[

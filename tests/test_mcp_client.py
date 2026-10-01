@@ -41,6 +41,7 @@ def _deployment_server(
     return MCPClientSettings(
         server_name=server_name,
         server_type="generic_rag",
+        description="## report\n\nA report.",
         deployment_id=deployment_id,
         file_sharing_tool=file_sharing_tool,
         document_metadata_resource="documents://metadata/{document_ids}",
@@ -223,6 +224,7 @@ def _file_sharing_server(
     return MCPClientSettings(
         server_name="rag",
         server_type="generic_rag",
+        description="## report\n\nA report.",
         deployment_id="generic-rag",
         tools_to_include=tools_to_include or [],
         file_sharing_tool=tool_name,
