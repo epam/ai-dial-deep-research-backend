@@ -107,7 +107,7 @@ Use the descriptions as a topic map — hints on where to find relevant informat
 When the user asks where data might come from, answer from this list only.
 
 <data_sources>
-{data_sources_descriptions}
+{data_sources}
 </data_sources>
 {dataset_list_failed_instruction}"""
 
@@ -208,7 +208,7 @@ the user wants months or exact days, they will say so.
 ## Available data sources
 
 <data_sources>
-{data_sources_descriptions}
+{data_sources}
 </data_sources>
 """
 

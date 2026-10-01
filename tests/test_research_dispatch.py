@@ -194,12 +194,12 @@ def _properties(**overrides: Any) -> ApplicationProperties:
             "prompts": {
                 "client_name": "Test Corp",
                 "agent_name": "Test Deep Research",
-                "data_sources_descriptions": "## report\n\nA report.",
             },
             "mcp_servers": [
                 {
                     "server_name": "rag",
                     "server_type": "generic_rag",
+                    "description": "## report\n\nA report.",
                     "deployment_id": "generic-rag-mcp",
                     "file_sharing_tool": "get_citation_url",
                     "document_metadata_resource": "documents://metadata/{document_ids}",
@@ -289,7 +289,6 @@ async def test_the_channels_rules_and_kinds_of_source_reach_the_graph(
         prompts={
             "client_name": "Test Corp",
             "agent_name": "Test Deep Research",
-            "data_sources_descriptions": "## report\n\nA report.",
             "client_rules": [
                 {"name": "Dataset methodology", "research_agent": "Read the methodology pages."}
             ],

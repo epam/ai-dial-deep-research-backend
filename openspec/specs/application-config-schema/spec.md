@@ -70,13 +70,12 @@ SHALL expose:
   written in one turn. Version 1 is the first draft; each later version is a rewrite the review
   demanded. The last permitted version is delivered without another review. `1` disables the
   review: the first draft is delivered unreviewed.
-- `prompts` — a nested required model with three required, non-empty (`min_length=1`) string
-  fields: `client_name`, `agent_name`, `data_sources_descriptions`. The field description of
-  `data_sources_descriptions` SHALL tell the admin to write in it only what the app does not fetch
-  from the servers itself, and SHALL name what the app fetches: the list of datasets, their
-  structures when a dataset-structure tool is configured, and the glossary when one is configured
-  (see **data-sources-discovery**). The app appends what it fetched after this text, so a channel
-  that also describes its datasets here shows the models each dataset twice.
+- `prompts` — a nested required model with two required, non-empty (`min_length=1`) string
+  fields: `client_name`, `agent_name`. It SHALL NOT carry a `data_sources_descriptions` field: what
+  the models are told about a server's sources is that server's `description` (see **An MCP server
+  may describe its sources to the models**), and `Prompts` SHALL reject unknown fields, so a stored
+  configuration that still sets `data_sources_descriptions` fails validation instead of having its
+  text silently dropped.
   `prompts` SHALL also carry the optional `client_rules` list, empty by default, specified in
   **Prompts carry the channel's client rules** below.
 
@@ -86,15 +85,14 @@ lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
 
 #### Scenario: Valid properties validate
 
-- **WHEN** `ApplicationProperties.model_validate` receives an object with the three prompt
+- **WHEN** `ApplicationProperties.model_validate` receives an object with the two prompt
   strings and no `max_research_iterations`
 - **THEN** validation SHALL succeed and `max_research_iterations` SHALL equal `5`
 
 #### Scenario: Empty prompt field is rejected
 
-- **WHEN** `ApplicationProperties.model_validate` receives an object where any of
-  `prompts.client_name`, `prompts.agent_name`, or `prompts.data_sources_descriptions` is an
-  empty string
+- **WHEN** `ApplicationProperties.model_validate` receives an object where
+  `prompts.client_name` or `prompts.agent_name` is an empty string
 - **THEN** validation SHALL raise a pydantic `ValidationError` identifying the offending field
 
 #### Scenario: Report defaults resolve without configuration
@@ -155,6 +153,13 @@ lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
   `protected: true`
 - **THEN** validation SHALL succeed and that section SHALL receive the same protection from user
   instructions as Overview does
+
+#### Scenario: The removed descriptions field is rejected
+
+- **WHEN** `ApplicationProperties.model_validate` receives `prompts` carrying
+  `data_sources_descriptions`
+- **THEN** validation SHALL raise a pydantic `ValidationError` naming `data_sources_descriptions`
+  as an unexpected field
 
 ### Requirement: DIAL application-type schema generation
 
@@ -992,6 +997,128 @@ Because the field is optional, `dial_conf/core/applications-template.json` SHALL
 
 - **WHEN** a `statgpt` server entry sets no `dataset_structure_tool`
 - **THEN** validation SHALL pass, and no structure call SHALL be made by the app for that channel
+
+### Requirement: An MCP server may describe its sources to the models, and a document server must say something
+
+`MCPClientSettings` SHALL expose one optional field, `description: str | None`, default `None`,
+non-empty and not blank when set: `min_length=1`, and a value of only whitespace SHALL be rejected,
+since it would tell the models nothing. It is the static text the models are shown about this
+server's sources: for a document server, typically a topics map of the publications it holds; for a
+dataset server, anything about the datasets that the fetched list and structures do not say. The
+**data-sources-discovery** capability owns where the text is placed in the data-sources string.
+
+Any server type MAY set it. A `statgpt` server is not required to, because the app always fetches
+its list of datasets. **A `generic_rag` server SHALL set `description`, `document_stats`, or
+both**, and a configuration whose `generic_rag` server sets neither SHALL be rejected with a
+validation error naming the server and both fields. Without either, the models would be told
+nothing about the documents, while the preparation instructions say that nothing outside the
+data sources they list is reachable during research.
+
+The text MAY carry Markdown structure of its own, such as headings: the app shows it inside a tag
+of its own (see **data-sources-discovery**), so its headings cannot take in the parts after it.
+
+The field description SHALL tell the admin that the models see this text on every turn, and that the
+application fetches and shows on its own the list of datasets, their structures when a
+dataset-structure tool is configured, the glossary when one is configured, and the document
+statistics when `document_stats` is configured, so a fact the app fetches that is also written here
+is shown to the models twice and goes stale when the server's content changes. It SHALL also say
+that a `generic_rag` server sets this field, `document_stats`, or both.
+
+The committed `dial_conf/core/applications-template.json` SHALL set `description` on its
+`generic_rag` server, the one of the two fields that needs no running server to show, and SHALL
+NOT set it on its `statgpt` server.
+
+#### Scenario: A document server carries the topics map
+
+- **WHEN** a `generic_rag` server entry sets `description` to a topics map of its publications
+- **THEN** validation SHALL pass, and the data-sources string SHALL carry that text
+
+#### Scenario: A dataset server without a description is valid
+
+- **WHEN** a `statgpt` server entry sets no `description`
+- **THEN** validation SHALL pass
+
+#### Scenario: A document server with statistics and no description is valid
+
+- **WHEN** a `generic_rag` server entry sets `document_stats` and no `description`
+- **THEN** validation SHALL pass
+
+#### Scenario: A document server with neither is rejected
+
+- **WHEN** a `generic_rag` server entry sets neither `description` nor `document_stats`
+- **THEN** validation SHALL fail with an error naming that server, `description` and
+  `document_stats`
+
+#### Scenario: An empty or blank description is rejected
+
+- **WHEN** a server entry sets `description` to an empty string or to a string of only whitespace
+- **THEN** validation SHALL fail with an error identifying the field
+
+### Requirement: A generic_rag MCP server may configure its document statistics
+
+`MCPClientSettings` SHALL expose one optional field, `document_stats`, default `None`. When set, it
+SHALL be a nested object that rejects unknown fields, with these fields:
+
+- `list_documents_tool: str`, required, non-empty: the name of the server's tool that lists the
+  indexed documents with their metadata.
+- `document_date_key: str`, required, non-empty: the metadata key that holds a document's
+  publication date, for example `publication_date`.
+- `document_type_key: str | None`, default `None`, non-empty when set: the metadata key that holds
+  a document's type, for example `publication_type`. When set, the statistics are also reported
+  per type.
+- `page_size: int`, default `1000`, constrained `ge=1`: how many documents one call of the list
+  tool requests.
+
+The two keys are configured rather than discovered because a Generic RAG channel defines its own
+metadata schema, so the names of its date and type fields differ between channels. Setting the
+same key for both SHALL NOT be a validation error: no channel is known to need it, and nothing
+breaks when one does.
+
+The field description SHALL tell the admin that with `document_stats` the app lists every
+document at the start of every turn and shows the models how many documents there are and which
+publication dates they cover, overall and per type when `document_type_key` is set. It SHALL
+also say that the app requests at most `MAX_DOCUMENT_PAGES` pages, and that when a page cannot be
+listed or the cap does not reach the total, the models are told for that turn that the list of
+documents could not be obtained. Without it, the app makes no document call. The `page_size` field
+description SHALL say that a collection the cap does not cover gets no statistics.
+
+**Only a `generic_rag` server may set it**, and a configuration where any other server type does
+SHALL be rejected with a validation error naming the offending server. The documents are served by
+the document server.
+
+Naming a tool the server does not advertise, or a key no document carries, SHALL NOT be a
+validation error, because the advertised tools and the stored metadata are only known at request
+time. A missing tool surfaces as a failed call, which **data-sources-discovery** handles without
+failing the turn, and a missing key leaves the dates or the types unknown.
+
+`list_documents_tool` SHALL NOT need to appear in `tools_to_include`, because the app makes the
+calls itself. Whether the tool is offered to the research agent remains that filter's decision.
+
+Because the field is optional, `dial_conf/core/applications-template.json` SHALL NOT set it.
+
+#### Scenario: A generic_rag server configures document statistics
+
+- **WHEN** a `generic_rag` server entry sets `document_stats` with `list_documents_tool`
+  `list_documents`, `document_date_key` `publication_date` and `document_type_key`
+  `publication_type`
+- **THEN** validation SHALL pass, and `page_size` SHALL equal `1000`
+
+#### Scenario: A statgpt server configuring document statistics is rejected
+
+- **WHEN** a `statgpt` server entry sets `document_stats`
+- **THEN** validation SHALL fail with an error naming that server and stating that only a
+  `generic_rag` server may configure document statistics
+
+#### Scenario: An incomplete or malformed object is rejected
+
+- **WHEN** a `document_stats` object omits `document_date_key`, sets `page_size` to 0, or carries
+  an unknown field
+- **THEN** validation SHALL fail with an error identifying that field
+
+#### Scenario: The type key is optional
+
+- **WHEN** a `document_stats` object sets no `document_type_key`
+- **THEN** validation SHALL pass, and the statistics SHALL carry no per-type part
 
 ### Requirement: Prompts carry the channel's client rules
 

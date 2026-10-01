@@ -47,12 +47,12 @@ def _properties() -> ApplicationProperties:
             "prompts": {
                 "client_name": "Test Corp",
                 "agent_name": "Test Deep Research",
-                "data_sources_descriptions": "## report\n\nA report.",
             },
             "mcp_servers": [
                 {
                     "server_name": "rag",
                     "server_type": "generic_rag",
+                    "description": "## report\n\nA report.",
                     "deployment_id": "generic-rag-mcp",
                     "file_sharing_tool": "get_citation_url",
                     "document_metadata_resource": "documents://metadata/{document_ids}",

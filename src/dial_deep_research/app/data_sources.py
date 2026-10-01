@@ -1,20 +1,25 @@
-"""The data-sources fetch: what the channel's dataset server reports, fetched once per turn.
+"""The data-sources fetch: what the channel's servers report, fetched once per turn.
 
-On a channel with a `statgpt` server the turn starts by fetching two parts concurrently:
+The turn starts by fetching up to three parts concurrently:
 
-- **the datasets**: the list-datasets tool's answer, and, when a `dataset_structure_tool` is
-  configured, the structure of every listed dataset, one call per dataset, all at once;
-- **the glossary**, when the server configures one (see `glossary.py`).
+- **the datasets**, on a channel with a `statgpt` server: the list-datasets tool's answer, and,
+  when a `dataset_structure_tool` is configured, the structure of every listed dataset, one call
+  per dataset, all at once;
+- **the glossary**, when the `statgpt` server configures one (see `glossary.py`);
+- **the documents**, when the `generic_rag` server configures `document_stats` (see
+  `document_stats.py`).
 
-Each list call and each structure call gets up to three attempts (see `data_source_calls.py`).
-What the models see is the **data-sources string**: the channel's hand-written
-`data_sources_descriptions`, then the datasets section, then the glossary, each after a blank line.
-The string goes to every model call that plans, researches or writes the report, and `DataSources`
-also carries what the rest of the turn reads: the catalogue the citations resolve against, and what
-the agents' instructions depend on (see the data-sources-discovery capability).
+Each call gets up to three attempts (see `data_source_calls.py`). What the models see is the
+**data-sources string**: the document statistics, the document server's `description`, the
+datasets section, the dataset server's `description` and the glossary, each part present only when
+its server is configured and the part has content, joined by blank lines, and each description
+inside a tag of its own. The string goes to every model call that plans, researches or writes the
+report, and `DataSources` also carries what the rest of the turn reads: the catalogue the
+citations resolve against, and what the agents' instructions depend on (see the
+data-sources-discovery capability).
 
-No failure of the fetch fails the turn: a failed list becomes its failure text, and a structure
-that was not obtained becomes a failure entry. Cancellation propagates.
+No failure of the fetch fails the turn: a failed or incomplete list becomes its failure text, and a
+structure that was not obtained becomes a failure entry. Cancellation propagates.
 
 The log records carry counts and failure kinds only: the catalogue is the client's content.
 """
@@ -37,6 +42,7 @@ from dial_deep_research.app.data_source_calls import (
     call_with_attempts,
     of_structured,
 )
+from dial_deep_research.app.document_stats import DocumentStatsFetch, fetch_document_stats
 from dial_deep_research.app.glossary import GlossaryFetch, fetch_glossary
 from dial_deep_research.app.mcp_tools import build_mcp_client
 from dial_deep_research.app.research.citations import DatasetSource
@@ -53,6 +59,8 @@ DATASETS_HEADING = "Datasets:"
 STRUCTURES_HEADING = "Dataset structures:"
 DATASETS_LIST_FAILED_TEXT = "failed to obtain list of datasets"
 STRUCTURE_FAILED_TEXT = "failed to obtain dataset structure"
+DOCUMENTS_DESCRIPTION_TAG = "documents_description"
+DATASETS_DESCRIPTION_TAG = "datasets_description"
 
 # The argument the dataset-structure tool takes, which also keys a failure entry: the app does not
 # know which key the server's own answer names the dataset under.
@@ -77,13 +85,15 @@ class DataSources(BaseModel):
     """One turn's data sources: the string every planning, research and report call receives,
     and what the fetch learned that the turn's other steps depend on.
 
-    `datasets` is `None` on a channel without a dataset server, and `glossary` on a channel that
-    configures no glossary; neither part was fetched then.
+    `datasets` is `None` on a channel without a dataset server, `glossary` on a channel that
+    configures no glossary, and `documents` on a channel that configures no document statistics;
+    that part was not fetched then.
     """
 
     text: str
     datasets: DatasetsFetch | None = None
     glossary: GlossaryFetch | None = None
+    documents: DocumentStatsFetch | None = None
 
     @property
     def catalogue(self) -> dict[str, DatasetSource] | None:
@@ -302,40 +312,84 @@ def _log_fetched(
     )
 
 
-def join_data_sources(descriptions: str, *parts: str | None) -> str:
-    """The data-sources string: the hand-written descriptions, then each fetched part present,
-    each after a blank line."""
-    return "\n\n".join([descriptions, *(part for part in parts if part is not None)])
+def _tagged(tag: str, text: str | None) -> str | None:
+    """`text` between an opening and a closing `tag` line, or `None` when there is no text."""
+    return None if text is None else f"<{tag}>\n{text}\n</{tag}>"
+
+
+def join_data_sources(
+    *,
+    document_stats: str | None = None,
+    documents_description: str | None = None,
+    datasets: str | None = None,
+    datasets_description: str | None = None,
+    glossary: str | None = None,
+) -> str:
+    """The data-sources string: the parts that are set, in this order, joined by blank lines.
+
+    A description is the admin's text and often carries Markdown headings, so each is wrapped in a
+    tag of its own: without it, the part after it would read as a subsection of its last heading.
+    The fetched parts each start with a label line and stay unwrapped. An unset part leaves
+    nothing behind.
+    """
+    parts = [
+        document_stats,
+        _tagged(DOCUMENTS_DESCRIPTION_TAG, documents_description),
+        datasets,
+        _tagged(DATASETS_DESCRIPTION_TAG, datasets_description),
+        glossary,
+    ]
+    return "\n\n".join(part for part in parts if part is not None)
 
 
 async def fetch_data_sources(
     properties: ApplicationProperties, *, bearer_token: str | None = None
 ) -> DataSources:
-    """Run the turn's data-sources fetch, or make no call on a channel without a dataset server.
+    """Run the turn's data-sources fetch, or make no call when no part has anything to fetch.
 
-    The client is built for this fetch alone, with the same connection and credentials as the
-    turn's other MCP traffic to the server. The datasets part and the glossary part run
-    concurrently, so the turn waits for the slower of the two rather than for their sum.
+    Each server gets a client built for this fetch alone, with the same connection and credentials
+    as the turn's other MCP traffic to it. The parts run concurrently, so the turn waits for the
+    slowest of them rather than for their sum.
     """
-    descriptions = properties.prompts.data_sources_descriptions
-    server = properties.dataset_server
-    if server is None:
-        return DataSources(text=descriptions)
-    client = build_mcp_client([server], bearer_token=bearer_token)
-    glossary_tools = server.glossary
+    dataset_server = properties.dataset_server
+    document_server = properties.document_server
 
-    async def glossary_part() -> GlossaryFetch | None:
-        if glossary_tools is None:
+    async def datasets_part() -> tuple[DatasetsFetch, GlossaryFetch | None] | None:
+        if dataset_server is None:
             return None
-        return await fetch_glossary(client, server_name=server.server_name, tools=glossary_tools)
+        client = build_mcp_client([dataset_server], bearer_token=bearer_token)
+        glossary_tools = dataset_server.glossary
 
-    datasets, glossary = await asyncio.gather(
-        fetch_datasets(client, server=server), glossary_part()
-    )
+        async def glossary_part() -> GlossaryFetch | None:
+            if glossary_tools is None:
+                return None
+            return await fetch_glossary(
+                client, server_name=dataset_server.server_name, tools=glossary_tools
+            )
+
+        return await asyncio.gather(fetch_datasets(client, server=dataset_server), glossary_part())
+
+    async def documents_part() -> DocumentStatsFetch | None:
+        if document_server is None or document_server.document_stats is None:
+            return None
+        client = build_mcp_client([document_server], bearer_token=bearer_token)
+        return await fetch_document_stats(
+            client, server_name=document_server.server_name, config=document_server.document_stats
+        )
+
+    dataset_parts, documents = await asyncio.gather(datasets_part(), documents_part())
+    datasets, glossary = dataset_parts if dataset_parts is not None else (None, None)
     return DataSources(
         text=join_data_sources(
-            descriptions, datasets.section, glossary.text if glossary is not None else None
+            document_stats=documents.text if documents is not None else None,
+            documents_description=(
+                document_server.description if document_server is not None else None
+            ),
+            datasets=datasets.section if datasets is not None else None,
+            datasets_description=dataset_server.description if dataset_server is not None else None,
+            glossary=glossary.text if glossary is not None else None,
         ),
         datasets=datasets,
         glossary=glossary,
+        documents=documents,
     )

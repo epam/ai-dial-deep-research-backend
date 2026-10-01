@@ -26,13 +26,13 @@ _PROPERTIES: dict = {
     "prompts": {
         "client_name": "ACME",
         "agent_name": "ACME Deep Research",
-        "data_sources_descriptions": "## Publications\n\nMarket Outlook 2025.",
     },
     "mcp_servers": [
         {
             "server_name": "datasets",
             "server_type": "statgpt",
             "deployment_id": "statgpt-mcp",
+            "description": "## Publications\n\nMarket Outlook 2025.",
             "list_datasets_tool": "list_datasets",
             "client_meta_key": "acme.example.org/client",
             "references_table": {"title": "Datasets", "columns": [{"heading": "N", "key": "name"}]},

@@ -276,9 +276,9 @@ updating this requirement.
 **1. The preparation agent's model call** (one per agent step)
 
 - System prompt: the preparation instructions, filled with the instance's `agent_name`, today's
-  date, and the turn's data-sources string: `data_sources_descriptions`, followed by the datasets
-  section when the channel has a dataset server and by the rendered glossary when the channel
-  configures one (see **data-sources-discovery**). When the list of datasets failed, it also
+  date, and the turn's data-sources string: the configured servers' descriptions, the document
+  statistics block, the datasets section and the rendered glossary, each when its condition holds
+  (see **data-sources-discovery**). When the list of datasets failed, it also
   carries the instruction to plan around the failure (see **data-sources-discovery**). It carries
   neither the instruction to request missing definitions nor the instruction about the dataset
   tools, because this agent has no MCP tools.
@@ -305,8 +305,8 @@ updating this requirement.
 
 **3. The plan approval check** (one per `approve_plan` call)
 
-- System prompt: the plan-approval instructions, filled with today's date only — no data-source
-  descriptions, no datasets section and no glossary.
+- System prompt: the plan-approval instructions, filled with today's date only — no server
+  descriptions, no document statistics block, no datasets section and no glossary.
 - Messages: one human message carrying the recorded plan as a numbered list and the rendered
   conversation, filtered exactly as in the clarity check. No image content.
 - Output: a structured `PlanReviewResponse` — the assessment, whether the recorded plan matches
@@ -330,7 +330,7 @@ updating this requirement.
 - **WHEN** a preparation turn runs on a channel whose glossary listed terms
 - **THEN** the preparation agent's system prompt and the clarity check's system prompt SHALL carry
   the same data-sources string ending in the rendered glossary, and the approval check's system
-  prompt SHALL carry neither the data-sources descriptions nor the glossary
+  prompt SHALL carry no part of the data-sources string
 
 #### Scenario: The agent and the clarity check see the datasets section
 

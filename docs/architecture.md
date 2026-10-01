@@ -17,16 +17,24 @@ when a spec changes the diagram points at the new wording instead of restating s
 ## Data-sources fetch
 
 Specs: [data-sources-discovery](../openspec/specs/data-sources-discovery/spec.md).
-Code: `app/data_sources.py`, `app/glossary.py`, `app/data_source_calls.py`, `app/completion.py`.
+Code: `app/data_sources.py`, `app/glossary.py`, `app/document_stats.py`,
+`app/data_source_calls.py`, `app/completion.py`.
 
-Every turn on a channel with a `statgpt` server starts with one fetch of what that server reports,
-before the preparation agent's first model call. A conversation that already handed off to research
-is refused before it. The fetch has two parts, run concurrently:
+Every turn on a channel with a `statgpt` server, or with a `generic_rag` server that sets
+`document_stats`, starts with one fetch of what those servers report, before the preparation
+agent's first model call. A conversation that already handed off to research is refused before it.
+The fetch has up to three parts, run concurrently:
 
-- **the datasets**: the list-datasets tool's answer, and, when `dataset_structure_tool` is set, the
-  structure of every listed dataset, one call per dataset, all at once;
-- **the glossary**, when `glossary` is set: the list-terms tool's answer, then the definitions of
-  the listed terms in batches of at most `max_terms_per_definitions_call`, in at most three rounds.
+- **the datasets**, on a channel with a `statgpt` server: the list-datasets tool's answer, and, when
+  `dataset_structure_tool` is set, the structure of every listed dataset, one call per dataset, all
+  at once;
+- **the glossary**, when the `statgpt` server sets `glossary`: the list-terms tool's answer, then
+  the definitions of the listed terms in batches of at most `max_terms_per_definitions_call`, in at
+  most three rounds;
+- **the documents**, when the `generic_rag` server sets `document_stats`: the list-documents tool's
+  pages of `page_size` documents, one after another until the first page's `total_count` is
+  reached, at most `MAX_DOCUMENT_PAGES` pages, reduced to the document count and the
+  publication-date range, overall and per type.
 
 ```mermaid
 flowchart LR
@@ -35,29 +43,36 @@ flowchart LR
         direction TB
         list["list-datasets call"] --> structures["one structure call<br/>per listed dataset"]
         terms["list-terms call"] --> definitions["definitions batches,<br/>up to three rounds"]
+        pages["list-documents pages,<br/>one after another"] --> stats["document statistics"]
     end
-    fetch --> string["data-sources string:<br/>data_sources_descriptions,<br/>datasets section, glossary"]
+    fetch --> string["data-sources string:<br/>document statistics, document server's description,<br/>datasets section, dataset server's description, glossary"]
     string --> prep["preparation agent<br/>and clarity check"]
     string --> research["every research graph node"]
     fetch --> catalogue["catalogue seeds<br/>CitationLookups"]
 ```
 
-Each list call and each structure call gets up to three attempts, about one and then two seconds
-apart, and every call, its session open included, runs in an MCP session of its own under a
+Each list call, structure call and page call gets up to three attempts, about one and then two
+seconds apart, and every call, its session open included, runs in an MCP session of its own under a
 20-second deadline. The tools are called by their configured names, whatever `tools_to_include`
-says. No failure ends the turn: a failed list becomes the text `failed to obtain list of datasets` or
-`failed to obtain list of terms`, a structure not obtained becomes a failure entry, and a term not
-resolved stays listed with `"definition": null`.
+says. No failure ends the turn: a failed list becomes the text `failed to obtain list of datasets`
+or `failed to obtain list of terms`, a structure not obtained becomes a failure entry, a term not
+resolved stays listed with `"definition": null`, and an incomplete documents listing becomes
+`failed to obtain list of documents`.
 
-The **data-sources string** is `prompts.data_sources_descriptions`, then the datasets section, then
-the glossary, each after a blank line. It goes to the preparation agent, the clarity check inside
-`update_query`, the playground agent, and every node of the research graph; the plan approval check
-receives none of it. On a channel without a `statgpt` server it is `data_sources_descriptions`
-alone, and no call is made. The research agent and the playground agent are also told which of the
-app's calls failed, so they call those tools themselves, at most three times each; the research
-agent is also told not to repeat a call whose answer the string already shows. When the list of
-datasets failed, the preparation agent is told to plan a search of the available datasets instead of
-naming them.
+The **data-sources string** is the document statistics, the document server's `description`, the
+datasets section, the dataset server's `description` and the glossary, in that order. Each part is
+present only when its server is configured and the part has content, and the parts are joined by
+blank lines. Each description is wrapped in a tag of its own, `<documents_description>` or
+`<datasets_description>`, so the Markdown headings an admin writes in it do not take in the part
+that follows. The string goes to the preparation agent, the clarity check inside `update_query`,
+the playground agent, and every node of the research graph; the plan approval check receives none
+of it. A `generic_rag` server must set a `description`, `document_stats`, or both. A channel with
+neither a `statgpt` server nor `document_stats` makes no call, and its string carries the servers'
+descriptions alone. The research agent and the playground agent are also told which of the app's
+calls failed, so they call those tools themselves, at most three times each; the research agent is
+also told not to repeat a call whose answer the string already shows. When the list of datasets
+failed, the preparation agent is told to plan a search of the available datasets instead of naming
+them.
 
 The playground has a completion of its own and runs the same fetch at the start of its turn. The
 fetched data is never persisted: the next turn fetches it again.

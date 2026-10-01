@@ -545,18 +545,18 @@ is part of the contract, not an accident of implementation.
 **1. research-agent** (one call per agent step)
 
 - System prompt: the research-agent instructions, filled with today's date, the instance's
-  `client_name`, and the turn's data-sources string in a `<data_sources>` block: the instance's
-  `data_sources_descriptions`, followed by the datasets section when the channel has a dataset
-  server and by the rendered glossary when the channel configures one (see
-  **data-sources-discovery**). They state when to announce a step with `update_status`, and the
-  rules that it is called at most once per assistant message, never as a message's only tool call,
-  and never together with `finish_iteration`. When the glossary's list failed or some of its terms
-  did not resolve, they also carry the instruction to repeat what the app's glossary fetch missed,
-  with at most three calls, each part only when its tool is bound. When the fetch obtained the
-  whole glossary, they instead tell the agent not to call the bound glossary tools. On a channel with a dataset server, they also
-  carry the instruction that says, for each bound dataset tool, whether the app's own calls
-  succeeded: the agent does not call a tool again for an answer the datasets section shows, and
-  calls it when the app's calls failed, with at most three calls (see **data-sources-discovery**).
+  `client_name`, and the turn's data-sources string in a `<data_sources>` block: the configured
+  servers' descriptions, the document statistics block, the datasets section and the rendered
+  glossary, each when its condition holds (see **data-sources-discovery**). They state when to
+  announce a step with `update_status`, and the rules that it is called at most once per assistant
+  message, never as a message's only tool call, and never together with `finish_iteration`. When the
+  glossary's list failed or some of its terms did not resolve, they also carry the instruction to
+  repeat what the app's glossary fetch missed, with at most three calls, each part only when its
+  tool is bound. When the fetch obtained the whole glossary, they instead tell the agent not to call
+  the bound glossary tools. On a channel with a dataset server, they also carry the instruction that
+  says, for each bound dataset tool, whether the app's own calls succeeded: the agent does not call
+  a tool again for an answer the datasets section shows, and calls it when the app's calls failed,
+  with at most three calls (see **data-sources-discovery**).
 - System prompt, additionally: the research-agent part of every generic quality rule, after the
   statement of the kinds of source the channel's configured servers give it, and, when
   a rule of the channel's `prompts.client_rules` has a research-agent part, those parts in a
@@ -710,19 +710,20 @@ is part of the contract, not an accident of implementation.
 - **THEN** the system prompts of research-agent, research-review, the report call and
   report-review SHALL each carry the same data-sources string, ending in the rendered glossary
 
-#### Scenario: A channel without a glossary still gives research the topics map
+#### Scenario: A channel without a dataset server still gives research the topics map
 
-- **WHEN** a research turn runs on a channel that configures no glossary and has no dataset server
+- **WHEN** a research turn runs on a channel that has no dataset server and whose document server
+  sets a `description`
 - **THEN** the system prompts of research-agent, research-review, the report call and
-  report-review SHALL each carry the instance's `data_sources_descriptions`, and no prompt of the
-  research graph SHALL carry a datasets section, a glossary or the glossary-terminology rule
+  report-review SHALL each carry that description, and no prompt of the research graph SHALL carry
+  a datasets section, a glossary or the glossary-terminology rule
 
 #### Scenario: Every research graph call receives the datasets section
 
 - **WHEN** a research turn runs on a channel with a dataset server that configures no glossary
 - **THEN** the system prompts of research-agent, research-review, the report call and
-  report-review SHALL each carry the instance's `data_sources_descriptions` followed by the same
-  datasets section, and only research-agent's SHALL carry the instruction about the dataset
+  report-review SHALL each carry the same data-sources string, including the same datasets
+  section, and only research-agent's SHALL carry the instruction about the dataset
   tools
 
 ### Requirement: Research-agent and research-review act on a failed tool call
