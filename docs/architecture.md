@@ -265,8 +265,8 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   `<cit data-id="…"></cit>`, then the References section is built and appended. Each kind of
   citation has its own condition, and each is about whether the reader can open what the pill points at: a `[doc <id>, page <ix>]` marker converts
   when the file-sharing tool returned a PDF URL for that document, a `[dataset <urn>]` marker
-  converts when the list-datasets tool reported that URN with an absolute `http` or `https`
-  URL, and a `[data_query <id>]` marker converts when the turn captured, for exactly that query
+  converts when the list-datasets tool reported, for that URN, an absolute `http` or `https`
+  data explorer link or page URL (the explorer link wins when both are usable), and a `[data_query <id>]` marker converts when the turn captured, for exactly that query
   id, a data explorer URL that is absolute `http` or `https` (see the data-query capture bullet
   below). Whether the query returned data is not part of that condition, and a query without a
   URL never falls back to its dataset's page. A marker whose condition fails keeps its text exactly
@@ -357,18 +357,20 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   document URLs come from one call per turn to the tool named by `mcp_servers[].file_sharing_tool`,
   invoked tool-call-shaped so its structured result is reachable, and with the agent tools' error
   handling cleared so a failure reaches the app instead of arriving as result text. The dataset
-  names, page addresses and last-update dates come from the answer of the tool named by
+  names, addresses and last-update dates come from the answer of the tool named by
   `mcp_servers[].list_datasets_tool`, the channel's whole catalogue, from which the app selects the
   cited URNs — those of the dataset markers and those of the cited queries with an explorer link —
-  by exact string match. The data-sources fetch's answer seeds the catalogue at the start of the
+  by exact string match. A dataset's address is the data explorer link the answer's `_meta` payload
+  reports for it under `mcp_servers[].client_meta_key`, and the record's `url` (its page) when the
+  payload reports no usable link; `parse_catalogue` decides it once, so the pill, the References row
+  and the resolved count all read the same `DatasetSource.url`. The data-sources fetch's answer seeds the catalogue at the start of the
   turn; only when that call failed does the first check or the delivery that needs the catalogue
-  call the tool, once successfully per turn. The catalogue and the document metadata are read
+  call the tool, once successfully per turn, in an MCP session of its own, because the tool message
+  the agent would read drops `_meta`. The catalogue and the document metadata are read
   through one `CitationLookups` object per request, which the report review's identifier checks
   fill first, so the delivery asks only for what no check has looked up. A `statgpt`
   server must name that tool and only a `statgpt` server may, and it **stays in the research
-  agent's tool list**, because a catalogue listing is how the agent discovers which datasets exist;
-  its error handling therefore stays the agent's, and the reader takes a server error off the
-  returned message's `status`. Each metadata surface is required of the server type whose citation
+  agent's tool list**, because a catalogue listing is how the agent discovers which datasets exist. Each metadata surface is required of the server type whose citation
   ids it resolves, so a channel that resolves none of a kind is one that configures no server of
   that kind: it converts nothing of that kind and records the absence at DEBUG. Every other failure — a tool the
   server does not advertise, a failed call, an unreadable answer, an id the answer omitted, and a
@@ -525,8 +527,8 @@ The rest of the loop, in brief — each item is specified in the linked specs:
 - **Data-query capture** (`app/mcp_tools.py`, `app/research/data_queries.py`): the per-request MCP
   client carries a tool-call interceptor on the `statgpt` server, because the MCP adapter drops a
   tool result's `_meta` before any tool message exists. The interceptor awaits the call, and on a
-  successful result whose `_meta` carries the key named by `mcp_servers[].data_query_meta_key` it
-  keeps one record per query id: that query's element of the `_meta` payload and its element of the
+  successful result whose `_meta` carries, under the key named by `mcp_servers[].client_meta_key`,
+  a payload with a `queries` field, it keeps one record per query id: that query's element of the `_meta` payload and its element of the
   structured result (or a candidate dataset's `query`), each whole, joined by `queryId`. It returns
   the same result object, so what the agent reads is unchanged, and a payload it cannot read costs
   that result's records alone. The records live on `LoadedMcpTools.data_queries` for the rest of

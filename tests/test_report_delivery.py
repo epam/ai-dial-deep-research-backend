@@ -20,12 +20,14 @@ from langchain_core.documents.base import Blob
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import ValuesStreamPart
+from mcp.types import CallToolResult
 
 from dial_deep_research.app.data_sources import DataSources
 from dial_deep_research.app.research import references as references_module
 from dial_deep_research.app.research import runner as runner_module
 from dial_deep_research.app.research.citation_lookups import CitationLookups
 from dial_deep_research.app.research.data_queries import DataQueryRecord, DataQueryStore
+from dial_deep_research.app.research.dataset_metadata import CatalogueTool
 from dial_deep_research.app.research.runner import CITATIONS_ACTIVITY, ResearchRunner
 from dial_deep_research.app_properties import (
     ApplicationProperties,
@@ -36,9 +38,14 @@ from dial_deep_research.app_properties import (
     ServerReferencesTable,
 )
 from tests.dial_spies import ChoiceSpy
+from tests.mcp_fakes import CombinedClient, FakeMcpServer, structured
 
 _TOOL_NAME = "share_documents"
 _DATASET_TOOL_NAME = "list_datasets"
+_CLIENT_META_KEY = "acme.example.org/client"
+_CATALOGUE_TOOL = CatalogueTool(
+    server_name="datasets", tool_name=_DATASET_TOOL_NAME, client_meta_key=_CLIENT_META_KEY
+)
 _TITLE_KEY = "publication_title"
 _METADATA_SOURCE = DocumentMetadataSource(
     server_name="publications",
@@ -135,26 +142,34 @@ class _UnreadableMetadataClient(_MetadataClient):
 def _catalogue_tool(
     *,
     datasets: list[dict[str, Any]] | None = None,
-    artifact: Any = None,
+    structured_content: Any = None,
+    explorer_links: dict[str, str] | None = None,
     raises: Exception | None = None,
     calls: list[dict[str, Any]] | None = None,
-) -> BaseTool:
-    """A list-datasets tool shaped like the MCP adapter's: the catalogue in the artifact."""
-    payload = artifact if datasets is None else {"structured_content": {"datasets": datasets}}
+) -> FakeMcpServer:
+    """A dataset server answering its list-datasets tool with the catalogue as structured content,
+    and `explorer_links` by URN in `_meta` under the client meta key."""
+    content = structured_content if datasets is None else {"datasets": datasets}
+    meta = (
+        {
+            _CLIENT_META_KEY: {
+                "datasets": [
+                    {"id": urn, "dataExplorerUrl": url} for urn, url in explorer_links.items()
+                ]
+            }
+        }
+        if explorer_links is not None
+        else None
+    )
 
-    async def list_datasets() -> tuple[str, Any]:
+    def list_datasets(arguments: dict[str, Any]) -> CallToolResult:
         if calls is not None:
-            calls.append({})
+            calls.append(arguments)
         if raises is not None:
             raise raises
-        return "the catalogue, serialized as text", payload
+        return structured(content, meta=meta)
 
-    return StructuredTool.from_function(
-        coroutine=list_datasets,
-        name=_DATASET_TOOL_NAME,
-        description="List the datasets this channel exposes.",
-        response_format="content_and_artifact",
-    )
+    return FakeMcpServer({_DATASET_TOOL_NAME: list_datasets})
 
 
 _DOCUMENTS_TABLE = ServerReferencesTable(
@@ -195,7 +210,7 @@ async def _deliver(
     configured_tool_name: str | None = _TOOL_NAME,
     mcp_client: Any = None,
     metadata_source: DocumentMetadataSource | None = None,
-    dataset_tool: BaseTool | None = None,
+    dataset_tool: FakeMcpServer | None = None,
     configured_dataset_tool_name: str | None = None,
     data_queries: DataQueryStore | None = None,
     lookups: CitationLookups | None = None,
@@ -209,13 +224,18 @@ async def _deliver(
 ) -> None:
     """Deliver the settled report. Every delivery appends the References section, so a test that
     configures no table for its sources gets the section's cited-nothing text."""
+    resources = mcp_client or _MetadataClient()
     await runner._deliver_report(
         file_sharing_tool=tool,
         configured_tool_name=configured_tool_name,
         lookups=lookups
         or CitationLookups(
-            dataset_tool=dataset_tool,
-            client=mcp_client or _MetadataClient(),
+            dataset_tool=_CATALOGUE_TOOL if dataset_tool is not None else None,
+            client=(
+                CombinedClient(resources=resources, tools=dataset_tool).client()
+                if dataset_tool is not None
+                else resources
+            ),
             document_source=metadata_source,
             data_queries=data_queries or DataQueryStore(),
         ),
@@ -784,6 +804,29 @@ async def test_a_cited_dataset_is_delivered_as_a_pill_opening_its_page() -> None
     assert "selector" not in annotation["body"]
 
 
+_EXPLORER_URL = "https://portal.example.org/explorer?urn=IMF:WEO(1.0.0)"
+
+
+async def test_a_cited_dataset_with_an_explorer_link_opens_it_inline_and_in_its_row() -> None:
+    """The catalogue fetched at the citation step keeps the result's `_meta`, so the inline pill
+    and the References row both open the data explorer rather than the dataset's page."""
+    runner, choice = _make_runner()
+    _settle(runner, f"Growth slowed. [dataset {_URN}]")
+
+    await _deliver(
+        runner,
+        configured_tool_name=None,
+        dataset_tool=_catalogue_tool(datasets=[_RECORD], explorer_links={_URN: _EXPLORER_URL}),
+        configured_dataset_tool_name=_DATASET_TOOL_NAME,
+        references_tables=(_DATASETS_TABLE,),
+    )
+
+    inline, row = _annotations(choice)
+    assert inline["body"]["source"]["attachment"]["url"] == _EXPLORER_URL
+    assert row["body"]["title"] == _DATASET_NAME
+    assert row["body"]["source"]["attachment"]["url"] == _EXPLORER_URL
+
+
 async def test_a_document_and_a_dataset_citation_are_both_delivered() -> None:
     runner, choice = _make_runner()
     _settle(runner, f"One [doc 442, page 3]. Two [dataset {_URN}].")
@@ -899,9 +942,11 @@ async def test_a_configured_dataset_tool_the_server_does_not_advertise_warns(
     ("tool_kwargs", "kind"),
     [
         pytest.param({"raises": RuntimeError("no")}, "dataset_call_failed", id="the-call-raises"),
-        pytest.param({"artifact": None}, "dataset_no_structured_result", id="no-structured-result"),
         pytest.param(
-            {"artifact": {"structured_content": {"items": []}}},
+            {"structured_content": None}, "dataset_no_structured_result", id="no-structured-result"
+        ),
+        pytest.param(
+            {"structured_content": {"items": []}},
             "dataset_unreadable_result",
             id="unreadable-answer",
         ),
@@ -1327,6 +1372,24 @@ async def test_a_report_citing_only_data_queries_lists_their_dataset_once(
     assert _warnings(caplog) == []
 
 
+async def test_a_cited_querys_dataset_row_opens_the_explorer_and_its_pill_the_query() -> None:
+    runner, choice = _make_runner()
+    _settle(runner, "One [data_query dq_0000000001].")
+
+    await _deliver(
+        runner,
+        configured_tool_name=None,
+        dataset_tool=_catalogue_tool(datasets=[_RECORD], explorer_links={_URN: _EXPLORER_URL}),
+        configured_dataset_tool_name=_DATASET_TOOL_NAME,
+        data_queries=_store(_captured("dq_0000000001")),
+        references_tables=(_DATASETS_TABLE,),
+    )
+
+    pill, row = _dataset_annotations(choice)
+    assert pill["body"]["source"]["attachment"]["url"] == _QUERY_URL
+    assert row["body"]["source"]["attachment"]["url"] == _EXPLORER_URL
+
+
 async def test_a_turn_that_captured_nothing_warns_once(caplog: pytest.LogCaptureFixture) -> None:
     runner, _ = _make_runner()
     _settle(runner, "One [data_query dq_0000000001]. Two [data_query dq_0000000002].")
@@ -1434,8 +1497,10 @@ async def test_a_catalogue_the_review_fetched_is_not_fetched_again_at_delivery()
     _settle(runner, f"A [dataset {_URN}].")
     calls: list[dict[str, Any]] = []
     lookups = CitationLookups(
-        dataset_tool=_catalogue_tool(datasets=[_RECORD], calls=calls),
-        client=_MetadataClient(),
+        dataset_tool=_CATALOGUE_TOOL,
+        client=CombinedClient(
+            resources=_MetadataClient(), tools=_catalogue_tool(datasets=[_RECORD], calls=calls)
+        ).client(),
         document_source=None,
         data_queries=DataQueryStore(),
     )

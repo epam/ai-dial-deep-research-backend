@@ -31,6 +31,7 @@ from dial_deep_research.app.data_source_calls import (
     InvalidResultError,
     call_once,
     call_with_attempts,
+    of_structured,
     pause_before_retry,
 )
 from dial_deep_research.app_properties import GlossaryTools
@@ -162,7 +163,7 @@ async def fetch_glossary(
         server_name=server_name,
         tool_name=tools.list_terms_tool,
         arguments={},
-        read=read_term_list,
+        read=of_structured(read_term_list),
     )
     if listing.value is None:
         logger.warning(
@@ -257,7 +258,7 @@ async def _request_batch(
             server_name=server_name,
             tool_name=tools.definitions_tool,
             arguments={"terms": [name for _, name in batch]},
-            read=read_definitions,
+            read=of_structured(read_definitions),
         )
     except CallFailedError:
         return {}

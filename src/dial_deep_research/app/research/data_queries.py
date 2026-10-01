@@ -7,9 +7,10 @@ citation step and the report review need, keyed by query id. Nothing it keeps re
 
 The shapes of the `_meta` payload and of the structured result are defined by the dataset server
 and are the same in every deployment, so they are pinned by the models below. Only the `_meta` key
-is configured (`data_query_meta_key`). The models read only what a citation uses and ignore every
-other field; a record keeps each element whole regardless, so a later feature can read a field
-the capture did not know about.
+is configured (`client_meta_key`). The same key carries other tools' payloads too — the
+list-datasets tool's carries `datasets` — so only a payload with a `queries` field is read. The
+models read only what a citation uses and ignore every other field; a record keeps each element
+whole regardless, so a later feature can read a field the capture did not know about.
 
 Nothing here logs a URL, a filter value or a query id.
 """
@@ -97,7 +98,7 @@ class ClientMetaQuery(BaseModel):
 
 
 class ClientMeta(BaseModel):
-    """The payload at `_meta[<data_query_meta_key>]`."""
+    """The payload at `_meta[<client_meta_key>]`."""
 
     model_config = _LENIENT
     queries: list[dict[str, Any]]
@@ -201,8 +202,9 @@ class DataQueryCapture:
 
     It runs the call first and returns the **same** result object, so what the research agent
     reads is exactly what it would read with no capture at all. Only a successful result from the
-    configured server whose `_meta` carries the configured key contributes; any exception while
-    reading the payload counts as one unreadable payload and costs that result's records alone.
+    configured server whose `_meta` carries, under the configured key, a payload with a `queries`
+    field contributes; any exception while reading that payload counts as one unreadable payload
+    and costs that result's records alone.
     """
 
     def __init__(self, *, server_name: str, meta_key: str, store: DataQueryStore) -> None:
@@ -223,10 +225,12 @@ class DataQueryCapture:
         meta = result.meta
         if not isinstance(meta, dict) or self._meta_key not in meta:
             return result
+        payload = meta[self._meta_key]
+        if isinstance(payload, dict) and "queries" not in payload:
+            # Another tool's payload under the same key, such as the list-datasets tool's.
+            return result
         try:
-            records = _join_records(
-                payload=meta[self._meta_key], structured_content=result.structuredContent
-            )
+            records = _join_records(payload=payload, structured_content=result.structuredContent)
         except Exception:
             self._store.unreadable_payloads += 1
             logger.debug("A tool result carried an unreadable data-query payload in _meta")

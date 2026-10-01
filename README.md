@@ -193,10 +193,12 @@ carries an identifier that means something only inside the server that issued it
   `document_metadata_resource` and `document_title_key`, which name the publication a pill stands
   for rather than its id;
 - a `statgpt` server names its `list_datasets_tool`, which gives a cited dataset its name and
-  the address of the page the citation opens, and its `data_query_meta_key`, the `_meta` key its
-  tool results carry data-query records under (such as `acme.example.org/client`), which gives a
-  cited data query the data explorer link its pill opens. The key's namespace comes from the
-  StatGPT channel's own configuration, and that channel must enable the payload.
+  the address the citation opens, and its `client_meta_key`, the `_meta` key its tool results
+  carry their client payload under (such as `acme.example.org/client`). That payload gives a cited
+  data query the data explorer link its pill opens, and gives a cited dataset the data explorer
+  link its pill opens in place of the dataset's page. The key's namespace comes from the StatGPT
+  channel's own configuration, and that channel must enable the payload on its data-query and
+  list-datasets tools, with the same namespace.
 
 Each server is one of two modes:
 

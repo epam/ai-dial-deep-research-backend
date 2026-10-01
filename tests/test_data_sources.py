@@ -42,7 +42,7 @@ def _server(**overrides: Any) -> MCPClientSettings:
             "server_type": "statgpt",
             "deployment_id": "statgpt-mcp",
             "list_datasets_tool": _LIST_TOOL,
-            "data_query_meta_key": "acme.example.org/client",
+            "client_meta_key": "acme.example.org/client",
             "references_table": {"title": "Datasets", "columns": [{"heading": "N", "key": "name"}]},
             **overrides,
         }
@@ -421,3 +421,30 @@ async def test_an_unreachable_server_still_gives_a_data_sources_string(
     assert fetched.dataset_list_failed is True
     assert fetched.glossary_list_failed is True
     assert fetched.glossary_listed is None
+
+
+_EXPLORER = "https://x.example.org/explorer?urn=IMF:WEO(1.0.0)"
+_LINKS = {"acme.example.org/client": {"datasets": [{"id": _WEO, "dataExplorerUrl": _EXPLORER}]}}
+
+
+async def test_the_explorer_links_reach_the_catalogue_and_not_the_section() -> None:
+    fake = _fake(list_handler=lambda _args: structured(_LIST, meta=_LINKS))
+
+    fetched = await fetch_datasets(fake.client(), server=_server())
+
+    assert fetched.catalogue is not None
+    assert fetched.catalogue[_WEO].url == _EXPLORER
+    assert fetched.catalogue[_DOTS].url is None
+    assert fetched.section == f"Datasets:\n{json.dumps(_LIST, ensure_ascii=False)}"
+    assert "explorer" not in fetched.section
+    assert len(fake.calls_of(_LIST_TOOL)) == 1
+
+
+async def test_a_list_without_explorer_links_is_not_retried() -> None:
+    fake = _fake(list_handler=lambda _args: structured(_LIST, meta={"other": {}}))
+
+    fetched = await fetch_datasets(fake.client(), server=_server())
+
+    assert len(fake.calls_of(_LIST_TOOL)) == 1
+    assert fetched.catalogue is not None
+    assert fetched.catalogue[_WEO].url == "https://x.example.org/w"

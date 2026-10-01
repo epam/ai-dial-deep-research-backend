@@ -25,15 +25,17 @@ import asyncio
 import json
 import logging
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from mcp.types import CallToolResult
 from pydantic import BaseModel, Field
 
 from dial_deep_research.app.data_source_calls import (
     InvalidResultError,
     call_with_attempts,
+    of_structured,
 )
 from dial_deep_research.app.glossary import GlossaryFetch, fetch_glossary
 from dial_deep_research.app.mcp_tools import build_mcp_client
@@ -41,6 +43,7 @@ from dial_deep_research.app.research.citations import DatasetSource
 from dial_deep_research.app.research.dataset_metadata import (
     DatasetMetadataError,
     parse_catalogue,
+    read_client_payload,
 )
 from dial_deep_research.app_properties import ApplicationProperties, MCPClientSettings
 
@@ -121,13 +124,27 @@ class _ListedDatasets(BaseModel):
     catalogue: dict[str, DatasetSource] = Field(default_factory=dict)
 
 
-def _read_list(structured: Any) -> _ListedDatasets:
-    """Accept a list answer carrying a `datasets` array, the shape report-citations requires."""
-    try:
-        catalogue = parse_catalogue(structured)
-    except DatasetMetadataError as error:
-        raise InvalidResultError() from error
-    return _ListedDatasets(raw=structured, catalogue=catalogue)
+def _list_reader(client_meta_key: str | None) -> Callable[[CallToolResult], _ListedDatasets]:
+    """A reader accepting a list answer whose structured content carries a `datasets` array, the
+    shape report-citations requires.
+
+    The explorer links under `client_meta_key` in the result's `_meta` reach the catalogue alone,
+    never `raw`, which is what the models are shown. A missing or unreadable payload is not a
+    failed attempt: it costs the links.
+    """
+
+    def read(result: CallToolResult) -> _ListedDatasets:
+        structured = result.structuredContent
+        try:
+            catalogue = parse_catalogue(
+                structured,
+                client_payload=read_client_payload(result.meta, client_meta_key=client_meta_key),
+            )
+        except DatasetMetadataError as error:
+            raise InvalidResultError() from error
+        return _ListedDatasets(raw=structured, catalogue=catalogue)
+
+    return read
 
 
 def _read_structure(structured: Any) -> dict[str, Any]:
@@ -199,7 +216,7 @@ async def fetch_datasets(
         server_name=server_name,
         tool_name=list_tool,
         arguments={},
-        read=_read_list,
+        read=_list_reader(server.client_meta_key),
     )
     if listing.value is None:
         logger.warning(
@@ -230,7 +247,7 @@ async def fetch_datasets(
                     server_name=server_name,
                     tool_name=tool_name,
                     arguments={STRUCTURE_ARGUMENT: dataset_id},
-                    read=_read_structure,
+                    read=of_structured(_read_structure),
                 )
                 for dataset_id in ids
             )

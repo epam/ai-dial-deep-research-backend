@@ -9,13 +9,15 @@ from typing import Any, cast
 
 import pytest
 from langchain_core.documents.base import Blob
-from langchain_core.tools import BaseTool, StructuredTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from mcp.types import CallToolResult
 
 from dial_deep_research.app.research.citation_lookups import CitationLookups
 from dial_deep_research.app.research.citations import DatasetSource
 from dial_deep_research.app.research.data_queries import DataQueryRecord, DataQueryStore
+from dial_deep_research.app.research.dataset_metadata import CatalogueTool
 from dial_deep_research.app_properties import DocumentMetadataSource
+from tests.mcp_fakes import CombinedClient, FakeMcpServer, structured
 
 _URN = "IMF:WEO(1.0.0)"
 _SOURCE = DocumentMetadataSource(
@@ -26,25 +28,18 @@ _SOURCE = DocumentMetadataSource(
 
 
 class _Catalogue:
-    """A list-datasets tool counting its calls, failing the first `fail_first` of them."""
+    """A dataset server's list-datasets tool counting its calls, failing the first `fail_first`."""
 
     def __init__(self, *, fail_first: int = 0) -> None:
         self.calls = 0
         self._fail_first = fail_first
+        self.server = FakeMcpServer({"list_datasets": self._answer})
 
-    def tool(self) -> BaseTool:
-        async def list_datasets(**_kwargs: Any) -> tuple[str, Any]:
-            self.calls += 1
-            if self.calls <= self._fail_first:
-                raise RuntimeError("the server is down")
-            return "text", {"structured_content": {"datasets": [{"id": _URN, "name": "WEO"}]}}
-
-        return StructuredTool.from_function(
-            coroutine=list_datasets,
-            name="list_datasets",
-            description="List the datasets.",
-            response_format="content_and_artifact",
-        )
+    def _answer(self, _arguments: dict[str, Any]) -> CallToolResult:
+        self.calls += 1
+        if self.calls <= self._fail_first:
+            raise RuntimeError("the server is down")
+        return structured({"datasets": [{"id": _URN, "name": "WEO"}]})
 
 
 class _Resource:
@@ -71,9 +66,18 @@ def _lookups(
     data_queries: DataQueryStore | None = None,
     seeded: dict[str, DatasetSource] | None = None,
 ) -> CitationLookups:
+    resources = resource or _Resource({})
     return CitationLookups(
-        dataset_tool=catalogue.tool() if catalogue is not None else None,
-        client=cast(MultiServerMCPClient, resource or _Resource({})),
+        dataset_tool=(
+            CatalogueTool(server_name="datasets", tool_name="list_datasets")
+            if catalogue is not None
+            else None
+        ),
+        client=(
+            CombinedClient(resources=resources, tools=catalogue.server).client()
+            if catalogue is not None
+            else cast(MultiServerMCPClient, resources)
+        ),
         document_source=_SOURCE,
         data_queries=data_queries or DataQueryStore(),
         catalogue=seeded,

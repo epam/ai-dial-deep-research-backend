@@ -275,7 +275,7 @@ def test_the_dataset_table_comes_before_the_document_table() -> None:
                     "server_type": "statgpt",
                     "deployment_id": "statgpt",
                     "list_datasets_tool": "list_datasets",
-                    "data_query_meta_key": "acme.example.org/client",
+                    "client_meta_key": "acme.example.org/client",
                     "references_table": {
                         "title": "Datasets",
                         "columns": [{"heading": "N", "key": "name"}],

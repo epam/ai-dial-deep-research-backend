@@ -280,20 +280,33 @@ field the list-datasets tool reports it under is `id`, which is the server's key
 renamed here; every user-visible mention of it — the fallback labels — reads
 `URN`, because that is what the value is and what the dataset server's own documentation calls it.
 
-The list-datasets tool must have reported a record for that URN carrying a URL, and that
-URL must be **absolute and `http` or `https`**. The app SHALL decide this from the URL itself,
-treating any other form — a storage-relative `files/…` path, a scheme it does not recognise, a value
-that is not a URL at all — as not convertible. The direction is conservative for the same reason the
-PDF check on a document is: a dataset pill exists to take the reader to a page, and a pill that
-opens nothing is worse than a marker that at least names its source. A storage-relative URL in
-particular would make the client offer a file download rather than a page.
+**The URL a dataset citation opens is the dataset's data explorer link when it has one, and its
+page otherwise.** The list-datasets tool reports both, in two places (the contract below states
+them): the data explorer link in the result's `_meta` payload, and the dataset's page in the
+record's `url`. The app SHALL take the data explorer link when the payload reports a usable one for
+that URN, and the record's `url` when it does not. The data explorer link opens the whole dataset,
+with no filter and no period, so a reader lands where the data can be looked at rather than on a
+page that describes it. Falling back to the page keeps every channel whose dataset server does not
+report explorer links able to cite datasets. Wherever this capability speaks of **a dataset's
+page** or **its page URL** — the card's open-in-browser action, a References row that opens its
+dataset, the page a data-query pill never opens — it means this URL.
+
+A URL is usable when it is **absolute and `http` or `https`**. The app SHALL decide this from the
+URL itself, treating any other form — a storage-relative `files/…` path, a scheme it does not
+recognise, a value that is not a URL at all — as not usable, for both of the two sources. An
+explorer link that is not usable SHALL be read as absent, so the record's `url` is used in its
+place. The direction is conservative for the same reason the PDF check on a document is: a dataset
+pill exists to take the reader to a page, and a pill that opens nothing is worse than a marker that
+at least names its source. A storage-relative URL in particular would make the client offer a file
+download rather than a page.
 
 The URN is matched **verbatim**, as **source-attribution** requires: the string the marker carries is
 compared to the `id` of each record the tool reported, with no case change, no trimming, no
 re-encoding and no version-stripping. A URN carries punctuation — a colon, and often a parenthesised
 version — and every character of it is part of the URN.
 
-A dataset citation whose URN the tool did not report, or reported without a usable URL, SHALL keep
+A dataset citation whose URN the tool did not report, or reported with neither a usable explorer
+link nor a usable `url`, SHALL keep
 its marker text exactly as the report writer wrote it and SHALL produce no annotation. Conversion
 SHALL NOT be partial: a converted dataset citation has both its tag and its annotation, or neither.
 The failure mode is a missing pill, never a lost citation.
@@ -308,12 +321,27 @@ plainer pill costs the reader less than a missing one.
 convert a dataset citation in a paragraph, a list item, a table cell, a heading, a blockquote and an
 emphasis span alike, and SHALL classify no Markdown block.
 
-#### Scenario: A cited dataset with a portal URL becomes a pill
+#### Scenario: A cited dataset with an explorer link opens the data explorer
 
-- **WHEN** a paragraph reads `…rose by 2.1% [dataset IMF:WEO(1.0.0)] over the period.` and the
-  list-datasets tool reported that id with the URL `https://portal.example.org/datasets/imf-weo`
+- **WHEN** a paragraph reads `…rose by 2.1% [dataset IMF:WEO(1.0.0)] over the period.`, the
+  list-datasets tool reported that id with the URL `https://portal.example.org/datasets/imf-weo`,
+  and its `_meta` payload reported the explorer link
+  `https://portal.example.org/explorer?urn=IMF:WEO(1.0.0)` for the same id
 - **THEN** the marker SHALL be replaced by a marker tag, and one annotation SHALL be emitted naming
-  that tag and carrying the portal URL
+  that tag and carrying the explorer link
+
+#### Scenario: A cited dataset without an explorer link opens its portal URL
+
+- **WHEN** the list-datasets tool reported the cited dataset with the URL
+  `https://portal.example.org/datasets/imf-weo`, and its result carried no `_meta` payload, or a
+  payload with no explorer link for that id
+- **THEN** the citation SHALL be converted, and its annotation SHALL carry the portal URL
+
+#### Scenario: An unusable explorer link falls back to the portal URL
+
+- **WHEN** the `_meta` payload reports the explorer link `files/bucket/explorer.html` for the cited
+  dataset, and its record carries the URL `https://portal.example.org/datasets/imf-weo`
+- **THEN** the annotation SHALL carry the portal URL
 
 #### Scenario: A reader reaches the dataset's page from the card
 
@@ -329,7 +357,8 @@ emphasis span alike, and SHALL classify no Markdown block.
 
 #### Scenario: A dataset reported without a URL keeps its text
 
-- **WHEN** the tool reports the cited dataset's record with a name but no URL
+- **WHEN** the tool reports the cited dataset's record with a name but no URL, and its `_meta`
+  payload reports no explorer link for that id
 - **THEN** the marker SHALL remain in the delivered text, and no annotation SHALL be emitted for it
 
 #### Scenario: A storage-relative URL is not convertible
@@ -647,10 +676,11 @@ requirement below prescribes rather than degrade the report.
   without breaking the contract, and a channel may put any of them in a column.
 
   The two named optional fields are optional in different senses, and the difference is what each
-  absence costs. An element whose **`url`** is absent is a dataset that cannot be cited as a pill at
-  all, because the pill would open nothing; it is still a cited dataset and still gets a References
-  row. An element whose **`lastUpdated`** is absent is cited normally and simply carries one fewer
-  fact on its card. Neither absence is a malformed answer.
+  absence costs. An element whose **`url`** is absent, and whose dataset has no explorer link in
+  the `_meta` payload, is a dataset that cannot be cited as a pill at all, because the pill would
+  open nothing; it is still a cited dataset and still gets a References row. An element whose
+  **`lastUpdated`** is absent is cited normally and simply carries one fewer fact on its card.
+  Neither absence is a malformed answer.
 
   `lastUpdated` SHALL be a date the reader can act on, written as an **ISO 8601 date** such as
   `2025-04-30`. A server that cannot produce one SHALL omit the field rather than send free text it
@@ -661,6 +691,19 @@ requirement below prescribes rather than degrade the report.
   means declaring the output schema MCP requires for one. The app reads the structured result and
   nothing else — a tool that answers with text content alone SHALL be treated as a failed call. MCP
   carries the same object a second time as serialized text, which the app ignores.
+- **Explorer links**: the result MAY carry, in its MCP `_meta` under the key the server's
+  `client_meta_key` names (**application-config-schema** owns the field), matched character for
+  character, a JSON object carrying a **`datasets`** array. Each element SHALL carry a string
+  **`id`**, the same URN the structured result's record carries, and MAY carry a string
+  **`dataExplorerUrl`**, the address that opens that whole dataset in the data explorer. The app
+  reads nothing else from the payload: any other field, such as a citation URL, SHALL be ignored.
+  An element is matched to its record by `id`, verbatim, never by position. The payload is outside
+  what a model reads, and the app SHALL NOT show it to one.
+
+  The payload is optional, and so is each element's link. A missing or unreadable payload, a
+  missing element, and an element whose link is absent or is not a string SHALL each cost only the
+  explorer link of the datasets concerned, which then open their `url`. None of them makes the
+  answer a failed call, because the structured result alone still names and links every dataset.
 - **Complete for the channel**: the answer SHALL carry every dataset the channel exposes, because
   the app cannot ask about a subset. A dataset absent from the answer is uncitable.
 - **Idempotent and read-only**: the app calls the tool once per turn, and repeated calls across
@@ -706,9 +749,24 @@ many datasets the report cites.
 
 #### Scenario: A record with no page URL is still selected
 
-- **WHEN** a cited dataset's record carries an `id` and a `name` and no `url`
+- **WHEN** a cited dataset's record carries an `id` and a `name` and no `url`, and the `_meta`
+  payload reports no explorer link for it
 - **THEN** that record SHALL be selected, its citations SHALL keep their marker text for want of a
   page to open, and its References row SHALL carry its name
+
+#### Scenario: An explorer link alone makes a dataset citable
+
+- **WHEN** a cited dataset's record carries an `id` and a `name` and no `url`, and the `_meta`
+  payload reports `https://portal.example.org/explorer?urn=IMF:WEO(1.0.0)` for that id
+- **THEN** its citations SHALL become pills opening that explorer link, and its References row SHALL
+  open the same link
+
+#### Scenario: An unreadable payload costs the explorer links only
+
+- **WHEN** the list-datasets result carries a structured result with a `datasets` array, and under
+  the configured `_meta` key a value that is not an object carrying a `datasets` array
+- **THEN** the call SHALL be a successful one, and every cited dataset SHALL open the `url` its
+  record carries
 
 #### Scenario: Extra fields in a record are available to a row
 
@@ -731,6 +789,13 @@ independently of that server's `tools_to_include` filter, because that filter st
 research agent may call rather than what the app may call. A configuration whose filter omits the
 tool SHALL still leave the app able to call it at the citation step.
 
+That call SHALL read the **MCP result itself**, in a session of its own on the turn's connection to
+the server, rather than the tool message the research agent would read, because the tool message
+carries the structured result and drops `_meta`, where the explorer links are. It SHALL read the
+same two parts the turn-start fetch reads, by the same rules, so a catalogue obtained by either
+call opens the same URLs. The call carries no deadline of its own beyond the connection's
+timeouts.
+
 The list-datasets tool SHALL, however, **remain available to the research agent** whenever that
 server's filter would otherwise offer it. This is the one point on which it differs from the
 file-sharing tool, which the app removes from every tool list bound to a model, and the difference
@@ -750,6 +815,12 @@ change only who else calls it, never whether the agent still can.
   tool is configured
 - **THEN** the app SHALL still be able to call the list-datasets tool at the citation step, and
   the agent SHALL NOT be offered it
+
+#### Scenario: The citation-step call keeps the explorer links
+
+- **WHEN** every attempt of the turn-start list-datasets call failed, the report review calls the
+  tool, and its result carries explorer links under the configured `_meta` key
+- **THEN** the dataset citations the delivery converts SHALL open those explorer links
 
 ### Requirement: A converted citation is a marker tag in the text and an annotation that names it
 
@@ -1613,10 +1684,13 @@ reads, and the app SHALL take them from there. It SHALL NOT ask the server again
 step: a query id means something only in the result that reported it.
 
 **Which results are captured.** A tool result from the configured `statgpt` server is a data-query
-result when its `_meta` carries a payload under the key the server's `data_query_meta_key` names
-(**application-config-schema** owns the field), matched character for character. A result without
-that payload contributes nothing, whatever tool produced it, so the app SHALL NOT need to know which
-of the server's tools runs queries.
+result when its `_meta` carries, under the key the server's `client_meta_key` names
+(**application-config-schema** owns the field), matched character for character, a payload that
+carries a `queries` field. A result without that payload contributes nothing, whatever tool produced
+it, so the app SHALL NOT need to know which of the server's tools runs queries. The same key carries
+other tools' payloads too — the list-datasets tool's carries a `datasets` array and no `queries` —
+so a payload without a `queries` field SHALL contribute no record and SHALL NOT count as an
+unreadable payload.
 
 **Where the app reads them.** A data-query result carries two parts the app reads. The structured
 result is also serialized into the text content the model reads. The `_meta` payload is outside
@@ -1768,6 +1842,12 @@ parts are in hand.
   no `_meta` at all
 - **THEN** the app SHALL keep no record from it, and SHALL NOT read query ids out of its structured
   result or its text content
+
+#### Scenario: A list-datasets payload under the same key is not a data-query payload
+
+- **WHEN** the research agent calls the list-datasets tool, and its result carries under the
+  configured key a payload with a `datasets` array and no `queries` field
+- **THEN** the app SHALL keep no record from it, and SHALL NOT count it as an unreadable payload
 
 #### Scenario: An unreadable payload costs only its own records
 

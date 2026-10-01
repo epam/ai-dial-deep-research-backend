@@ -22,7 +22,6 @@ import logging
 from collections.abc import Sequence
 from typing import Any
 
-from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from dial_deep_research.app_properties import DocumentMetadataSource
@@ -31,6 +30,7 @@ from .citations import DatasetSource, cited_dataset_urns, cited_document_ids
 from .data_queries import DataQueryStore
 from .dataset_metadata import (
     KIND_DATASET_CALL_FAILED,
+    CatalogueTool,
     DatasetMetadataError,
     read_catalogue,
     select_cited,
@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 class CitationLookups:
     """The catalogue and the document metadata this turn has looked up, and the means to ask.
 
-    `dataset_tool` is the list-datasets tool the server advertised, and `document_source` the
+    `dataset_tool` names the list-datasets tool the server advertised, and `document_source` the
     configured document-metadata resource; either is `None` on a channel without that server, and
     then every id of its kind stays not looked up. `data_queries` is read to find the dataset a
     cited query ran against.
@@ -60,7 +60,7 @@ class CitationLookups:
     def __init__(
         self,
         *,
-        dataset_tool: BaseTool | None,
+        dataset_tool: CatalogueTool | None,
         client: MultiServerMCPClient,
         document_source: DocumentMetadataSource | None,
         data_queries: DataQueryStore,
@@ -95,7 +95,7 @@ class CitationLookups:
         if self._catalogue is None:
             if self._dataset_tool is None:
                 raise ValueError("no list-datasets tool is available")
-            self._catalogue = await read_catalogue(tool=self._dataset_tool)
+            self._catalogue = await read_catalogue(client=self._client, tool=self._dataset_tool)
         return select_cited(self._catalogue, dataset_ids=dataset_ids)
 
     async def document_metadata(self, document_ids: Sequence[int]) -> dict[int, dict[str, Any]]:
