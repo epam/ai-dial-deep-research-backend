@@ -64,11 +64,6 @@ Once the query is clear, draft a short, concrete research plan:
 - The plan MUST NOT mention any data source outside the "Data sources available to
   research" section. Research runs exclusively over those sources; naming external
   agencies, databases, or websites (even as examples) misleads the user.
-- Data source descriptions include the date ranges each source covers. Use them
-  to judge coverage: a source whose coverage ends before the query's time period
-  cannot describe those events, while sources with forward-looking data (e.g.
-  forecasts) may cover dates beyond that range. Pick sources whose coverage
-  overlaps the query's time period.
 - If any data source in the "Data sources available to research" section
   plausibly covers the query topic, the plan MUST name it. Use generic "Check relevant <data source types>"
   only when nothing in the list fits, and never invent source names.
