@@ -148,9 +148,10 @@ class DatasetSource(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    # `None` where the catalogue reported no URL, and where it reported one a browser cannot open:
-    # an unusable URL is normalized away at the boundary, so a record read from a catalogue never
-    # carries a URL the client could not follow.
+    # The URL the pill and the References row open: the dataset's data explorer link when the
+    # result's `_meta` reported a usable one, and the record's own `url` otherwise. `None` where
+    # neither is a URL a browser can open: an unusable URL is normalized away at the boundary, so a
+    # record read from a catalogue never carries a URL the client could not follow.
     url: str | None = None
     name: str | None = None
     # Carried exactly as the tool reported it — the app is not the authority on what a server's
@@ -687,11 +688,11 @@ def log_citations_resolved(
     channel with incomplete metadata reads, and it is the only record a document without a title
     gets.
 
-    `datasets_resolved` counts the cited datasets the catalogue reported a usable page URL for.
-    The gap to `datasets_requested` is likewise the whole record of a dataset that has no portal
-    page, which is the channel's own data rather than a fault and warns about nothing. Both
-    dataset counts cover `[dataset <urn>]` markers alone, not the datasets reached through a
-    cited query.
+    `datasets_resolved` counts the cited datasets the catalogue reported a usable URL for, its
+    explorer link or its page. The gap to `datasets_requested` is likewise the whole record of a
+    dataset that can be opened at neither, which is the channel's own data rather than a fault
+    and warns about nothing. Both dataset counts cover `[dataset <urn>]` markers alone, not the
+    datasets reached through a cited query.
 
     `data_queries_resolved` counts the cited query ids the turn captured with a data explorer
     link. Both query counts default to zero for a caller that cites no data queries.

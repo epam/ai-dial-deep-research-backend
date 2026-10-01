@@ -1,8 +1,7 @@
 """Calling the list-datasets tool and reading the catalogue it answers with.
 
-The tools here are real LangChain `StructuredTool`s built the way `langchain-mcp-adapters`
-builds them — `response_format="content_and_artifact"`, the structured result in the artifact —
-so these tests exercise how a catalogue actually reaches the app rather than a stand-in for it.
+The tool is called in an MCP session, as the app calls it, so a result reaches these tests with
+its structured content and its `_meta` the way a server sends them.
 """
 
 from __future__ import annotations
@@ -10,51 +9,54 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from langchain_core.messages import ToolMessage
-from langchain_core.tools import BaseTool, StructuredTool, ToolException
+from mcp.types import CallToolResult
 
+from dial_deep_research.app.research.citations import DatasetSource
 from dial_deep_research.app.research.dataset_metadata import (
     KIND_DATASET_CALL_FAILED,
     KIND_DATASET_NO_STRUCTURED_RESULT,
     KIND_DATASET_UNREADABLE_RESULT,
+    CatalogueTool,
     DatasetMetadataError,
     parse_catalogue,
-    read_dataset_sources,
+    read_catalogue,
+    select_cited,
 )
+from tests.mcp_fakes import FakeMcpServer, mcp_error, structured
 
 _URN = "IMF:WEO(1.0.0)"
 _NAME = "World Economic Outlook"
 _URL = "https://portal.example.org/datasets/imf-weo"
+_EXPLORER_URL = "https://portal.example.org/explorer?urn=IMF:WEO(1.0.0)"
 _TOOL_NAME = "list_datasets"
+_KEY = "acme.example.org/client"
+_TOOL = CatalogueTool(server_name="datasets", tool_name=_TOOL_NAME, client_meta_key=_KEY)
 
 
 def _catalogue_tool(
     *,
     datasets: list[dict[str, Any]] | None = None,
-    artifact: Any = None,
+    structured_content: Any = None,
+    meta: dict[str, Any] | None = None,
+    answer: CallToolResult | None = None,
     raises: Exception | None = None,
-    calls: list[dict[str, Any]] | None = None,
-    handle_tool_error: bool = False,
-) -> BaseTool:
-    payload = artifact if datasets is None else {"structured_content": {"datasets": datasets}}
+) -> FakeMcpServer:
+    content = structured_content if datasets is None else {"datasets": datasets}
 
-    async def list_datasets(**kwargs: Any) -> tuple[str, Any]:
-        if calls is not None:
-            calls.append(kwargs)
+    def list_datasets(_arguments: dict[str, Any]) -> CallToolResult:
         if raises is not None:
             raise raises
-        return "the catalogue, serialized as text", payload
+        return answer if answer is not None else structured(content, meta=meta)
 
-    tool = StructuredTool.from_function(
-        coroutine=list_datasets,
-        name=_TOOL_NAME,
-        description="List the datasets this channel exposes.",
-        response_format="content_and_artifact",
-    )
-    # This tool keeps the research agent's error handling, which is what turns a server error
-    # into an error `ToolMessage` instead of an exception.
-    tool.handle_tool_error = handle_tool_error
-    return tool
+    return FakeMcpServer({_TOOL_NAME: list_datasets})
+
+
+async def _read(
+    *, tool: FakeMcpServer, dataset_ids: list[str], catalogue_tool: CatalogueTool = _TOOL
+) -> dict[str, DatasetSource]:
+    """What the dataset server `tool` answers about the cited datasets, called as the app calls."""
+    catalogue = await read_catalogue(client=tool.client(), tool=catalogue_tool)
+    return select_cited(catalogue, dataset_ids=dataset_ids)
 
 
 async def test_the_reported_record_is_read_off_the_structured_result() -> None:
@@ -62,7 +64,7 @@ async def test_the_reported_record_is_read_off_the_structured_result() -> None:
         datasets=[{"id": _URN, "name": _NAME, "url": _URL, "lastUpdated": "2025-04-30"}]
     )
 
-    sources = await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+    sources = await _read(tool=tool, dataset_ids=[_URN])
 
     assert sources[_URN].url == _URL
     assert sources[_URN].name == _NAME
@@ -71,36 +73,34 @@ async def test_the_reported_record_is_read_off_the_structured_result() -> None:
 
 async def test_the_call_carries_no_arguments() -> None:
     """The contract's input is none: the tool answers with the channel's whole catalogue."""
-    calls: list[dict[str, Any]] = []
-    tool = _catalogue_tool(datasets=[], calls=calls)
+    tool = _catalogue_tool(datasets=[])
 
-    await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+    await _read(tool=tool, dataset_ids=[_URN])
 
-    assert calls == [{}]
+    assert tool.calls == [(_TOOL_NAME, {})]
+    assert tool.sessions == 1
 
 
 async def test_one_call_serves_every_cited_dataset() -> None:
     other = "IMF:PRIMARY_COMMODITY_PRICES(1.0.0)"
-    calls: list[dict[str, Any]] = []
     tool = _catalogue_tool(
         datasets=[
             {"id": _URN, "name": _NAME, "url": _URL},
             {"id": other, "name": "Primary Commodity Prices", "url": f"{_URL}-pcp"},
             {"id": "IMF:NOT_CITED(1.0.0)", "name": "Not cited", "url": f"{_URL}-nc"},
         ],
-        calls=calls,
     )
 
-    sources = await read_dataset_sources(tool=tool, dataset_ids=[_URN, other])
+    sources = await _read(tool=tool, dataset_ids=[_URN, other])
 
     assert sorted(sources) == sorted([_URN, other])
-    assert len(calls) == 1
+    assert len(tool.calls) == 1
 
 
 async def test_a_record_the_answer_omits_is_absent_rather_than_a_failure() -> None:
     tool = _catalogue_tool(datasets=[{"id": _URN, "name": _NAME, "url": _URL}])
 
-    sources = await read_dataset_sources(tool=tool, dataset_ids=[_URN, "IMF:UNKNOWN(1.0.0)"])
+    sources = await _read(tool=tool, dataset_ids=[_URN, "IMF:UNKNOWN(1.0.0)"])
 
     assert list(sources) == [_URN]
 
@@ -120,7 +120,7 @@ async def test_extra_fields_in_a_record_are_ignored() -> None:
         ]
     )
 
-    sources = await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+    sources = await _read(tool=tool, dataset_ids=[_URN])
 
     assert sources[_URN].name == _NAME
     # Every reported field is carried whole, which is what a References column reads.
@@ -145,7 +145,7 @@ async def test_a_dataset_with_no_page_a_browser_can_open_is_kept_without_a_url(
     to open, and the report's References section still lists it by name."""
     tool = _catalogue_tool(datasets=[record])
 
-    sources = await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+    sources = await _read(tool=tool, dataset_ids=[_URN])
 
     assert sources[_URN].url is None, case
     assert sources[_URN].name == _NAME, case
@@ -164,7 +164,7 @@ async def test_a_record_with_no_usable_name_is_still_citable(name: Any, case: st
     """The page is what makes a dataset citable; the label falls back to the URN."""
     tool = _catalogue_tool(datasets=[{"id": _URN, "name": name, "url": _URL}])
 
-    sources = await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+    sources = await _read(tool=tool, dataset_ids=[_URN])
 
     assert sources[_URN].name is None, case
     assert sources[_URN].url == _URL
@@ -185,7 +185,7 @@ async def test_a_date_that_is_not_a_usable_string_reads_as_absent(
         datasets=[{"id": _URN, "name": _NAME, "url": _URL, "lastUpdated": last_updated}]
     )
 
-    sources = await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+    sources = await _read(tool=tool, dataset_ids=[_URN])
 
     assert sources[_URN].last_updated is None, case
 
@@ -198,47 +198,27 @@ async def test_a_urn_is_matched_character_for_character() -> None:
         ]
     )
 
-    sources = await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+    sources = await _read(tool=tool, dataset_ids=[_URN])
 
     assert list(sources) == [_URN]
     assert sources[_URN].url == _URL
 
 
-async def test_a_plain_argument_call_would_lose_the_structured_result() -> None:
-    """Why the call is tool-call-shaped: no tool-call id, no `ToolMessage`, no artifact."""
-    tool = _catalogue_tool(datasets=[{"id": _URN, "name": _NAME, "url": _URL}])
-
-    plain = await tool.ainvoke({})
-    tool_call_shaped = await tool.ainvoke(
-        {"name": tool.name, "args": {}, "id": "c1", "type": "tool_call"}
-    )
-
-    assert not isinstance(plain, ToolMessage)
-    assert isinstance(tool_call_shaped, ToolMessage)
-    assert tool_call_shaped.artifact["structured_content"]["datasets"][0]["id"] == _URN
-
-
-async def test_an_error_status_is_a_failed_call() -> None:
-    """This tool keeps the agent's error handling, so an MCP error arrives as a message.
-
-    `ToolException` is what langchain-mcp-adapters raises on an MCP error response, and
-    `handle_tool_error` turns it into a `ToolMessage` carrying `status="error"` rather than
-    letting it propagate.
-    """
-    tool = _catalogue_tool(raises=ToolException("the server said no"), handle_tool_error=True)
+async def test_an_error_result_is_a_failed_call() -> None:
+    tool = _catalogue_tool(answer=mcp_error())
 
     with pytest.raises(DatasetMetadataError) as excinfo:
-        await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+        await _read(tool=tool, dataset_ids=[_URN])
 
     assert excinfo.value.kind == KIND_DATASET_CALL_FAILED
 
 
 async def test_no_structured_result_is_a_failed_call() -> None:
     """MCP sends one only for a tool that declares an output schema, as the contract requires."""
-    tool = _catalogue_tool(artifact=None)
+    tool = _catalogue_tool(structured_content=None)
 
     with pytest.raises(DatasetMetadataError) as excinfo:
-        await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+        await _read(tool=tool, dataset_ids=[_URN])
 
     assert excinfo.value.kind == KIND_DATASET_NO_STRUCTURED_RESULT
 
@@ -255,10 +235,10 @@ async def test_no_structured_result_is_a_failed_call() -> None:
 async def test_an_answer_carrying_no_readable_dataset_array_is_a_failed_call(
     structured: Any, case: str
 ) -> None:
-    tool = _catalogue_tool(artifact={"structured_content": structured})
+    tool = _catalogue_tool(structured_content=structured)
 
     with pytest.raises(DatasetMetadataError) as excinfo:
-        await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+        await _read(tool=tool, dataset_ids=[_URN])
 
     assert excinfo.value.kind == KIND_DATASET_UNREADABLE_RESULT, case
 
@@ -267,7 +247,7 @@ async def test_a_raising_tool_raises() -> None:
     tool = _catalogue_tool(raises=RuntimeError("the server said no"))
 
     with pytest.raises(RuntimeError):
-        await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+        await _read(tool=tool, dataset_ids=[_URN])
 
 
 async def test_a_record_whose_id_is_not_a_string_is_skipped_rather_than_fatal() -> None:
@@ -276,7 +256,7 @@ async def test_a_record_whose_id_is_not_a_string_is_skipped_rather_than_fatal() 
         datasets=[{"id": 7, "name": "Numbered", "url": _URL}, {"id": _URN, "url": _URL}]
     )
 
-    sources = await read_dataset_sources(tool=tool, dataset_ids=[_URN])
+    sources = await _read(tool=tool, dataset_ids=[_URN])
 
     assert list(sources) == [_URN]
 
@@ -295,3 +275,98 @@ def test_the_parser_refuses_a_result_without_a_datasets_array(structured: Any) -
     with pytest.raises(DatasetMetadataError) as excinfo:
         parse_catalogue(structured)
     assert excinfo.value.kind == KIND_DATASET_UNREADABLE_RESULT
+
+
+# --- the explorer links in `_meta` ---------------------------------------------------------------
+
+
+def _links(*elements: Any) -> dict[str, Any]:
+    return {_KEY: {"datasets": list(elements)}}
+
+
+async def test_the_explorer_link_is_the_url_a_dataset_opens() -> None:
+    tool = _catalogue_tool(
+        datasets=[{"id": _URN, "name": _NAME, "url": _URL}],
+        meta=_links({"id": _URN, "dataExplorerUrl": _EXPLORER_URL, "citationUrl": f"{_URL}-cited"}),
+    )
+
+    sources = await _read(tool=tool, dataset_ids=[_URN])
+
+    assert sources[_URN].url == _EXPLORER_URL
+    # The row's columns read the structured record, which the payload does not touch.
+    assert sources[_URN].raw_fields == {"id": _URN, "name": _NAME, "url": _URL}
+
+
+@pytest.mark.parametrize(
+    ("meta", "case"),
+    [
+        (None, "the result carries no _meta"),
+        ({"other.example.org/client": {"datasets": [{"id": _URN}]}}, "the key is another one"),
+        (_links({"id": "IMF:OTHER(1.0.0)", "dataExplorerUrl": _EXPLORER_URL}), "another id"),
+        (_links({"id": _URN}), "the element carries no link"),
+        (_links({"id": _URN, "dataExplorerUrl": None}), "the link is null"),
+        (_links({"id": _URN, "dataExplorerUrl": 7}), "the link is not a string"),
+        (_links({"id": _URN, "dataExplorerUrl": "files/b/explorer.html"}), "the link is relative"),
+        (_links("not a record"), "the element is not a record"),
+        ({_KEY: {"datasets": "none"}}, "the datasets value is not an array"),
+        ({_KEY: ["a list"]}, "the payload is not an object"),
+        ({_KEY: {"queries": []}}, "the payload is a data-query one"),
+    ],
+)
+async def test_without_a_usable_explorer_link_a_dataset_opens_its_page(
+    meta: dict[str, Any] | None, case: str
+) -> None:
+    """Neither a missing nor an unreadable payload fails the call: it costs the links alone."""
+    tool = _catalogue_tool(datasets=[{"id": _URN, "name": _NAME, "url": _URL}], meta=meta)
+
+    sources = await _read(tool=tool, dataset_ids=[_URN])
+
+    assert sources[_URN].url == _URL, case
+
+
+async def test_an_explorer_link_alone_makes_a_dataset_openable() -> None:
+    tool = _catalogue_tool(
+        datasets=[{"id": _URN, "name": _NAME}],
+        meta=_links({"id": _URN, "dataExplorerUrl": _EXPLORER_URL}),
+    )
+
+    sources = await _read(tool=tool, dataset_ids=[_URN])
+
+    assert sources[_URN].url == _EXPLORER_URL
+
+
+async def test_an_explorer_link_is_matched_to_its_record_by_id_not_by_position() -> None:
+    other = "IMF:PRIMARY_COMMODITY_PRICES(1.0.0)"
+    tool = _catalogue_tool(
+        datasets=[{"id": _URN, "url": _URL}, {"id": other, "url": f"{_URL}-pcp"}],
+        meta=_links({"id": other, "dataExplorerUrl": f"{_EXPLORER_URL}-pcp"}),
+    )
+
+    sources = await _read(tool=tool, dataset_ids=[_URN, other])
+
+    assert sources[_URN].url == _URL
+    assert sources[other].url == f"{_EXPLORER_URL}-pcp"
+
+
+async def test_a_tool_with_no_client_meta_key_reads_no_links() -> None:
+    tool = _catalogue_tool(
+        datasets=[{"id": _URN, "url": _URL}],
+        meta=_links({"id": _URN, "dataExplorerUrl": _EXPLORER_URL}),
+    )
+
+    sources = await _read(
+        tool=tool,
+        dataset_ids=[_URN],
+        catalogue_tool=CatalogueTool(server_name="datasets", tool_name=_TOOL_NAME),
+    )
+
+    assert sources[_URN].url == _URL
+
+
+def test_the_parser_reads_the_links_from_the_payload_it_is_given() -> None:
+    sources = parse_catalogue(
+        {"datasets": [{"id": _URN, "url": _URL}]},
+        client_payload={"datasets": [{"id": _URN, "dataExplorerUrl": _EXPLORER_URL}]},
+    )
+
+    assert sources[_URN].url == _EXPLORER_URL

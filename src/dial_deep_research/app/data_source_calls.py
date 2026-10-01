@@ -3,8 +3,8 @@
 The fetch at the start of a turn calls tools by the names the configuration gives, so it reads the
 MCP result itself rather than going through a LangChain tool: `MultiServerMCPClient.session()`
 opens one initialized session, and `ClientSession.call_tool` returns the `CallToolResult`, whose
-`isError` and `structuredContent` are all the fetch reads (see the data-sources-discovery
-capability).
+`isError`, `structuredContent` and, for the list of datasets, `_meta` are all the fetch reads (see
+the data-sources-discovery capability).
 
 Every call opens a session of its own, so a failure that ends one session cannot fail another
 call. The session open and the call run under one deadline of the app's own: the transport's read
@@ -27,6 +27,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from mcp.types import CallToolResult
 
 from dial_deep_research.app.error_resolution import exception_leaves
 
@@ -79,6 +80,11 @@ def retry_delay(retry_number: int) -> float:
     return max(0.0, delay + random.uniform(-delay * 0.25, delay * 0.25))  # noqa: S311
 
 
+def of_structured[T](read: Callable[[Any], T]) -> Callable[[CallToolResult], T]:
+    """A result reader that reads the structured content alone, for `call_once`."""
+    return lambda result: read(result.structuredContent)
+
+
 async def sleep(seconds: float) -> None:
     """The pause between attempts. A module function so a test can make it instant."""
     await asyncio.sleep(seconds)
@@ -95,12 +101,13 @@ async def call_once[T](
     server_name: str,
     tool_name: str,
     arguments: Mapping[str, Any],
-    read: Callable[[Any], T],
+    read: Callable[[CallToolResult], T],
 ) -> T:
-    """Call the tool once in a session of its own and read its structured result.
+    """Call the tool once in a session of its own and read its result.
 
-    `read` receives `CallToolResult.structuredContent` and returns what the caller keeps; it raises
-    `InvalidResultError` for a result without the shape the caller reads.
+    `read` receives the `CallToolResult`, whose `structuredContent` is never `None` by then, and
+    returns what the caller keeps; it raises `InvalidResultError` for a result without the shape
+    the caller reads. A reader of the structured content alone is wrapped in `of_structured`.
 
     Raises:
         CallFailedError: the call raised, returned an MCP error, did not finish by its deadline, or
@@ -120,7 +127,7 @@ async def call_once[T](
     if result.structuredContent is None:
         raise CallFailedError(KIND_INVALID_RESULT)
     try:
-        return read(result.structuredContent)
+        return read(result)
     except InvalidResultError as error:
         raise CallFailedError(KIND_INVALID_RESULT) from error
 
@@ -131,7 +138,7 @@ async def call_with_attempts[T](
     server_name: str,
     tool_name: str,
     arguments: Mapping[str, Any],
-    read: Callable[[Any], T],
+    read: Callable[[CallToolResult], T],
 ) -> Attempts[T]:
     """Call the tool until one attempt succeeds, making at most `MAX_ATTEMPTS`.
 

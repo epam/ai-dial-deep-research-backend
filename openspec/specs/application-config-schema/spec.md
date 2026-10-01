@@ -743,23 +743,28 @@ way to switch shortening off, and there SHALL be no separate flag for it.
 
 - **WHEN** a channel sets `max_pill_title_chars` to a number below the floor
 - **THEN** validation SHALL raise a pydantic `ValidationError`
-### Requirement: MCP server declares its data-query meta key
+### Requirement: MCP server declares its client meta key
 
-`MCPClientSettings` SHALL expose one string field, `data_query_meta_key`, naming the key under
-which this server's tool results carry their data-query records in the MCP result's `_meta`. The
-**report-citations** capability owns what the payload under that key must carry and what the app
-does with it; this field carries only the key.
+`MCPClientSettings` SHALL expose one string field, `client_meta_key`, naming the key under which
+this server's tool results carry their client payload in the MCP result's `_meta`. Two tools of
+the dataset server carry a payload under it: a data-query tool carries its data-query records, and
+the list-datasets tool carries each dataset's data explorer link. The **report-citations**
+capability owns what each payload must carry and what the app does with it; this field carries only
+the key.
 
 The key is configuration rather than a constant because a server builds it from a namespace that
 belongs to one deployment's channel configuration — the MCP specification requires extension keys
 in `_meta` to carry a reverse-DNS prefix, such as `acme.example.org/client` — so the same server
 software emits a different key in each deployment. The app SHALL match the configured string
 against a `_meta` key character for character, with no prefix or suffix matching and no
-case-folding.
+case-folding. **One key serves both tools**, so the dataset server's channel SHALL configure the
+same namespace on its data-query tool and on its list-datasets tool. A list-datasets tool whose
+namespace differs costs only the explorer links of dataset citations, which then open each
+dataset's page.
 
-**The key is the only part of the data-query contract that is configured.** The shape under it and
-the shape of the structured result — which fields carry the query id, the data explorer URL, the
-dataset URN, the series count and the filter — are defined by the data-query server software and
+**The key is the only part of either payload's contract that is configured.** The shapes under it
+and the shape of the structured results — which fields carry the query id, the data explorer URLs,
+the dataset URN, the series count and the filter — are defined by the dataset server software and
 are the same in every deployment, so **report-citations** states them as a contract and the app
 pins them in code. There SHALL be no configuration field naming any of them. A configured field
 name would protect only against a server renaming one field while changing nothing else, and would
@@ -780,12 +785,15 @@ and list none of the datasets those citations drew on.
 
 The cost is the one `list_datasets_tool` pays, paid at configuration: an existing channel with a
 `statgpt` server that has not set the field fails validation until it does, which the rule on
-invalid properties delivers to the user as "application not configured".
+invalid properties delivers to the user as "application not configured". The field has no other
+name, and a server entry ignores fields it does not define, so a `statgpt` server that still sets
+`data_query_meta_key` and not `client_meta_key` SHALL fail validation for naming no client meta key.
 
 There SHALL be no default value. A key that matches nothing a server sends SHALL remain a
 delivery-time outcome rather than a validation error, because what a server puts in `_meta` is
 known only once its tools have been called: every data-query citation then keeps its marker text,
-and the citation step records it (see **logging-policy**).
+every dataset citation opens its dataset's page, and the citation step records the data-query
+outcome (see **logging-policy**).
 
 `dial_conf/core/applications-template.json` SHALL keep setting exactly what each of its server
 entries' types requires, which the list-datasets-tool requirement already states. The template
@@ -793,26 +801,32 @@ carries no `statgpt` server, so this field adds nothing to it.
 
 #### Scenario: A statgpt server names its key
 
-- **WHEN** a `statgpt` server entry sets `data_query_meta_key` to `acme.example.org/client`
-- **THEN** validation SHALL pass, and the app SHALL read data-query records from that key and no
-  other in the server's tool results
+- **WHEN** a `statgpt` server entry sets `client_meta_key` to `acme.example.org/client`
+- **THEN** validation SHALL pass, and the app SHALL read data-query records and dataset explorer
+  links from that key and no other in the server's tool results
 
 #### Scenario: A generic_rag server naming it is rejected
 
-- **WHEN** a `generic_rag` server entry sets `data_query_meta_key`
+- **WHEN** a `generic_rag` server entry sets `client_meta_key`
 - **THEN** validation SHALL fail with an error naming that server and stating that only a `statgpt`
-  server may name a data-query meta key
+  server may name a client meta key
 
 #### Scenario: A statgpt server without the key is rejected
 
-- **WHEN** a `statgpt` server entry sets `list_datasets_tool` and no `data_query_meta_key`
+- **WHEN** a `statgpt` server entry sets `list_datasets_tool` and no `client_meta_key`
 - **THEN** validation SHALL fail with an error naming that server and saying that a dataset server
   must name the key, because its data-query citations are resolved through it
+
+#### Scenario: The old field name is rejected
+
+- **WHEN** a `statgpt` server entry sets `data_query_meta_key` to `acme.example.org/client` and no
+  `client_meta_key`
+- **THEN** validation SHALL fail with the error a `statgpt` server without the key gets
 
 #### Scenario: A channel serving no datasets needs no key
 
 - **WHEN** a configuration carries a `generic_rag` server and no `statgpt` server
-- **THEN** validation SHALL pass, and no data-query meta key SHALL be configured
+- **THEN** validation SHALL pass, and no client meta key SHALL be configured
 
 ### Requirement: The data-query card's filter-line budget is per channel
 

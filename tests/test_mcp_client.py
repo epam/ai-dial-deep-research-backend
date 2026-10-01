@@ -13,6 +13,7 @@ from pytest import MonkeyPatch
 import dial_deep_research.app.mcp_tools as tools_mod
 from dial_deep_research.app.mcp_tools import build_mcp_client, load_mcp_tools
 from dial_deep_research.app.research.data_queries import DataQueryCapture, DataQueryStore
+from dial_deep_research.app.research.dataset_metadata import CatalogueTool
 from dial_deep_research.app_properties import (
     MCPClientSettings,
     MCPServerType,
@@ -55,7 +56,7 @@ def _dataset_server(server_name: str = "datasets") -> MCPClientSettings:
         server_type="statgpt",
         deployment_id="statgpt-mcp",
         list_datasets_tool="list_datasets",
-        data_query_meta_key="acme.example.org/client",
+        client_meta_key="acme.example.org/client",
         references_table=_table("Datasets", "name"),
     )
 
@@ -148,7 +149,7 @@ def test_every_connection_sets_its_own_timeouts(monkeypatch: MonkeyPatch) -> Non
 
 
 def test_the_dataset_server_gets_the_data_query_capture(monkeypatch: MonkeyPatch) -> None:
-    """Only a server naming a data-query meta key is captured from, with its own key."""
+    """Only a server naming a client meta key is captured from, with its own key."""
     monkeypatch.setattr(tools_mod.settings, "dial_url", HttpUrl("http://core:8080"))
     store = DataQueryStore()
 
@@ -317,7 +318,7 @@ def _dataset_metadata_server(
         deployment_id="statgpt-mcp",
         tools_to_include=tools_to_include or [],
         list_datasets_tool=tool_name,
-        data_query_meta_key="acme.example.org/client",
+        client_meta_key="acme.example.org/client",
         references_table=_table("Datasets", "name"),
     )
 
@@ -334,7 +335,7 @@ async def test_naming_the_list_datasets_tool_does_not_hide_it_from_the_agent(
 
     assert [t.name for t in loaded.agent_tools] == ["list_datasets", "query_datasets"]
     assert loaded.list_datasets_tool is not None
-    assert loaded.list_datasets_tool.name == "list_datasets"
+    assert loaded.list_datasets_tool.tool_name == "list_datasets"
 
 
 async def test_a_filter_omitting_the_list_datasets_tool_still_finds_it_for_the_app(
@@ -349,19 +350,23 @@ async def test_a_filter_omitting_the_list_datasets_tool_still_finds_it_for_the_a
 
     assert [t.name for t in loaded.agent_tools] == ["query_datasets"]
     assert loaded.list_datasets_tool is not None
-    assert loaded.list_datasets_tool.name == "list_datasets"
+    assert loaded.list_datasets_tool.tool_name == "list_datasets"
 
 
-async def test_the_list_datasets_tool_keeps_the_agents_error_handling(
+async def test_the_list_datasets_tool_is_carried_as_what_a_session_call_needs(
     monkeypatch: MonkeyPatch,
 ) -> None:
-    """It is the object the agent is offered, so its reader takes failures off the message."""
+    """The app calls it in a session of its own, so the agent's tool keeps its error handling."""
     _patch_get_tools(monkeypatch, {"datasets": [_fake_tool("list_datasets")]})
 
     loaded = await load_mcp_tools([_dataset_metadata_server()])
 
-    assert loaded.list_datasets_tool is not None
-    assert loaded.list_datasets_tool.handle_tool_error is _adapter_error_handler
+    assert loaded.list_datasets_tool == CatalogueTool(
+        server_name="datasets",
+        tool_name="list_datasets",
+        client_meta_key="acme.example.org/client",
+    )
+    assert loaded.agent_tools[0].handle_tool_error is _adapter_error_handler
 
 
 async def test_a_configured_dataset_tool_the_server_does_not_advertise_is_reported_as_absent(

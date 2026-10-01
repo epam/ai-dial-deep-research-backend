@@ -34,7 +34,7 @@ _PROPERTIES: dict = {
             "server_type": "statgpt",
             "deployment_id": "statgpt-mcp",
             "list_datasets_tool": "list_datasets",
-            "data_query_meta_key": "acme.example.org/client",
+            "client_meta_key": "acme.example.org/client",
             "references_table": {"title": "Datasets", "columns": [{"heading": "N", "key": "name"}]},
         }
     ],

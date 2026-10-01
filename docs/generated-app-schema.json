@@ -267,7 +267,7 @@
               }
             ],
             "default": null,
-            "description": "Name of this server's tool listing the datasets this channel exposes. The application calls it at the start of every turn and shows its answer to the models, so they know which datasets exist. It reads the same answer when it delivers a report, to learn a cited dataset's name and the address of its page, so a dataset citation becomes a pill that opens that page. The tool takes no arguments and answers with the whole catalogue. It stays available to the research agent whenever tools_to_include offers it, and the agent calls it when the application's own call failed. Required on a statgpt server, and only a statgpt server may set it: without it every dataset citation is delivered as a bare URN in square brackets, which names nothing the reader can open.",
+            "description": "Name of this server's tool listing the datasets this channel exposes. The application calls it at the start of every turn and shows its answer to the models, so they know which datasets exist. It reads the same answer when it delivers a report, to learn a cited dataset's name and the address of its page, so a dataset citation becomes a pill that opens that page, or the dataset's data explorer link when the payload under client_meta_key reports one. The tool takes no arguments and answers with the whole catalogue. It stays available to the research agent whenever tools_to_include offers it, and the agent calls it when the application's own call failed. Required on a statgpt server, and only a statgpt server may set it: without it every dataset citation is delivered as a bare URN in square brackets, which names nothing the reader can open.",
             "title": "List Datasets Tool"
           },
           "dataset_structure_tool": {
@@ -370,7 +370,7 @@
             "default": null,
             "description": "This server's glossary tools. Set it whenever the server exposes glossary tools that the research agent would be offered anyway, which is when tools_to_include is empty or already names them. With it, the application fetches the glossary at the start of every turn and shows it to the models, tells the report writer to use the glossary's terminology and how to cite a term, and lists the cited terms in the References section. Without it, none of that happens. The tools need not appear in tools_to_include. Only a statgpt server may set it."
           },
-          "data_query_meta_key": {
+          "client_meta_key": {
             "anyOf": [
               {
                 "type": "string"
@@ -380,8 +380,8 @@
               }
             ],
             "default": null,
-            "description": "The key under which this server's tool results carry their data-query records in the MCP result's _meta, for example acme.example.org/client. The key is built from a namespace set in the dataset server's own channel configuration, so copy it from there; it is matched character for character. The application reads, from the payload under this key, the address that opens each query in the data explorer, so a [data_query <id>] citation becomes a pill that opens the cited data and its dataset is listed in the References section. The dataset server's channel must also enable that payload. Required on a statgpt server, and only a statgpt server may set it: without it every data-query citation is delivered as a bare id in square brackets.",
-            "title": "Data Query Meta Key"
+            "description": "The key under which this server's tool results carry their client payload in the MCP result's _meta, for example acme.example.org/client. The key is built from a namespace set in the dataset server's own channel configuration, so copy it from there; it is matched character for character. The application reads two payloads under this key. From a data-query tool's results it reads the address that opens each query in the data explorer, so a [data_query <id>] citation becomes a pill that opens the cited data and its dataset is listed in the References section. From the list_datasets_tool result it reads each dataset's data explorer link, which a [dataset <id>] citation and the dataset's References row then open in place of the dataset's page. The dataset server's channel must enable the payload on both tools, with the same namespace. Required on a statgpt server, and only a statgpt server may set it: without it every data-query citation is delivered as a bare id in square brackets.",
+            "title": "Client Meta Key"
           },
           "references_table": {
             "description": "How this server's cited sources are listed in the report's References section: the sub-heading the table is written under, and its columns. The application builds that section itself from what the servers reported about the sources the report cites, so this is where a channel says what a row holds. Required on every server, whatever it serves: a server without a table is a server whose cited sources cannot be listed. The section is built for every report, and the report structure has no say in whether it is — it names only the sections the report writer writes.",

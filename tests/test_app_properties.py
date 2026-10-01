@@ -421,7 +421,7 @@ def test_one_server_of_each_type_is_accepted() -> None:
                 },
                 "deployment_id": "b",
                 "list_datasets_tool": "list_datasets",
-                "data_query_meta_key": "acme.example.org/client",
+                "client_meta_key": "acme.example.org/client",
             },
         ],
     }
@@ -492,7 +492,7 @@ def test_two_dataset_servers_are_rejected_too() -> None:
                 },
                 "deployment_id": "a",
                 "list_datasets_tool": "list_datasets",
-                "data_query_meta_key": "acme.example.org/client",
+                "client_meta_key": "acme.example.org/client",
             },
             {
                 "server_name": "stat-b",
@@ -503,7 +503,7 @@ def test_two_dataset_servers_are_rejected_too() -> None:
                 },
                 "deployment_id": "b",
                 "list_datasets_tool": "list_datasets",
-                "data_query_meta_key": "acme.example.org/client",
+                "client_meta_key": "acme.example.org/client",
             },
         ],
     }
@@ -538,7 +538,7 @@ def test_a_dataset_server_may_leave_the_file_sharing_tool_unset() -> None:
             },
             "deployment_id": "x",
             "list_datasets_tool": "list_datasets",
-            "data_query_meta_key": "acme.example.org/client",
+            "client_meta_key": "acme.example.org/client",
         }
     )
     assert server.file_sharing_tool is None
@@ -582,7 +582,7 @@ def test_one_server_may_name_a_file_sharing_tool() -> None:
                 },
                 "deployment_id": "b",
                 "list_datasets_tool": "list_datasets",
-                "data_query_meta_key": "acme.example.org/client",
+                "client_meta_key": "acme.example.org/client",
             },
         ],
     }
@@ -604,7 +604,7 @@ def test_no_server_naming_one_switches_inline_citations_off() -> None:
                 },
                 "deployment_id": "a",
                 "list_datasets_tool": "list_datasets",
-                "data_query_meta_key": "acme.example.org/client",
+                "client_meta_key": "acme.example.org/client",
             }
         ],
     }
@@ -694,7 +694,7 @@ def test_duplicate_server_names_are_rejected() -> None:
                 },
                 "deployment_id": "b",
                 "list_datasets_tool": "list_datasets",
-                "data_query_meta_key": "acme.example.org/client",
+                "client_meta_key": "acme.example.org/client",
             },
         ],
     }
@@ -1025,7 +1025,7 @@ def test_properties_expose_the_one_configured_title_source() -> None:
                 },
                 "deployment_id": "b",
                 "list_datasets_tool": "list_datasets",
-                "data_query_meta_key": "acme.example.org/client",
+                "client_meta_key": "acme.example.org/client",
             },
         ],
     }
@@ -1075,7 +1075,7 @@ def _dataset_server(**overrides: object) -> dict[str, object]:
         },
         "deployment_id": "b",
         "list_datasets_tool": "list_datasets",
-        "data_query_meta_key": "acme.example.org/client",
+        "client_meta_key": "acme.example.org/client",
         **overrides,
     }
 
@@ -1216,39 +1216,48 @@ def test_a_glossary_naming_one_tool_for_both_roles_is_rejected() -> None:
     assert "list_terms_tool and definitions_tool both name the same tool" in str(excinfo.value)
 
 
-# --- the data-query meta key ---------------------------------------------------------------------
+# --- the client meta key ------------------------------------------------------------------------
 
 
-def test_a_dataset_server_names_its_data_query_meta_key() -> None:
+def test_a_dataset_server_names_its_client_meta_key() -> None:
     data = {**VALID_PROPERTIES, "mcp_servers": [_document_server(), _dataset_server()]}
     properties = ApplicationProperties.model_validate(data)
-    assert properties.data_query_meta_key == "acme.example.org/client"
+    assert properties.client_meta_key == "acme.example.org/client"
 
 
-def test_a_document_server_naming_a_data_query_meta_key_is_rejected() -> None:
+def test_a_document_server_naming_a_client_meta_key_is_rejected() -> None:
     with pytest.raises(ValidationError) as excinfo:
         MCPClientSettings.model_validate(
-            _document_server(data_query_meta_key="acme.example.org/client")
+            _document_server(client_meta_key="acme.example.org/client")
         )
     message = str(excinfo.value)
-    assert "only a statgpt server may name a data-query meta key" in message
+    assert "only a statgpt server may name a client meta key" in message
     assert "'rag'" in message
 
 
-def test_a_dataset_server_without_the_data_query_meta_key_is_rejected() -> None:
+def test_a_dataset_server_without_the_client_meta_key_is_rejected() -> None:
     """Its data-query citations resolve through the key, so without it every one is plain text."""
     data = _dataset_server()
-    del data["data_query_meta_key"]
+    del data["client_meta_key"]
     with pytest.raises(ValidationError) as excinfo:
         MCPClientSettings.model_validate(data)
     message = str(excinfo.value)
-    assert "must name its data_query_meta_key" in message
+    assert "must name its client_meta_key" in message
     assert "'datasets'" in message
 
 
-def test_a_channel_serving_no_datasets_needs_no_data_query_meta_key() -> None:
+def test_a_dataset_server_setting_only_the_data_query_meta_key_is_rejected() -> None:
+    """A server entry ignores fields it does not define, so the key counts as not named."""
+    data = _dataset_server()
+    data["data_query_meta_key"] = data.pop("client_meta_key")
+    with pytest.raises(ValidationError) as excinfo:
+        MCPClientSettings.model_validate(data)
+    assert "must name its client_meta_key" in str(excinfo.value)
+
+
+def test_a_channel_serving_no_datasets_needs_no_client_meta_key() -> None:
     data = {**VALID_PROPERTIES, "mcp_servers": [_document_server()]}
-    assert ApplicationProperties.model_validate(data).data_query_meta_key is None
+    assert ApplicationProperties.model_validate(data).client_meta_key is None
 
 
 # --- the data-query card's filter-line budget ----------------------------------------------------
@@ -1378,7 +1387,7 @@ def test_the_references_tables_follow_the_configured_server_order() -> None:
                 "server_type": "statgpt",
                 "deployment_id": "statgpt-mcp",
                 "list_datasets_tool": "list_datasets",
-                "data_query_meta_key": "acme.example.org/client",
+                "client_meta_key": "acme.example.org/client",
                 "references_table": _DATASETS_TABLE,
             },
             _server(),

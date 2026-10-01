@@ -116,6 +116,13 @@ continue.
 
 A list with no datasets SHALL be a successful result, and no structure call SHALL be made.
 
+The successful attempt's result SHALL also be read for the explorer links the list-datasets tool
+MAY carry in its `_meta` (the **report-citations** contract of the tool states the payload and what
+a missing or unreadable one costs), so the catalogue the turn's citations resolve against carries
+them. Only the structured content decides whether an attempt failed: a missing or unreadable
+payload SHALL NOT fail an attempt and SHALL NOT be retried. The payload SHALL NOT reach the
+datasets section, so no model reads it.
+
 A cancelled turn SHALL NOT be retried or converted into the failure text: cancellation SHALL
 propagate.
 
@@ -129,6 +136,19 @@ propagate.
 - **WHEN** all three list-datasets attempts fail
 - **THEN** the datasets section SHALL carry the failure text, no structure call SHALL be made, and
   the turn SHALL continue to the preparation agent
+
+#### Scenario: The explorer links reach the catalogue and not the models
+
+- **WHEN** the first list-datasets attempt succeeds and its result carries explorer links under the
+  configured `_meta` key
+- **THEN** the catalogue the turn's citations resolve against SHALL carry those links, the datasets
+  section SHALL carry the structured result alone, and no second attempt SHALL be made
+
+#### Scenario: A result without explorer links is not retried
+
+- **WHEN** the first list-datasets attempt returns a structured result with a `datasets` array and
+  no `_meta` payload
+- **THEN** the app SHALL use that answer and SHALL make no second attempt
 
 ### Requirement: Dataset structures are requested concurrently, one call per dataset
 

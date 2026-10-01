@@ -328,7 +328,8 @@ class MCPClientSettings(BaseModel):
         " application calls it at the start of every turn and shows its answer to the models, so"
         " they know which datasets exist. It reads the same answer when it delivers a report, to"
         " learn a cited dataset's name and the address of its page, so a dataset citation becomes"
-        " a pill that opens that page. The tool takes no arguments and answers with the whole"
+        " a pill that opens that page, or the dataset's data explorer link when the payload under"
+        " client_meta_key reports one. The tool takes no arguments and answers with the whole"
         " catalogue. It stays available to the research agent whenever tools_to_include offers it,"
         " and the agent calls it when the application's own call failed."
         " Required on a statgpt server, and only a statgpt server may set it: without it every"
@@ -360,17 +361,20 @@ class MCPClientSettings(BaseModel):
         " tools_to_include. Only a statgpt server may set it.",
     )
 
-    data_query_meta_key: str | None = Field(
+    client_meta_key: str | None = Field(
         default=None,
-        description="The key under which this server's tool results carry their data-query"
-        " records in the MCP result's _meta, for example acme.example.org/client. The key is"
-        " built from a namespace set in the dataset server's own channel configuration, so copy it"
-        " from there; it is matched character for character. The application reads, from the"
-        " payload under this key, the address that opens each query in the data explorer, so a"
-        " [data_query <id>] citation becomes a pill that opens the cited data and its dataset is"
-        " listed in the References section. The dataset server's channel must also enable that"
-        " payload. Required on a statgpt server, and only a statgpt server may set it: without"
-        " it every data-query citation is delivered as a bare id in square brackets.",
+        description="The key under which this server's tool results carry their client payload"
+        " in the MCP result's _meta, for example acme.example.org/client. The key is built from a"
+        " namespace set in the dataset server's own channel configuration, so copy it from there;"
+        " it is matched character for character. The application reads two payloads under this"
+        " key. From a data-query tool's results it reads the address that opens each query in the"
+        " data explorer, so a [data_query <id>] citation becomes a pill that opens the cited data"
+        " and its dataset is listed in the References section. From the list_datasets_tool"
+        " result it reads each dataset's data explorer link, which a [dataset <id>] citation and"
+        " the dataset's References row then open in place of the dataset's page. The dataset"
+        " server's channel must enable the payload on both tools, with the same namespace."
+        " Required on a statgpt server, and only a statgpt server may set it: without it every"
+        " data-query citation is delivered as a bare id in square brackets.",
     )
 
     references_table: ReferencesTable = Field(
@@ -579,8 +583,8 @@ class MCPClientSettings(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def _validate_data_query_meta_key(self) -> MCPClientSettings:
-        """The data-query meta key belongs to the dataset server, and it must name one.
+    def _validate_client_meta_key(self) -> MCPClientSettings:
+        """The client meta key belongs to the dataset server, and it must name one.
 
         A `[data_query <id>]` marker names no server, so a second server reporting query ids
         would make a citation ambiguous — the reason only a `statgpt` server may set the key.
@@ -590,16 +594,16 @@ class MCPClientSettings(BaseModel):
         and a References row. A dataset server without it would deliver every such citation as a
         bare id, so it is refused here rather than at every delivery.
         """
-        if self.server_type == "statgpt" and not self.data_query_meta_key:
+        if self.server_type == "statgpt" and not self.client_meta_key:
             raise ValueError(
-                f"statgpt server {self.server_name!r} must name its data_query_meta_key: a"
+                f"statgpt server {self.server_name!r} must name its client_meta_key: a"
                 " dataset server must name the key, because its data-query citations are"
                 " resolved through the payload its tool results carry under it"
             )
-        if self.server_type != "statgpt" and self.data_query_meta_key:
+        if self.server_type != "statgpt" and self.client_meta_key:
             raise ValueError(
                 f"server {self.server_name!r} is {self.server_type}, and only a statgpt server"
-                " may name a data-query meta key: data queries are what the dataset server runs"
+                " may name a client meta key: data queries are what the dataset server runs"
             )
         return self
 
@@ -1078,17 +1082,13 @@ class ApplicationProperties(BaseModel):
         return ServerGlossary(server_name=server.server_name, tools=server.glossary)
 
     @property
-    def data_query_meta_key(self) -> str | None:
-        """The configured data-query meta key, or `None` when no dataset server is configured.
+    def client_meta_key(self) -> str | None:
+        """The configured client meta key, or `None` when no dataset server is configured.
 
         At most one server can name one, for the reason `list_datasets_tool` gives.
         """
         return next(
-            (
-                server.data_query_meta_key
-                for server in self.mcp_servers
-                if server.data_query_meta_key
-            ),
+            (server.client_meta_key for server in self.mcp_servers if server.client_meta_key),
             None,
         )
 
