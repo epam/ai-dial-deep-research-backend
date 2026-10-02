@@ -198,8 +198,9 @@ Judge only what the draft shows. Report a violation for:
   citation and a reason for the difference, or the statement that the sources do not explain it.
 
 A figure computed from values of different facts, such as the difference between two indicators'
-growth rates, merges no values for one fact, and this check does not cover it. Whether a figure
-carrying two citations hides a disagreement is not yours to judge: you cannot see the sources.""",
+growth rates, merges no values for one fact: this check does not cover it, and the check "No
+calculations" does. Whether a figure carrying two citations hides a disagreement is not yours to
+judge: you cannot see the sources.""",
     ),
     QualityRule(
         name="Dates",

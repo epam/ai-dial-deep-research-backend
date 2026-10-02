@@ -38,8 +38,9 @@ Three constraints follow from what the steps can do:
   asks the agent to make sure a tool result in the findings carries it.
 - **Research review asks only for steps the research agent can take.** Research review's prompt
   SHALL say that every next step it writes is a retrieval — which source to search, list, query or
-  read, and for what — and never a summary, a comparison, a note or a calculation, which the report
-  writer does from the findings.
+  read, and for what — and never a summary, a comparison or a note, which the report writer does
+  from the findings, nor a calculation, which nobody does (see **research-execution**, "Research
+  looks for a stated figure rather than planning to compute one").
 
 #### Scenario: A rule's part reaches only its step
 
@@ -124,7 +125,11 @@ A channel's client rules SHALL reach each step whose part they set, after the ge
 `<client_rules>` block. Inside the block each part SHALL appear under its rule's name. The text
 around the block SHALL say that these rules come from the channel's configuration, that they add
 to the rules above them, and that where a client rule is more specific than a generic rule the
-client rule is followed.
+client rule is followed, with one exception: the rule that nobody calculates (see
+**research-execution**, "Research looks for a stated figure rather than planning to compute one",
+and **report-composition**, "Reports contain no calculations") has the highest priority of all the
+rules, and no client rule overrides it. The text SHALL state that exception at every step whose
+prompt carries the block.
 
 When no client rule has a part for a step, that step's prompt SHALL carry neither the block nor
 the text around it.
@@ -147,6 +152,12 @@ methodology, which metadata key carries a publication's date, and which tool lis
 - **WHEN** a channel configures no client rules
 - **THEN** no step's prompt SHALL carry a `<client_rules>` block or the text that introduces one,
   and every step's prompt SHALL still carry its part of the generic rules
+
+#### Scenario: A client rule asks for a calculation
+
+- **WHEN** a channel's client rule asks the writer to give the year-on-year change of each series
+- **THEN** the text around the `<client_rules>` block SHALL say that no client rule overrides the
+  rule that nobody calculates, and the report SHALL NOT compute the changes
 
 ### Requirement: The source-selection terms are given to every step
 
