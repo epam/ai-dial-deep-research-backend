@@ -46,8 +46,16 @@ def test_the_plan_never_asks_for_a_calculation() -> None:
     assert "look for a source that states the figure itself" in prompt
 
 
+def test_the_plan_rule_holds_when_the_user_insists() -> None:
+    prompt = _words(PREP_AGENT_SYSTEM)
+    assert "This holds even when the user insists on a calculation" in prompt
+    assert "never promise a calculated result" in prompt
+
+
 def test_query_review_never_asks_how_to_compute() -> None:
-    assert "Never ask how a figure should be computed" in _words(QUERY_REVIEW_SYSTEM)
+    prompt = _words(QUERY_REVIEW_SYSTEM)
+    assert "is a clear subject" in prompt
+    assert "Never ask about such a request" in prompt
 
 
 def test_the_research_agent_looks_for_a_stated_figure() -> None:

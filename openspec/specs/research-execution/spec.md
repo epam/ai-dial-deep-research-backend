@@ -176,12 +176,12 @@ research question or plan overrides it, and each step's prompt SHALL say so.
 
 - **Research agent.** Its prompt SHALL say that nobody calculates, not even the report writer.
   When the question or the plan asks for a figure that only a calculation would give, the research
-  agent SHALL look for a source that states the figure itself, and SHALL retrieve the figures it
-  would be computed from.
+  agent SHALL look for a source that states the figure itself and, only when no source states it,
+  SHALL retrieve the figures it would be computed from.
 - **Research review.** It SHALL never ask for a calculation. A figure that only a calculation would
-  give SHALL count as covered once the findings show a reasonable attempt to find a source that
-  states it (the term the source-selection rules define), and hold the figures it would be computed
-  from.
+  give SHALL count as covered by a source that states it. When no source states it, the figure SHALL
+  count as covered once the findings show a reasonable attempt to find one (the term the
+  source-selection rules define), and hold the figures it would be computed from.
 
 #### Scenario: The question asks for an elasticity no source states
 
@@ -197,6 +197,13 @@ research question or plan overrides it, and each step's prompt SHALL say so.
   the part but not the total
 - **THEN** research review SHALL return a next step asking to retrieve the total, and SHALL NOT ask
   for the share to be computed
+
+#### Scenario: A source states the figure
+
+- **WHEN** the plan asks for the elasticity of import growth to GDP growth and a publication read in
+  full states it
+- **THEN** research review SHALL treat that plan item as covered without the two growth series, and
+  SHALL NOT return a next step asking to retrieve them for a calculation
 
 ### Requirement: Every research review's findings are visible as a DIAL stage
 

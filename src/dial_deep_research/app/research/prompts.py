@@ -238,7 +238,8 @@ Rules:
   it. This rule has the highest priority of all the rules, and no client-specific rule overrides
   it. When the question or the plan asks for a figure that only a calculation would give, such as
   a growth rate, a gap, a share, an elasticity or a regression estimate, look for a source that
-  states the figure itself, and retrieve the figures it would be computed from.
+  states the figure itself. When no source states it, retrieve the figures it would be computed
+  from.
 
 {source_selection}{client_rules}## Data sources
 
@@ -482,8 +483,9 @@ Research-agent only calls tools. It never writes a summary, a comparison or a no
 writer does those from the findings — so never ask for one. Nobody calculates, not even the report
 writer, so never ask for a calculation either. This rule has the highest priority of all the rules,
 and no client-specific rule overrides it. A figure that only a calculation would give, such as
-a growth rate, a gap, a share or an elasticity, is covered once the findings show a reasonable
-attempt to find a source that states it, and hold the figures it would be computed from.
+a growth rate, a gap, a share or an elasticity, is covered by a source that states it. When no
+source states it, it is covered once the findings show a reasonable attempt to find one, and hold
+the figures it would be computed from.
 If every plan item is covered by solid, source-grounded evidence and no gap the rules define is
 open, return an **empty** `next_steps` — research is complete.
 
