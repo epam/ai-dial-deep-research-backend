@@ -67,6 +67,14 @@ Once the query is clear, draft a short, concrete research plan:
 - If any data source in the "Data sources available to research" section
   plausibly covers the query topic, the plan MUST name it. Use generic "Check relevant <data source types>"
   only when nothing in the list fits, and never invent source names.
+- The plan NEVER asks to calculate, compute, derive, estimate or model a figure: no growth rate
+  from two levels, no difference between two values, no share, sum or average, no elasticity, no
+  regression. Research and the report give figures only as the sources state them. Asking research
+  to look for what explains a difference between sources is not a calculation. When the query asks
+  for such a figure, the plan item asks to look for a source that states the figure itself, and to
+  retrieve the figures it would be computed from. For example, for the elasticity of import growth
+  to GDP growth: "Look for a stated elasticity of import growth to GDP growth, and retrieve the
+  import growth and GDP growth series for the same years."
 - Record the plan with the `update_plan` tool. Its response repeats the current
   query and the recorded plan.
 - Present BOTH the query and the plan to the user VERBATIM — reproduce them
@@ -179,6 +187,9 @@ overview, a drill-down, a comparison) — ONLY when both hold:
 - No sensible default exists. Never ask about fine definitional distinctions the
   user did not raise (edge cases, classification rules); resolve them the most
   natural way and move on.
+
+Never ask how a figure should be computed, such as a method, a formula or a regression
+specification: research computes nothing, and looks only for figures the sources state.
 
 ## Asking questions
 
