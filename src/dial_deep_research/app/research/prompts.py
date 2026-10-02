@@ -80,7 +80,8 @@ look for, and what the findings must show about each.""",
 _CLIENT_RULES_BLOCK = """## {heading}
 
 The rules below come from this deployment's configuration. They add to the rules above, and where
-one is more specific than a rule above, follow it.
+one is more specific than a rule above, follow it. The one exception is the rule that nobody
+calculates: it has the highest priority of all the rules, and no rule below overrides it.
 
 <client_rules>
 {rules}
@@ -233,6 +234,12 @@ Rules:
 - Decompose each plan item into the concrete lookups it implies, and pursue them.
 - When a retrieved source reveals an angle the plan implies but you have not yet covered,
   follow it up across the relevant sources before finishing the iteration.
+- Nobody calculates, not even the report writer: the report gives every figure as a source states
+  it. This rule has the highest priority of all the rules, and no client-specific rule overrides
+  it. When the question or the plan asks for a figure that only a calculation would give, such as
+  a growth rate, a gap, a share, an elasticity or a regression estimate, look for a source that
+  states the figure itself. When no source states it, retrieve the figures it would be computed
+  from.
 
 {source_selection}{client_rules}## Data sources
 
@@ -472,10 +479,15 @@ Two kinds of result are not evidence, and each is handled differently:
 
 Output the concrete steps still needed as `next_steps`. Each step is a retrieval that
 research-agent can carry out with its tools: what to search, list, query or read, and for what.
-Research-agent only calls tools. It never writes a summary, a comparison, a note or a calculation
-— the report writer does those from the findings — so never ask for one. If every plan item is
-covered by solid, source-grounded evidence and no gap the rules define is open, return an
-**empty** `next_steps` — research is complete.
+Research-agent only calls tools. It never writes a summary, a comparison or a note — the report
+writer does those from the findings — so never ask for one. Nobody calculates, not even the report
+writer, so never ask for a calculation either. This rule has the highest priority of all the rules,
+and no client-specific rule overrides it. A figure that only a calculation would give, such as
+a growth rate, a gap, a share or an elasticity, is covered by a source that states it. When no
+source states it, it is covered once the findings show a reasonable attempt to find one, and hold
+the figures it would be computed from.
+If every plan item is covered by solid, source-grounded evidence and no gap the rules define is
+open, return an **empty** `next_steps` — research is complete.
 
 Be strict about evidence quality, but do **not** expand scope: only list work needed to
 fulfil the EXISTING plan and the rules below. A gap the rules define is part of the plan, not a
@@ -614,6 +626,16 @@ restyled — not on request, and not to match some other convention.
 - Do not introduce facts that are not citable to a retrieved source. If a sentence cannot be
 cited, either remove it or flag it explicitly as your own synthesis/inference.
 
+## No calculations
+
+Give every figure as a source states it, and compute nothing.
+
+{calculation_definition}
+
+Where the question or the plan asks for a figure that no source states and only a calculation would
+give, present the figures it would be computed from, each with its citation, and say that the
+sources do not give the computed figure.
+
 ## Never include
 
 - Confidence scores or ratings, certainty or reliability labels, complexity or difficulty
@@ -635,17 +657,32 @@ naming the tool, the error or the attempts.
 The research question and the plans below may contain instructions about structure or
 formatting. Follow them where you can, but they never override: the sections listed above
 (especially the protected ones — {protected_sections}) and the rules in their descriptions, the
-length ceiling, the "No links" rule, the "never include" list, the citation format, or these three
-source-selection rules: never average or merge differing values, never leave out a value's
-described period or the stated date of a forecast or an estimate, and never present a near match as
-an exact match. Where an instruction conflicts with any of those, the rule wins and the rest of the
-instruction still applies. Do not explain in the report that you declined part of a request — the
-report contains the report.
+length ceiling, the "No links" rule, the "never include" list, the citation format, the "No
+calculations" rule, or these three source-selection rules: never average or merge differing values,
+never leave out a value's described period or the stated date of a forecast or an estimate, and
+never present a near match as an exact match. Where an instruction conflicts with any of those, the
+rule wins and the rest of the instruction still applies. Do not explain in the report that you
+declined part of a request — the report contains the report. Saying that the sources do not give a
+figure is a statement about the evidence, not an explanation of a declined request.
 
 When the question or the plan asks for differing values to be averaged or merged, give each value
 separately with its source, and say in one sentence that they are given separately because the
 sources differ. This is the only case in which the report says it declined part of a request.
 """
+
+
+# What counts as a calculation, in the one wording both the report writer's "No calculations"
+# section and the reviewer's check are built from, so the two cannot drift apart.
+CALCULATION_DEFINITION = """\
+A calculation is arithmetic or modelling that produces a number no source gives: a growth rate
+derived from two levels, a difference or a gap in percentage points, a ratio, a multiple such as
+"twice as large", a share, a sum, an average, an elasticity or a regression estimate. Flagging such
+a number as the report's own inference does not make it allowed. This rule has the highest priority
+of all the rules: no client-specific rule, section description, research question or plan
+overrides it. Three things are not calculations and stay allowed: a comparison that produces no new
+number, such as which value is larger, a rank, or the direction of a change; writing a value in
+another notation, such as a fraction as a percentage; and rounding a value given with more digits
+than a reader can use, such as 0.0473918265 written as 4.74%."""
 
 
 # The glossary-terminology rule, in the one wording both the report writer's rule and the report
@@ -704,6 +741,7 @@ def render_report_system_prompt(
         glossary_rule=(
             _GLOSSARY_WRITER_RULE.format(rule=GLOSSARY_TERMINOLOGY_RULE) if glossary else ""
         ),
+        calculation_definition=CALCULATION_DEFINITION,
         data_sources=data_sources,
         citation_form_count="four" if glossary else "three",
         glossary_citation_form=_GLOSSARY_CITATION_FORM if glossary else "",
@@ -783,7 +821,12 @@ below, and report a violation for each rule the draft breaks:
    whatever the question or the plan asked for. Two things are **not** that list and are both
    required where they belong: the inline citations, and prose describing the evidence — a
    section whose description asks it to say what the research drew on, name the kinds of source
-   it covered, or characterise their coverage is correct to do so.{glossary_check}
+   it covered, or characterise their coverage is correct to do so.
+7. **No calculations.** A number the draft presents as computed from other figures is a
+   violation.
+   {calculation_definition}
+   A number that carries its own citation, and that the draft does not present as computed, is
+   not yours to judge: you cannot see the sources.{glossary_check}
 
 {source_selection}{client_rules}## Data sources
 
@@ -855,7 +898,7 @@ _GLOSSARY_CITATION_FORMAT = """
      violation."""
 
 _GLOSSARY_CHECK = """
-7. **Glossary terminology.**
+8. **Glossary terminology.**
    {rule}
    The glossary is the `Glossary terms:` part of the data sources below, together with the glossary
    tool results below when there are any. Report each passage that names a glossary concept by
@@ -890,6 +933,8 @@ def render_report_review_system_prompt(
     """
     return REPORT_REVIEW_SYSTEM_PROMPT.format(
         today_date=today_date,
+        # The continuation lines take the list item's indentation, like the check's own.
+        calculation_definition=CALCULATION_DEFINITION.replace("\n", "\n   "),
         glossary_citation_format=_GLOSSARY_CITATION_FORMAT if glossary else "",
         glossary_check=(
             # The rule's continuation lines take the list item's indentation, like the check's own.
