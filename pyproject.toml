@@ -1,6 +1,6 @@
 [project]
 name = "dial-deep-research"
-version = "0.4.0rc2"
+version = "0.4.0rc3"
 description = "DIAL-native agent for deep research. Uses DIAL Generic RAG MCP server as a data source."
 readme = "README.md"
 authors = [{ name = "EPAM RAIL", email = "SpecialEPM-DIALDevTeam@epam.com" }]
