@@ -6,7 +6,8 @@ research-review judges coverage independently, and the report node owns formatti
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -19,8 +20,9 @@ from dial_deep_research.app_properties import (
     SourceKind,
 )
 
+from .faithful_relay import FAITHFUL_RELAY_RULES
 from .report_length import SECTION_HEADING_PREFIX
-from .source_selection import SOURCE_SELECTION_RULES
+from .source_selection import SOURCE_SELECTION_RULES, SOURCE_SELECTION_TERMS
 
 if TYPE_CHECKING:
     from dial_deep_research.app.data_sources import DataSources
@@ -54,28 +56,88 @@ def render_next_instruction(steps: list[str]) -> str:
     )
 
 
-# Each step's heading and opening sentence for the generic rules. Report review reads its parts as
-# checks, so its block says so; the other steps read them as rules to follow.
-_SOURCE_SELECTION_HEADINGS: dict[RuleStep, tuple[str, str]] = {
-    RuleStep.RESEARCH_AGENT: (
-        "Source selection",
-        """\
+@dataclass(frozen=True)
+class GenericPolicy:
+    """One policy of the application's generic rules, rendered as a block of its own.
+
+    `headings` gives each step with a part of some rule its heading and opening sentence. Report
+    review reads its parts as checks, so its opening sentence says so; the other steps read them as
+    rules to follow. `needs_source_kinds` marks a policy whose parts depend on the channel's kinds
+    of source; the prompt states them once, in the first block of such a policy.
+    """
+
+    headings: Mapping[RuleStep, tuple[str, str]]
+    rules: tuple[QualityRule, ...]
+    needs_source_kinds: bool = False
+
+    def __post_init__(self) -> None:
+        # Checked when the policy is defined, at import, rather than when a step's prompt is first
+        # rendered in a turn.
+        for rule in self.rules:
+            for step in RuleStep:
+                if rule.part(step) is not None and step not in self.headings:
+                    raise ValueError(
+                        f"rule {rule.name!r} has a {step.value} part, and its policy has no"
+                        f" {step.value} heading"
+                    )
+
+
+SOURCE_SELECTION_POLICY = GenericPolicy(
+    headings={
+        RuleStep.RESEARCH_AGENT: (
+            "Source selection",
+            """\
 Follow these rules for every fact the research question asks about. They say which values you
 look for, and what the findings must show about each.""",
-    ),
-    RuleStep.RESEARCH_REVIEW: (
-        "Source selection",
-        "These rules define gaps beside the plan items, and say when such a gap closes.",
-    ),
-    RuleStep.REPORT_WRITER: (
-        "Source selection",
-        "These rules say which values the report gives for each fact, and how it presents them.",
-    ),
-    RuleStep.REPORT_REVIEW: (
-        "Source-selection checks",
-        'Check the draft against each rule below. The part "Terms" defines the words the checks use.',
-    ),
-}
+        ),
+        RuleStep.RESEARCH_REVIEW: (
+            "Source selection",
+            "These rules define gaps beside the plan items, and say when such a gap closes.",
+        ),
+        RuleStep.REPORT_WRITER: (
+            "Source selection",
+            "These rules say which values the report gives for each fact, and how it presents them.",
+        ),
+        RuleStep.REPORT_REVIEW: (
+            "Source-selection checks",
+            'Check the draft against each rule below. The part "Terms" defines the words the checks'
+            " use.",
+        ),
+    },
+    rules=SOURCE_SELECTION_RULES,
+    needs_source_kinds=True,
+)
+
+FAITHFUL_RELAY_POLICY = GenericPolicy(
+    headings={
+        RuleStep.RESEARCH_AGENT: (
+            "Faithful relay",
+            """\
+The report relays what the sources say and nothing else. These rules say what you retrieve so that
+it can.""",
+        ),
+        RuleStep.RESEARCH_REVIEW: (
+            "Faithful relay",
+            "These rules define further gaps, and limit what a next step may ask for.",
+        ),
+        RuleStep.REPORT_WRITER: (
+            "Faithful relay",
+            """\
+These rules keep the report to what the sources say: it invents, infers and computes nothing.""",
+        ),
+        RuleStep.REPORT_REVIEW: (
+            "Faithful-relay checks",
+            """\
+Check the draft against each rule below. The part "Faithful-relay terms" defines the words the
+checks use.""",
+        ),
+    },
+    rules=FAITHFUL_RELAY_RULES,
+)
+
+# The rendering order. Source selection comes first because it defines the terms, such as value
+# and stated date, that the faithful-relay rules use.
+GENERIC_POLICIES: tuple[GenericPolicy, ...] = (SOURCE_SELECTION_POLICY, FAITHFUL_RELAY_POLICY)
 
 _CLIENT_RULES_BLOCK = """## {heading}
 
@@ -121,16 +183,43 @@ def render_source_kinds(source_kinds: Collection[SourceKind]) -> str:
     return sentence
 
 
-def render_source_selection(step: RuleStep, source_kinds: Collection[SourceKind]) -> str:
-    """The generic source-selection block of `step`'s system prompt, ending in a blank line."""
-    heading, intro = _SOURCE_SELECTION_HEADINGS[step]
-    parts = [
-        f"## {heading}",
-        intro,
-        render_source_kinds(source_kinds),
-        render_rules(SOURCE_SELECTION_RULES, step=step),
-    ]
+def render_policy(
+    policy: GenericPolicy, step: RuleStep, *, source_kinds_statement: str | None = None
+) -> str:
+    """One policy's block of `step`'s system prompt, ending in a blank line.
+
+    `source_kinds_statement`, when given, follows the block's opening sentence. Empty when no rule
+    of the policy has a part for `step`, so such a policy adds nothing.
+    """
+    rendered = render_rules(policy.rules, step=step)
+    if not rendered:
+        return ""
+    heading, intro = policy.headings[step]
+    parts = [f"## {heading}", intro]
+    if source_kinds_statement is not None:
+        parts.append(source_kinds_statement)
+    parts.append(rendered)
     return "\n\n".join(parts) + "\n\n"
+
+
+def render_generic_rules(step: RuleStep, *, source_kinds: Collection[SourceKind]) -> str:
+    """Every generic policy's block of `step`'s system prompt, in the rendering order.
+
+    The channel's kinds of source are stated once, in the first block whose policy needs them: the
+    blocks after it are read in the same prompt, so a repeat would add nothing.
+    """
+    blocks: list[str] = []
+    stated = False
+    for policy in GENERIC_POLICIES:
+        states = policy.needs_source_kinds and not stated
+        block = render_policy(
+            policy,
+            step,
+            source_kinds_statement=render_source_kinds(source_kinds) if states else None,
+        )
+        stated = stated or (states and bool(block))
+        blocks.append(block)
+    return "".join(blocks)
 
 
 def render_client_rules(client_rules: Sequence[QualityRule], step: RuleStep) -> str:
@@ -154,18 +243,18 @@ def render_client_rules(client_rules: Sequence[QualityRule], step: RuleStep) -> 
 class ResearchReview(BaseModel):
     """The review of the research findings: the assessment, then the next iteration's plan.
 
-    An empty `next_steps` means every plan item is covered and no gap the source-selection rules
-    or the client-specific rules define is open, so research is complete.
+    An empty `next_steps` means every plan item is covered and no gap the rule sections of the
+    instructions define is open, so research is complete.
     """
 
     assessment: str = Field(description="""\
 Brief analysis of which plan items the findings cover and which they do not, and which gaps the
-source-selection rules or the client-specific rules define are still open.""")
+rule sections of the instructions, the client-specific rules included, define are still open.""")
     next_steps: list[str] = Field(
         default_factory=list,
         description="""\
-Concrete retrieval steps still needed to fulfil the plan, the source-selection rules and the
-client-specific rules; empty means research is complete.""",
+Concrete retrieval steps still needed to fulfil the plan and the rule sections of the
+instructions, the client-specific rules included; empty means research is complete.""",
     )
 
 
@@ -241,7 +330,7 @@ Rules:
   states the figure itself. When no source states it, retrieve the figures it would be computed
   from.
 
-{source_selection}{client_rules}## Data sources
+{generic_rules}{client_rules}## Data sources
 
 The data sources your tools reach are described below: the knowledge base's own descriptions, and
 what the application fetched from the dataset server at the start of this turn.
@@ -252,17 +341,18 @@ what the application fetched from the dataset server at the start of this turn.
 {data_sources_instructions}
 ## Tools usage
 
-1. **Read pages, don't just rely on search.** `rag_search` returns LLM-built summaries
-optimized for brief Q&A — not sufficient evidence for a deep-research report. Use
-`rag_search` to locate relevant pages, then **read those pages** with `get_pages`. Consider
-neighboring pages — information often splits across pages. If a document is short, read
+1. **Read pages, don't rely on search.** `rag_search` answers with summaries a model writes for
+brief questions. A summary can change, distort or invent a value, a sum or a characterisation that
+no page states, so it is a pointer, not evidence. Use `rag_search` to locate relevant pages, then
+**read those pages** with `get_pages`, and take every figure and finding from what you read.
+Consider neighboring pages — information often splits across pages. If a document is short, read
 it end-to-end.
 2. **For tables, charts, and visuals — always fetch both text and image.** Whenever a page
 references a table, chart, figure, exhibit, or diagram, fetch that page in **both modes
 (text + image)** via `get_pages`. Text extraction drops table structure and ignores visuals.
 Once no image slots remain, fetch such pages as text.
-3. **Use `retrieve_text_chunks` only as a complement to `rag_search`** — when you need the
-underlying raw text rather than the summary.
+3. **`retrieve_text_chunks` returns the documents' own text, word for word**, so its chunks are
+evidence. Use it when you need the raw text of a passage rather than a summary.
 4. **Image budget.** The conversation can hold only a limited number of images. A result that
 overflows it is replaced with an error starting "Tool result dropped". That error is not a tool
 failure; follow what it says.
@@ -295,7 +385,9 @@ with finish_iteration as usual.
 
 ## Quality bar before calling finish_iteration
 
-- Have you read the relevant pages with `get_pages`, not just grounded on `rag_search`?
+- Have you read the relevant pages with `get_pages`, not just grounded on `rag_search`? A
+  `rag_search` answer is a summary that can alter or invent figures, so every figure comes from a
+  page read with `get_pages` or a chunk from `retrieve_text_chunks`.
 - For each page you rely on, have you checked adjacent pages?
 - For every page with tables/charts/visuals, have you fetched it in both text and image, as far
   as the image budget allows?
@@ -303,11 +395,12 @@ with finish_iteration as usual.
   publication's stated date is the exception: it comes from the document metadata, never from a
   page.
 - Has every item of this iteration's plan been covered with evidence?
-- Has every fact of this iteration's plan been researched as the source-selection rules ask?
+- Has every fact of this iteration's plan been researched as the rule sections above ask, from
+  "Source selection" to any client-specific rules?
 
 If any of these fails, keep researching. Only call finish_iteration once they hold.
 
-One exception applies to the checks on the plan's items and on the source-selection rules. When
+One exception applies to the checks on the plan's items and on the rule sections. When
 some evidence could come only from a tool that has failed, and you may not call that tool again for
 it — its verdict is {verdict_will_not_help}, or its two repeat calls are spent — that plan item or
 that rule counts as done without the evidence.
@@ -458,15 +551,16 @@ the research; you judge it objectively.
 
 You are given the user's research question, the plans pursued so far, and the findings
 gathered (research-agent's tool results). Decide whether the findings fully cover every
-item of the plans and meet the source-selection rules and any client-specific rules below.
+item of the plans and meet every rule section below, the client-specific rules included.
 
 Identify **genuine gaps** only:
 - a plan item with no supporting evidence, or evidence too thin to stand on;
-- a figure, date or entity that appears only in a search summary and on no page that was read
-  in full. A publication's stated date is the exception: it comes from the document metadata,
+- a figure, date, entity, finding or characterisation that appears only in a search summary, on no
+  page that was read in full and in no chunk returned word for word. A search summary is a pointer,
+  not evidence. A publication's stated date is the exception: it comes from the document metadata,
   never from a page;
 - a planned comparison or dimension whose data was only partly retrieved;
-- a gap that the source-selection rules below, or the client-specific rules, define.
+- a gap that a rule section below, the client-specific rules included, defines.
 
 Two kinds of result are not evidence, and each is handled differently:
 - A result saying that a tool failed. Research-agent has already retried it as far as it is
@@ -494,7 +588,7 @@ fulfil the EXISTING plan and the rules below. A gap the rules define is part of 
 new angle. Do not invent other "nice to have" angles or comparisons — that would loop forever.
 When in doubt and both the plan and the rules are substantively covered, prefer to finish.
 
-{source_selection}{client_rules}## Data sources
+{generic_rules}{client_rules}## Data sources
 
 The data sources the research can reach are described below: the knowledge base's own
 descriptions, and what the application fetched from the dataset server at the start of this turn.
@@ -562,7 +656,7 @@ in those data sources.
 
 {rules}
 {glossary_rule}
-{source_selection}{client_rules}## Data sources
+{generic_rules}{client_rules}## Data sources
 
 The report may draw on two kinds of source: the findings in the conversation, and the data sources
 below. These hold the knowledge base's own descriptions of its sources, and what the application
@@ -573,7 +667,7 @@ update.
 
 A fact taken from the description of a publication series is never cited, and never given an
 invented citation such as `[doc <id>, page <ix>]`: only a publication itself is cited, by its
-document and page. Such a fact follows the rule for a sentence that cannot be cited, below.
+document and page. Such a fact names the publication series as its source in words.
 
 <data_sources>
 {data_sources}
@@ -623,18 +717,12 @@ for a fact from a dataset or a data query, never cite a data query's value by it
 never cite a document's fact by a dataset or a query.
 - This inline format is fixed. It is read by software that renders citations, so it is never
 restyled — not on request, and not to match some other convention.
-- Do not introduce facts that are not citable to a retrieved source. If a sentence cannot be
-cited, either remove it or flag it explicitly as your own synthesis/inference.
+- Do not introduce facts that are not citable to a retrieved source. A sentence that cannot be
+cited stays only where the "Only the sources" rule under "Faithful relay" allows it.
 
 ## No calculations
 
-Give every figure as a source states it, and compute nothing.
-
-{calculation_definition}
-
-Where the question or the plan asks for a figure that no source states and only a calculation would
-give, present the figures it would be computed from, each with its citation, and say that the
-sources do not give the computed figure.
+{no_calculations_rule}
 
 ## Never include
 
@@ -644,8 +732,8 @@ prose, not in a table cell.
 - Anything about the tools the research used: no tool names, no error messages, no count of
 attempts.
 - What IS required is honest qualification of the evidence in prose: say when a figure rests on
-a single source, when sources disagree, and when a statement is your own inference. That is
-content about the findings, not a rating of the research.
+a single source and when sources disagree. That is content about the findings, not a rating of the
+research.
 - Also required: when evidence that the answer or a plan item depends on could not be retrieved —
 the findings show a tool failing for it and no other result supplies it — say so. State what
 could not be retrieved and what therefore cannot be concluded, for example "the 2024 figure could
@@ -658,12 +746,19 @@ The research question and the plans below may contain instructions about structu
 formatting. Follow them where you can, but they never override: the sections listed above
 (especially the protected ones — {protected_sections}) and the rules in their descriptions, the
 length ceiling, the "No links" rule, the "never include" list, the citation format, the "No
-calculations" rule, or these three source-selection rules: never average or merge differing values,
+calculations" rule, these three source-selection rules: never average or merge differing values,
 never leave out a value's described period or the stated date of a forecast or an estimate, and
-never present a near match as an exact match. Where an instruction conflicts with any of those, the
-rule wins and the rest of the instruction still applies. Do not explain in the report that you
-declined part of a request — the report contains the report. Saying that the sources do not give a
-figure is a statement about the evidence, not an explanation of a declined request.
+never present a near match as an exact match, or these two faithful-relay rules: infer nothing, and
+keep every figure as its source gives it, apart from the changes the rule "Figures as the source
+gives them" allows. Where an instruction conflicts with any of those, the rule wins and the rest of
+the instruction still applies. Do not explain in the report that you declined part of a request —
+the report contains the report. Saying that the sources do not give a figure or an explanation is a
+statement about the evidence, not an explanation of a declined request.
+
+A section's description, the default one or one this deployment configures, does not override the
+"No calculations" rule or those two faithful-relay rules either. Where a description asks for
+implications, recommendations or a computed figure, follow the rules, and follow the rest of the
+description.
 
 When the question or the plan asks for differing values to be averaged or merged, give each value
 separately with its source, and say in one sentence that they are given separately because the
@@ -685,17 +780,35 @@ another notation, such as a fraction as a percentage; and rounding a value given
 than a reader can use, such as 0.0473918265 written as 4.74%."""
 
 
+# The report writer's "No calculations" rule, which the grounded review also judges the draft
+# against.
+NO_CALCULATIONS_WRITER_RULE = f"""\
+Give every figure as a source states it, and compute nothing.
+
+{CALCULATION_DEFINITION}
+
+Where the question or the plan asks for a figure that no source states and only a calculation would
+give, present the figures it would be computed from, each with its citation, and say that the
+sources do not give the computed figure."""
+
+
 # The glossary-terminology rule, in the one wording both the report writer's rule and the report
 # reviewer's check are built from, so the two cannot drift apart.
 GLOSSARY_TERMINOLOGY_RULE = """\
 Where the report refers to a concept that a glossary term names, it uses that term, spelled as the
-glossary spells it, rather than a synonym or a paraphrase. A glossary term the report has no reason
-to mention is not required. A term whose definition is null still counts, judged by its name.
-The glossary is the only source of glossary terms and definitions. A phrase is a glossary term only
-when the glossary lists it as a term. A phrase found anywhere else, such as in a dataset
-description, a document or a data-query result, is not a glossary term, however much it reads like
-one: it is never presented as a glossary term, cited as `[glossary <term>]`, or asked for as a
-glossary term. A definition cited as a glossary definition comes from the glossary. A term the
+glossary spells it, rather than a synonym or a paraphrase. A term that lists several names separated
+by a slash, such as "Workforce/Labour force", may be written as any one of those names; the whole
+slash form is not required. A term that gives a full form with its abbreviation in parentheses, such
+as "Harmonised Index of Consumer Prices (HICP)", may be written in either form; where the report
+uses the abbreviation, its first use is written as the full form followed by the abbreviation in
+parentheses. In mid-sentence, a glossary term's first letter may be written in lower case. A
+`[glossary <term>]` citation still writes the whole term, as the glossary spells it. A glossary term
+the report has no reason to mention is not required. A term whose definition is null still counts,
+judged by its name. The glossary is the only source of glossary terms and definitions. A phrase is a
+glossary term only when the glossary lists it as a term. A phrase found anywhere else, such as in a
+dataset description, a document or a data-query result, is not a glossary term, however much it
+reads like one: it is never presented as a glossary term, cited as `[glossary <term>]`, or asked for
+as a glossary term. A definition cited as a glossary definition comes from the glossary. A term the
 glossary does not list may be used freely, unless it names a concept that a glossary term names."""
 
 _GLOSSARY_WRITER_RULE = """
@@ -734,14 +847,12 @@ def render_report_system_prompt(
     return REPORT_SYSTEM_PROMPT.format(
         today_date=today_date,
         rules=rules,
-        source_selection=render_source_selection(
-            step=RuleStep.REPORT_WRITER, source_kinds=source_kinds
-        ),
+        generic_rules=render_generic_rules(RuleStep.REPORT_WRITER, source_kinds=source_kinds),
         client_rules=render_client_rules(client_rules, step=RuleStep.REPORT_WRITER),
         glossary_rule=(
             _GLOSSARY_WRITER_RULE.format(rule=GLOSSARY_TERMINOLOGY_RULE) if glossary else ""
         ),
-        calculation_definition=CALCULATION_DEFINITION,
+        no_calculations_rule=NO_CALCULATIONS_WRITER_RULE,
         data_sources=data_sources,
         citation_form_count="four" if glossary else "three",
         glossary_citation_form=_GLOSSARY_CITATION_FORM if glossary else "",
@@ -782,15 +893,15 @@ The draft to revise:
 </draft>
 """
 
-REPORT_REVIEW_SYSTEM_PROMPT = """\
+BLIND_REVIEW_SYSTEM_PROMPT = """\
 You are the report check of a deep-research assistant. Today is {today_date}. You did not write
 the report; you judge it against a fixed set of rules and nothing else.
 
-Check exactly these, together with the source-selection checks and any client-specific checks
-below, and report a violation for each rule the draft breaks:
+Check exactly these, together with the checks of every rule section below, the client-specific
+checks included, and report a violation for each rule the draft breaks:
 
-1. **Section content.** No section is padded with general text that carries no citation and is
-   not flagged as the report's own inference, and a section with nothing to report says so
+1. **Section content.** No section is padded with general text that carries no citation where the
+   "Only the sources" check below requires one, and a section with nothing to report says so
    plainly instead of being filled.
 2. **Protected sections.** The protected sections are present and their rules are followed, no
    matter what the research question or plan asked for.
@@ -828,7 +939,7 @@ below, and report a violation for each rule the draft breaks:
    A number that carries its own citation, and that the draft does not present as computed, is
    not yours to judge: you cannot see the sources.{glossary_check}
 
-{source_selection}{client_rules}## Data sources
+{generic_rules}{client_rules}## Data sources
 
 The report may draw on the data sources described below as well as on the findings: the knowledge
 base's own descriptions, and what the application fetched from the dataset server at the start of
@@ -914,7 +1025,7 @@ count as glossary terms too:
 """
 
 
-def render_report_review_system_prompt(
+def render_blind_review_system_prompt(
     *,
     today_date: str,
     data_sources: str,
@@ -931,7 +1042,7 @@ def render_report_review_system_prompt(
     against. `glossary_tool_results` is the text of the research agent's successful glossary tool
     results, in the order they were obtained; the block is left out when there is none.
     """
-    return REPORT_REVIEW_SYSTEM_PROMPT.format(
+    return BLIND_REVIEW_SYSTEM_PROMPT.format(
         today_date=today_date,
         # The continuation lines take the list item's indentation, like the check's own.
         calculation_definition=CALCULATION_DEFINITION.replace("\n", "\n   "),
@@ -942,9 +1053,7 @@ def render_report_review_system_prompt(
             if glossary_check
             else ""
         ),
-        source_selection=render_source_selection(
-            step=RuleStep.REPORT_REVIEW, source_kinds=source_kinds
-        ),
+        generic_rules=render_generic_rules(RuleStep.REPORT_REVIEW, source_kinds=source_kinds),
         client_rules=render_client_rules(client_rules, step=RuleStep.REPORT_REVIEW),
         data_sources=data_sources,
         glossary_tool_results=(
@@ -967,4 +1076,113 @@ class ReportReview(BaseModel):
         default_factory=list,
         description="One entry per rule the draft breaks: what is wrong and what to change."
         " Empty means the draft satisfies every check and can be delivered as written.",
+    )
+
+
+# The grounded review: the report-review call that sees the research transcript. Its first system
+# message carries no instruction and is the same in every round and turn; the instructions and the
+# request follow the transcript, next to the draft they judge (see `grounded_review_messages`).
+GROUNDED_REVIEW_SYSTEM_MESSAGE = """\
+You are part of a deep-research assistant. The messages that follow are the research the assistant
+did for the question below: its instructions, every tool call and every tool result. The last
+messages say what to do with it."""
+
+# The rules are given in their report-writer parts, as what the report must do: the report-review
+# parts tell a reviewer who cannot see the sources what not to judge, and this one sees them.
+_GROUNDED_REVIEW_PROMPT = """\
+You are the report check of a deep-research assistant. Today is {today_date}. You did not write
+the report; you judge it against a fixed set of rules and nothing else.
+
+Work claim by claim. Go through every sentence and table cell of the draft that states a figure, a
+forecast or an estimate, a comparison, a cause or a characterisation of what a source found, and
+compare it with the source passage it relays, in the findings. Report every claim that its source
+does not support as written, such as:
+
+- a figure no source gives, or a figure for another scope than the source's, such as another
+  region, sector or group;
+- a comparison or a finding that reverses or outweighs what the source says;
+- a forecast, an estimate or a view a source states as its own, written as an observed fact;
+- a conclusion, a cause or an explanation no source states.
+
+Then check the rest of the rules below against the whole draft. Go through the whole draft before
+you answer, not only until you have found a few violations: the revision fixes only what you name.
+
+## Source-selection terms
+
+The faithful-relay rules below use these definitions.
+
+{source_selection_terms}
+
+## Faithful relay, judged against the findings
+
+Each rule below says what the report must do. The research transcript before these instructions is
+the findings: judge the draft against it, and report every passage that breaks a rule.
+
+{rules}
+
+### No calculations
+
+{no_calculations_rule}
+
+## Data sources
+
+The report may draw on the data sources described below as well as on the findings: the knowledge
+base's own descriptions, and what the application fetched from the dataset server at the start of
+this turn. A fact the draft takes from them is grounded in a retrieved source: citing a dataset for
+what the `Datasets:` part states about it is correct, not a violation.
+
+<data_sources>
+{data_sources}
+</data_sources>
+
+## The findings
+
+The research transcript before these instructions is the findings: every tool call and its result.
+Use it for every check that compares the report with its sources. A claim the findings hold only in
+a search tool's summarising answer is not supported by a source.
+
+## Not your job
+
+Your job is to find violations of the rules above, and nothing else.
+
+**You do not judge:**
+
+- whether the research was thorough — evidence coverage was judged elsewhere
+- whether a claim carries a citation, or where a citation stands
+- which term or name the report uses for a concept: this deployment's own rules may set it, and
+  you are not shown them
+- the report's sections, headings, length, Markdown and citation format
+- whether the draft carries a hyperlink, an image or a bare URL
+- whether a cited query id, dataset URN or document id is one the tools actually reported
+
+Other checks judge these.
+
+**You never ask for:**
+
+- more research, more sources, or a different analysis
+- a rewrite, or wording you would prefer
+
+Approve the draft when the rules above hold. A draft that satisfies them is finished, even if you
+can imagine a better report.
+
+## Your answer
+
+Answer with a numbered list, one item per wrong claim: the rule it breaks, the passage, quoted
+exactly, what the source says instead, and what to change. A claim the draft repeats in several
+places is one item that quotes every place. If the draft breaks none of the rules above, answer with
+exactly `No violations.` and nothing else. Do not call any tool.
+"""
+
+
+def render_grounded_review_prompt(*, today_date: str, data_sources: str) -> str:
+    """The grounded review's instructions, sent after the transcript as a system message.
+
+    Built from the same rule texts the report writer receives, so a rule edit reaches both.
+    """
+    return _GROUNDED_REVIEW_PROMPT.format(
+        today_date=today_date,
+        source_selection_terms=SOURCE_SELECTION_TERMS,
+        rules=render_rules(FAITHFUL_RELAY_RULES, step=RuleStep.REPORT_WRITER),
+        no_calculations_rule=NO_CALCULATIONS_WRITER_RULE,
+        data_sources=data_sources,
     )

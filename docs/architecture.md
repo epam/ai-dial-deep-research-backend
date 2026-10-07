@@ -212,7 +212,7 @@ flowchart TD
     report --> afterreport{"deliver now,<br/>or review the draft?"}
     afterreport -->|"this call was a revision whose<br/>own model call failed —<br/>the previous draft stands,<br/>announced by a closing stage"| finaldone(["END"])
     afterreport -->|"the last version the budget<br/>permits — delivered without review,<br/>announced by a closing stage"| finaldone
-    afterreport -->|"otherwise"| report_review["report-review node<br/>structured LLM call over the draft and<br/>the configured sections → violations<br/>(the app adds the length one itself),<br/>and one DIAL stage"]
+    afterreport -->|"otherwise"| report_review["report-review node<br/>two concurrent LLM calls → one list:<br/>the blind review over the draft and<br/>the configured sections, and the<br/>grounded review over the draft<br/>and the findings transcript<br/>(the app adds the length one itself),<br/>and one DIAL stage"]
     report_review --> reroute{"over the word ceiling,<br/>or a revision asked for?"}
     reroute -->|yes| report
     reroute -->|no| finaldone
@@ -249,11 +249,27 @@ The rest of the loop, in brief — each item is specified in the linked specs:
 - **Quality rules**: the system prompt of every node also carries its part of each quality rule — a
   rule is one bundle of four instructions, one per node, so what research-agent retrieves, what
   research-review counts as a gap, what the report writer presents and what report-review checks
-  are defined together (`app/research/source_selection.py`). The generic rules come first, opened
-  by a sentence naming the kinds of source the channel's servers give it (publications, datasets
-  or both), so a part about a kind the channel lacks does not apply; a channel's
-  `prompts.client_rules` follow in a `<client_rules>` block. See
-  [source-selection](../openspec/specs/source-selection/spec.md).
+  are defined together. The generic rules come first, grouped into policies, one block each in
+  this order: source selection (`app/research/source_selection.py`), then faithful relay
+  (`app/research/faithful_relay.py`), whose terms use the source-selection ones. A policy with no
+  part for a node adds no block. The source-selection block opens with a sentence naming the kinds
+  of source the channel's servers give it (publications, datasets or both), so a part about a kind
+  the channel lacks does not apply. A channel's `prompts.client_rules` follow in a
+  `<client_rules>` block. See [source-selection](../openspec/specs/source-selection/spec.md) and
+  [faithful-relay](../openspec/specs/faithful-relay/spec.md).
+
+- **The blind review and the grounded review**: report-review makes two LLM calls. The blind
+  review sees the draft, the configured sections, the query and the plan, but not the findings.
+  The grounded review runs beside it, in the same `asyncio.gather` as the identifier lookups, so
+  the node takes as long as the slower call. It is the one review that sees the findings: a
+  neutral system message, the transcript exactly as the report writer receives it, then two
+  system messages — the faithful-relay rules' writer parts and the writer's "No
+  calculations" rule, with the source-selection terms, and the review request ending in the
+  draft. It answers with a plain numbered list, whose items follow the blind review's in the
+  node's one list of violations, so the loop routes as before. A failed grounded review adds no
+  item and fails nothing. See
+  [faithful-relay](../openspec/specs/faithful-relay/spec.md), "The grounded review checks the draft
+  against the sources".
 
 - **Research-review**: an independent structured LLM call judging coverage; an empty next plan means
   the plan and the gaps the quality rules define are covered, so research is complete. It runs
@@ -479,13 +495,16 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   one is the report step reporting on itself, and names the draft that was not written, the draft
   delivered, and the failure kind. No draft text: only the draft the loop settles on reaches the
   response.
-- **Report-review stage**: each report-review call emits one DIAL stage, titled
+- **Report-review stage**: each review of a draft emits one DIAL stage, titled
   `[REPORT REVIEW RESULT]`, carrying the draft number,
-  the measured word count with the ceiling, and the violations as a list — the review model's
-  violations, with the app-measured length violation prepended when the draft exceeds the ceiling.
-  The matching INFO record carries the same numbers and only the *count* of violations — their
-  text is LLM response content, which the logging content allowlist keeps out of log records at
-  any level. A delivery whose draft the budget left unreviewed gets a closing stage and INFO
+  the measured word count with the ceiling, and the violations as a list — the app-checked
+  violations, the app-measured length violation among them when the draft exceeds the ceiling, then
+  the blind review's, then the grounded review's items. A failed call of either review is
+  recorded in the same stage. Each review logs its own INFO record, with its duration, message
+  count, item count, error and token usage.
+  The node's `Report reviewed` record carries the stage's numbers and only the *count* of
+  violations — their text is LLM response content, which the logging content allowlist keeps out
+  of log records at any level. A delivery whose draft the budget left unreviewed gets a closing stage and INFO
   record of its own, rendered without any model call, so "review approved the draft" and "the
   budget ran out, violations may remain" stay distinguishable.
 - **Activity stage**: one DIAL stage is open at every moment of the research run, titled with what

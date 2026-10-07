@@ -14,7 +14,8 @@ from __future__ import annotations
 
 from dial_deep_research.app_properties import QualityRule
 
-_TERMS = """\
+# The grounded review gives these definitions without the rules, so they are named here.
+SOURCE_SELECTION_TERMS = """\
 These definitions say what the rules below mean. They are not a rule or a check of their own.
 
 - **Fact**: what the question asks for, as a figure or a finding stated in words, with its
@@ -63,10 +64,10 @@ latest value and on other sources cover."""
 SOURCE_SELECTION_RULES: tuple[QualityRule, ...] = (
     QualityRule(
         name="Terms",
-        research_agent=_TERMS + _REASONABLE_ATTEMPT,
-        research_review=_TERMS + _REASONABLE_ATTEMPT,
-        report_writer=_TERMS,
-        report_review=_TERMS,
+        research_agent=SOURCE_SELECTION_TERMS + _REASONABLE_ATTEMPT,
+        research_review=SOURCE_SELECTION_TERMS + _REASONABLE_ATTEMPT,
+        report_writer=SOURCE_SELECTION_TERMS,
+        report_review=SOURCE_SELECTION_TERMS,
     ),
     QualityRule(
         name="Missing evidence",

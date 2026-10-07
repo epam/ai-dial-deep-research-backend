@@ -215,8 +215,11 @@ requirement bounds what such a request can ever do, whenever it arrives.
 
 ### Requirement: Every report review is visible as a DIAL stage and summarized in the logs
 
-Each report-review call SHALL emit one DIAL stage, so a user can see why a report was revised, and
-one INFO log record, so the loop's behavior is measurable without reading anyone's report.
+Each report review of a draft SHALL emit one DIAL stage, so a user can see why a report was
+revised, and one INFO log record, so the loop's behavior is measurable without reading anyone's
+report. The blind review and the grounded review (see the loop requirement below) SHALL each emit
+one INFO log record of their own besides, because every model call gets its own record (see
+**logging-policy**, "LLM call logging").
 
 **The stage** SHALL carry:
 
@@ -226,8 +229,9 @@ one INFO log record, so the loop's behavior is measurable without reading anyone
   themselves gets a larger number, the appended References section included, and the stage SHALL
   say why;
 - the violations, as a numbered markdown list — one entry per violation (stage content renders
-  as markdown). The list is everything the next revision must fix: the review model's violations,
-  with the app-rendered length violation prepended when the measured count exceeds the ceiling.
+  as markdown). The list is everything the next revision must fix: the app-checked violations, the
+  app-rendered length violation among them when the measured count exceeds the ceiling, then the
+  blind review's violations, then the grounded review's items.
 
 Its title SHALL carry its own prefix rather than `[TOOL]`, the draft number, the review's outcome and
 the elapsed time — the shape a result stage has, without the tool stages' start and end
@@ -236,16 +240,18 @@ review specifically: the research review emits a stage of its own in the same ti
 are told apart by their prefixes (see **research-execution**).
 
 A review that produced no violations SHALL still emit a stage, recording that the draft was approved.
-A review whose **call failed** SHALL emit one too, recording the failure — alongside the app-measured
-length violation when the draft is over the ceiling — the same principle as a tool error stage: the
-user sees that a step ran and what came of it.
+A review whose **blind review failed** SHALL emit one too, recording the failure — alongside the
+app-measured length violation when the draft is over the ceiling — the same principle as a tool
+error stage: the user sees that a step ran and what came of it. A failed grounded review SHALL be
+recorded in the same stage the same way, naming which of the two reviews failed, beside whatever the
+other one found.
 
-A draft delivered because the version budget ran out gets no review call (see the loop requirement
+A draft delivered because the version budget ran out gets no review (see the loop requirement
 below), and that delivery SHALL still emit one stage and one INFO record, so "review approved the
 draft" and "the budget ran out, so the previous review's violations may remain" stay distinguishable.
 Both are rendered from the state alone, with no model call. The stage SHALL carry the draft number,
 the measured word count with the ceiling, and that the draft is delivered unreviewed, with the budget
-stated; the log record SHALL carry the same numbers. A version budget of one makes no review call
+stated; the log record SHALL carry the same numbers. A version budget of one makes no review
 and exhausts nothing — review is off by configuration — so no stage SHALL be emitted at all. The
 exception covers the stage only: the INFO record SHALL still fire, the delivery having gone
 unreviewed whatever the reason, so the loop's behavior stays measurable at every configured budget.
@@ -259,8 +265,12 @@ stage SHALL NOT contain any draft text: a draft the loop did not settle on stays
 (see **research-execution**). No review ran, so the stage carries neither violations nor an elapsed
 review time.
 
-**The log record** SHALL carry the draft number, the measured word count, the configured ceiling, and
-the **number** of violations — counts and identifiers only.
+**The log record** SHALL carry the draft number, the review's duration, its outcome, the measured
+word count, the configured ceiling, and the **number** of violations — counts and identifiers only.
+**Each review's own record** SHALL carry the draft number, the call's duration, the number of
+messages, the number of items it returned, the failure kind when it failed, and its token usage with
+the input tokens served from the prompt cache — counts and identifiers only, under the same content
+allowlist.
 
 **The two channels carry deliberately different amounts, and this asymmetry is the requirement, not an
 oversight.** Violations are LLM response text, which the **logging-policy** capability's content
@@ -287,9 +297,9 @@ the draft it judges.
 - **THEN** a stage SHALL still be emitted recording the approval, and the log record SHALL carry a
   violation count of zero
 
-#### Scenario: A failed review call is visible as such
+#### Scenario: A failed blind review is visible as such
 
-- **WHEN** the report-review call fails and the loop absorbs it
+- **WHEN** the blind review fails and the loop absorbs it
 - **THEN** its stage SHALL record the failure, marked with an error cross in both the title and
   the body, and the failure SHALL also be logged as a warning naming the failure kind
 
@@ -304,14 +314,28 @@ the draft it judges.
 - **WHEN** every review demanded a rewrite and the last permitted version has been written
 - **THEN** the delivered draft SHALL emit a stage recording that it is delivered without review,
   and an INFO record with the draft number, the measured count and the ceiling — with no review
-  call made for it
+  made for it
 
 #### Scenario: No review, no stage
 
 - **WHEN** an instance configures a version budget of one
 - **THEN** no report-review stage SHALL be emitted — not the unreviewed-delivery one either —
-  because no review call is made and nothing is exhausted, while the report-delivered-without-review
+  because no review is made and nothing is exhausted, while the report-delivered-without-review
   INFO record SHALL still fire
+
+#### Scenario: Each review's record carries its timing and cache use
+
+- **WHEN** report review judges draft 2 and the provider served part of the grounded review's input
+  from the prompt cache
+- **THEN** the blind review and the grounded review SHALL each emit one INFO record carrying draft
+  number 2, the call's duration, its item count and its token usage, the grounded review's
+  including the cached input tokens, and neither SHALL carry item text
+
+#### Scenario: A failed grounded review is visible in the stage
+
+- **WHEN** the grounded review fails and the blind review reports one violation
+- **THEN** the stage SHALL list that violation and record that the grounded review failed, with the
+  failure kind
 
 #### Scenario: The two review stages are told apart by their prefixes
 
@@ -456,8 +480,9 @@ both explicit fields (`Confidence: High`, `Complexity: moderate`, `Processing ti
 and equivalent prose or table cells.
 
 Honest qualification of the evidence in prose remains required, not banned: stating that a
-figure comes from a single source, that sources disagree, or that a statement is the report's
-own inference is content about the findings, not a rating of the research.
+figure comes from a single source or that sources disagree is content about the findings, not a
+rating of the research. A statement labelled as the report's own inference is not qualification
+of the evidence: the report infers nothing (see **faithful-relay**).
 
 Evidence the run could not obtain falls on the permitted side of that line, and important
 evidence must be reported. When evidence that the answer or a plan item depends on could not be
@@ -519,11 +544,10 @@ as 0.0473918265 written as 4.74%. The writer and report review SHALL be given th
 one wording, so the two cannot drift apart.
 
 - **Report writer.** Its prompt SHALL carry this rule as a section of its own. Flagging a computed
-  number as the report's own inference SHALL NOT make it allowed, although an uncited sentence may
-  otherwise be kept when it is flagged that way. Where the question or the plan asks for a figure
-  that no source states and only a calculation would give, the report SHALL present the figures it
-  would be computed from, each with its citation, and SHALL say that the sources do not give the
-  computed figure.
+  number as the report's own inference SHALL NOT make it allowed. Where the question or the plan
+  asks for a figure that no source states and only a calculation would give, the report SHALL
+  present the figures it would be computed from, each with its citation, and SHALL say that the
+  sources do not give the computed figure.
 - **Precedence.** This rule SHALL have the highest priority of all the rules: neither the research
   question, the plan, a section's description nor a client-specific rule SHALL override it, and both
   the writer and report review SHALL be told so in those words. The writer's list of rules that
@@ -531,14 +555,17 @@ one wording, so the two cannot drift apart.
   give a figure is a statement about the evidence, and SHALL NOT be read as the commentary on a
   declined instruction that **Protected sections and their rules survive any user instruction**
   forbids.
-- **Report review.** Its prompt SHALL carry a "No calculations" check among its numbered checks: a
+- **Report review.** The blind review's prompt SHALL carry a "No calculations" check among its
+  numbered checks: a
   number the draft presents as computed from other figures is a violation, even when the draft flags
   it as its own inference or a section's description or a client-specific rule asked for it. The
   three allowed things above are not violations. A number that carries its own citation, and that
   the draft does not present as computed, is not report review's to judge, because report review
   cannot see the sources. A figure computed from values of different facts, which the
   source-selection check on disagreements leaves out, falls within this check, and that
-  source-selection part SHALL say so.
+  source-selection part SHALL say so. The grounded review SHALL receive the writer's section in the
+  same wording, so it also finds a computed number the draft presents as stated (see
+  **faithful-relay**, "Rule 3 — the grounded review judges the "No calculations" rule").
 
 #### Scenario: The question asks for an elasticity no source states
 
@@ -835,18 +862,27 @@ called, so naming it there would add a per-instance input to a call that does no
 
 ### Requirement: A review ↔ revise loop enforces the report rules before delivery
 
-A finished draft SHALL be judged by an independent review step before it is delivered. That
-step SHALL read the draft, the configured report structure, the protected sections, and the
-research question and plan — the last two because they are where a user's formatting instruction
-lives, and without them the step cannot tell a legitimately-followed instruction from an
-override of a protected rule. It SHALL judge the draft against the section content rules, the
-protected sections and their rules, the prohibited meta-annotations, well-formed Markdown, the
-citation format rules the **research-execution** capability defines, and the report-review part of
-every quality rule: the generic source-selection rules and the channel's client rules (see
-**source-selection**). The source-selection parts judge only what the draft shows — how two values
-for one fact are presented, whether a value states its dates, whether a near match says how it
-differs — because the step never sees the sources. The section structure, the word
-ceiling and the absence of hyperlinks are not its to judge — the app checks those itself (see the
+A finished draft SHALL be judged by an independent review step before it is delivered. That step's
+first call, the **blind review**, SHALL read the draft, the configured report structure, the
+protected sections, and the research question and plan — the last two because they are where a
+user's formatting instruction lives, and without them the step cannot tell a legitimately-followed
+instruction from an override of a protected rule. It SHALL judge the draft against the section
+content rules, the protected sections and their rules, the prohibited meta-annotations, well-formed
+Markdown, the citation format rules the **research-execution** capability defines, and the
+report-review part of every quality rule: the generic source-selection and faithful-relay rules and
+the channel's client rules (see **source-selection** and **faithful-relay**). These parts judge only
+what the draft shows — how two values for one fact are presented, whether a value states its dates,
+whether a near match says how it differs, whether a claim carries a citation — because the blind
+review never sees the sources.
+
+The review step SHALL make a second call beside it, the **grounded review**, which sees the
+research transcript and judges the draft against the faithful-relay rules' writer parts and the
+writer's "No calculations" rule (see **faithful-relay**). The two calls SHALL run concurrently, and
+the grounded review's items SHALL be appended to the blind review's violations, so the loop below
+treats every item alike.
+
+The section structure, the word ceiling and the absence of hyperlinks are not the review step's to
+judge — the app checks those itself (see the
 requirement above). The citation-format check becomes load-bearing with this change: the app parses
 those markers out of the delivered report (see **report-citations**), so a draft that adopted
 numbered footnotes would yield no pills at all, and this step is what pushes it back to the defined
@@ -854,22 +890,25 @@ form. It SHALL NOT be given the measured word
 count or the ceiling: length needs no model — the app measures it and adds the length violation
 itself (see the ceiling requirement).
 
-The review step's structured output SHALL be the violations alone, one entry per rule the draft
-breaks and naming what to change. There SHALL be no separate approval field: an empty list SHALL
+The blind review's structured output SHALL be the violations alone, one entry per rule the draft
+breaks and naming what to change; the grounded review answers with a numbered list of the same
+kind. There SHALL be no separate approval field: an empty list SHALL
 mean the draft is approved, so a remark that is not meant to block delivery cannot be expressed —
 every returned violation forces a revision.
 
-The step SHALL NOT receive the research findings: every criterion above is decidable from the
-draft, the configuration, and the query and plan.
+The blind review SHALL NOT receive the research findings: every criterion it judges is decidable
+from the draft, the configuration, and the query and plan. Only the grounded review receives them.
 
-**A failing review SHALL NOT cost the report.** If the review call fails — an unparseable
+**A failing review SHALL NOT cost the report.** If the blind review fails — an unparseable
 structured response, a provider error, exhausted transient-drop retries — the turn SHALL NOT fail
-and the failure SHALL be logged as a warning. This departs deliberately from research-review,
-which is fail-loud because a broken verdict there means research of unknown completeness; here the
-report already exists, and discarding a finished multi-minute run over a formatting check is the
-worse outcome.
+and the failure SHALL be logged as a warning. The same holds for the grounded review: a failed
+grounded review adds no item, and the blind review's violations still stand, as the grounded
+review's items still stand when the blind review fails. This departs deliberately from
+research-review, which is fail-loud because a broken verdict there means research of unknown
+completeness; here the report already exists, and discarding a finished multi-minute run over a
+formatting check is the worse outcome.
 
-A failed review leaves the app with no verdict, so the two rules compose in one order, which SHALL
+When both calls fail, the app has no verdict, so the two rules compose in one order, which SHALL
 be: the measured count still applies. An over-ceiling draft whose review failed SHALL be revised on
 the app-rendered length instruction alone; a draft within the ceiling SHALL be delivered as the
 answer. A reviewed draft always has a rewrite in budget — the review is gated on the budget below —
@@ -893,8 +932,8 @@ When the review returns revision instructions, the report SHALL be rewritten aga
 judged again. The loop SHALL be bounded by a configured version budget (`max_report_versions`,
 default 3, counting the first draft and every rewrite as one version each): a draft SHALL be
 reviewed only while another version may still be written, so the last permitted version is
-delivered as the answer without a further review call. That final review is deliberately not run
-because its verdict would be non-actionable — no rewrite may follow it — so the call would spend
+delivered as the answer without a further review. That final review is deliberately not run
+because its verdict would be non-actionable — no rewrite may follow it — so the review would spend
 a review's time and cost only to log problems the loop can no longer fix. An imperfect report is
 delivered, the turn is never failed and the work is never discarded over a formatting verdict,
 and the unreviewed delivery SHALL be announced (see the stage requirement above). A budget of one
@@ -902,10 +941,12 @@ SHALL mean the first draft is delivered with no review at all.
 
 The review step SHALL judge the report as written. It SHALL NOT re-open evidence coverage or
 request further research — that judgement belongs to research-review — and it SHALL NOT be able to
-route control back to research-agent. Its prompt SHALL still list, among what it does not judge,
-whether a claim is true and whether the research was thorough, and SHALL NOT list whether a source
-was the right one to use: how the draft presents the values of several sources is a source-selection
-check it does judge.
+route control back to research-agent. The blind review's prompt SHALL still list, among what it does
+not judge, whether a claim is true and whether the research was thorough, and SHALL NOT list whether
+a source was the right one to use: how the draft presents the values of several sources is a
+source-selection check it does judge. The grounded review's instructions SHALL list whether
+the research was thorough among what it does not judge, and SHALL NOT list whether a claim is true
+to its source, which is what it judges.
 
 Once the loop has settled on the draft to deliver, that draft's wording is final: no later step may
 rewrite, shorten, reorder, or reformat it. The one permitted exception is the citation step, which
@@ -937,22 +978,23 @@ the draft with its markers in place, which is the form the citation rules are wr
 #### Scenario: Exhausted budget delivers the latest draft
 
 - **WHEN** every review demanded a rewrite and the last permitted version has been written
-- **THEN** the latest draft SHALL be delivered as the answer without a further review call, the
+- **THEN** the latest draft SHALL be delivered as the answer without a further review, the
   turn SHALL complete successfully, and the unreviewed delivery SHALL be recorded in the logs
 
-#### Scenario: A failed review call delivers a draft that is within the ceiling
+#### Scenario: A failed blind review delivers a draft that is within the ceiling
 
-- **WHEN** the review call raises, or returns output that cannot be parsed into its verdict schema,
-  after its transient-drop retries are exhausted, and the draft is within the word ceiling
+- **WHEN** the blind review raises, or returns output that cannot be parsed into its verdict schema,
+  after its transient-drop retries are exhausted, the draft is within the word ceiling, and the
+  grounded review reports no item or fails too
 - **THEN** the current draft SHALL be delivered as the answer, the turn SHALL complete
   successfully, and the failure SHALL be logged as a warning
 
-#### Scenario: A failed review call still shortens an over-long draft
+#### Scenario: A failed blind review still shortens an over-long draft
 
-- **WHEN** the review call fails on a draft measuring 3,900 words against a ceiling of 2,750 and the
-  version budget is not exhausted
-- **THEN** a revision SHALL be written against the app-rendered length instruction alone, and the
-  failure SHALL be logged as a warning
+- **WHEN** the blind review fails on a draft measuring 3,900 words against a ceiling of 2,750 and
+  the version budget is not exhausted
+- **THEN** a revision SHALL be written against the app-rendered length instruction, together with
+  any item the grounded review reports, and the failure SHALL be logged as a warning
 
 #### Scenario: A failed revision call delivers the previous draft
 
@@ -976,7 +1018,7 @@ the draft with its markers in place, which is the form the citation rules are wr
 #### Scenario: Version budget of one skips the review
 
 - **WHEN** an instance configures a version budget of one
-- **THEN** the first draft SHALL be delivered as the answer and no review call SHALL be made
+- **THEN** the first draft SHALL be delivered as the answer and no review SHALL be made
 
 #### Scenario: Review cannot reopen research
 
@@ -991,6 +1033,18 @@ the draft with its markers in place, which is the form the citation rules are wr
 - **THEN** the review step SHALL report a violation asking for each value to be stated on its own,
   with its citation, its stated date and the reason for the difference, or the statement that the
   sources do not explain it
+
+#### Scenario: A failed blind review leaves the grounded review's items standing
+
+- **WHEN** the blind review fails and the grounded review reports two violations
+- **THEN** the draft SHALL be revised against those two violations, and the blind review's failure
+  SHALL be logged as a warning
+
+#### Scenario: The grounded review's item forces a revision the blind review would not
+
+- **WHEN** the blind review approves a draft and the grounded review reports that a figure is
+  not on the page cited for it
+- **THEN** the draft SHALL be revised against that item
 
 ### Requirement: A report cites only the retrieved sources, and carries no hyperlinks
 
@@ -1105,6 +1159,15 @@ glossary's terminology: where the report refers to a concept that a glossary ter
 use that term, spelled as the glossary spells it, rather than a synonym or a paraphrase. A glossary
 term that the report has no reason to mention is not required.
 
+**A glossary term may be written in any of the forms the glossary gives it.** A term that lists
+several names separated by a slash, such as "Workforce/Labour force", MAY be written as any one of
+those names, and the whole slash form SHALL NOT be required. A term that gives a full form with its
+abbreviation in parentheses, such as "Harmonised Index of Consumer Prices (HICP)", MAY be written in
+either form; where the report uses the abbreviation, its first use SHALL be written as the full form
+followed by the abbreviation in parentheses. In mid-sentence, a glossary term's first letter MAY
+be written in lower case. A `[glossary <term>]` citation still writes the whole term, as the
+glossary spells it. Both calls receive this in the rule's shared wording.
+
 **The glossary is the only source of glossary terms and definitions.** A phrase counts as a
 glossary term only when it is a term of the glossary: a `term` in the data-sources string's
 `Glossary terms:` list, or a term in the research agent's glossary tool results. A phrase found
@@ -1198,6 +1261,19 @@ failed list ends in the failure text.
   result from either glossary tool
 - **THEN** the report reviewer's prompt SHALL NOT carry the glossary-terminology check
 
+#### Scenario: One name of a slash term is enough
+
+- **WHEN** the glossary lists `Workforce/Labour force`, and a draft uses only the name "labour
+  force", in mid-sentence
+- **THEN** the review model SHALL NOT report a glossary-terminology violation for it
+
+#### Scenario: A glossary abbreviation is spelled out at its first use
+
+- **WHEN** the glossary lists `Harmonised Index of Consumer Prices (HICP)`, and a draft writes
+  "HICP" at its first mention and at every later one
+- **THEN** the review model SHALL report a violation for the first mention, which SHALL give the
+  full form "Harmonised Index of Consumer Prices (HICP)", and SHALL NOT report the later mentions
+
 ### Requirement: The data sources in the system prompt count as retrieved sources
 
 The report writer's system prompt SHALL state that the report may draw on two kinds of source: the
@@ -1211,8 +1287,9 @@ description, coverage or last-update date.
 A fact taken from a glossary definition SHALL be cited `[glossary <term>]` (see
 **research-execution**). A fact from the hand-written description of a publication series SHALL NOT
 be cited at all, and SHALL NOT be given an invented citation such as a `[doc <id>, page <ix>]`: only
-a publication itself is cited, by its document and page. Such a fact follows the rule for a sentence
-that cannot be cited: the sentence is removed or flagged as the report's own synthesis.
+a publication itself is cited, by its document and page. Such a fact names the publication series
+as its source in words, which the faithful-relay rule "Only the sources" allows (see
+**faithful-relay**).
 
 The report reviewer SHALL judge such a fact the same way: citing a dataset for a fact the datasets
 section states about it SHALL NOT be reported as a violation.
@@ -1227,3 +1304,9 @@ writer.
   taken from the datasets section, and cites it as `[dataset <urn>]`
 - **THEN** the report writer's instructions SHALL allow it, and the report reviewer SHALL NOT report
   it as a fact without a retrieved source
+
+#### Scenario: A fact from a series description names the series
+
+- **WHEN** a draft states a fact that only the description of a publication series gives
+- **THEN** the sentence SHALL name the series as its source in words and carry no citation, and
+  report review SHALL NOT report it as an uncited claim

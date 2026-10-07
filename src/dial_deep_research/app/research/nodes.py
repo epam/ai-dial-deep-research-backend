@@ -19,9 +19,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable, Collection, Sequence
-from typing import Any
+from typing import Any, Literal
 
 from langchain.agents import create_agent
 from langchain_core.messages import (
@@ -50,6 +51,7 @@ from dial_deep_research.utils.content import (
     count_image_blocks,
     extract_text_from_content,
 )
+from dial_deep_research.utils.dial_stages import ReviewTally
 from dial_deep_research.utils.llm import (
     LLMModelConfig,
     ReasoningEffortEnum,
@@ -62,6 +64,7 @@ from dial_deep_research.utils.llm import (
 from .citation_lookups import CitationLookups
 from .middleware import ForceToolChoiceMiddleware, IterationCounterMiddleware
 from .prompts import (
+    GROUNDED_REVIEW_SYSTEM_MESSAGE,
     REPORT_REQUEST,
     REPORT_REVIEW_REQUEST,
     REPORT_REVISION_REQUEST,
@@ -70,14 +73,15 @@ from .prompts import (
     RESEARCH_REVIEW_SYSTEM_PROMPT,
     ReportReview,
     ResearchReview,
+    render_blind_review_system_prompt,
     render_client_rules,
+    render_generic_rules,
+    render_grounded_review_prompt,
     render_next_instruction,
     render_plan,
     render_protected_section_names,
-    render_report_review_system_prompt,
     render_report_structure,
     render_report_system_prompt,
-    render_source_selection,
 )
 from .report_length import LENGTH_EXEMPTIONS, count_report_words
 from .report_rules import build_report_rules, render_writer_instructions
@@ -126,9 +130,7 @@ def build_research_agent(
             client_name=client_name,
             data_sources=data_sources,
             data_sources_instructions=data_sources_instructions,
-            source_selection=render_source_selection(
-                step=RuleStep.RESEARCH_AGENT, source_kinds=source_kinds
-            ),
+            generic_rules=render_generic_rules(RuleStep.RESEARCH_AGENT, source_kinds=source_kinds),
             client_rules=render_client_rules(client_rules, step=RuleStep.RESEARCH_AGENT),
             # The two rules the status tool quotes back when it catches one being broken, so the
             # correction repeats the instruction word for word. The prompt writes its other status
@@ -295,9 +297,7 @@ def make_research_review_node(
     system_prompt = RESEARCH_REVIEW_SYSTEM_PROMPT.format(
         today_date=today_date,
         data_sources=data_sources,
-        source_selection=render_source_selection(
-            step=RuleStep.RESEARCH_REVIEW, source_kinds=source_kinds
-        ),
+        generic_rules=render_generic_rules(RuleStep.RESEARCH_REVIEW, source_kinds=source_kinds),
         client_rules=render_client_rules(client_rules, step=RuleStep.RESEARCH_REVIEW),
     )
 
@@ -382,17 +382,23 @@ class ReportReviewOutcome(BaseModel):
     Carries no DIAL types: the node decides what to report, the runner decides how it is
     rendered. `violations` is everything the next revision must fix — the review model's
     violations, with the app-measured length violation prepended when the draft exceeds the
-    ceiling. `error` records a failed review call (the exception kind); the length violation joins
-    the list regardless, so a failed call still carries it. The violation text belongs in the stage
-    only — never in a log record, per the logging-policy content allowlist.
+    ceiling, and the grounded review's items after them. `blind_review_error` and
+    `grounded_review_error` record a failed call of either review (each the exception kind); the
+    length violation joins the list regardless, so a failed call still carries it. The violation
+    text belongs in the stage only — never in a log record, per the logging-policy content
+    allowlist.
     """
 
     draft_number: int
     word_count: int
     max_words: int
     violations: list[str]
-    error: str | None
+    blind_review_error: str | None
     duration_seconds: float
+    grounded_review_error: str | None = None
+    # One tally per check, in the order the violations list them, so that the stage can say which
+    # check found what.
+    reviews: list[ReviewTally] | None = None
 
     @property
     def revision_instruction(self) -> str | None:
@@ -433,7 +439,7 @@ def report_review_budget_exhausted(*, report_version: int, max_versions: int) ->
 
     Both numbers count report versions, 1-based, which keeps the comparison plain. The report
     loop's mirror of `research_budget_exhausted`: a verdict on the last permitted version could
-    not be acted on, so the router skips the review call when this holds.
+    not be acted on, so the router skips report review when this holds.
     """
     return report_version >= max_versions
 
@@ -567,6 +573,95 @@ def make_report_node(
     return report
 
 
+def grounded_review_messages(
+    *, transcript: Sequence[BaseMessage], instructions: str, request: str
+) -> list[BaseMessage]:
+    """The grounded review's messages: a neutral system message, the transcript, then the
+    instructions and the review request as two more system messages.
+
+    `transcript` is the research transcript as the report writer receives it. The instructions
+    follow it so that the rules stand next to the draft they are applied to; they are fixed for the
+    turn, so their position costs no cache. The request carries the draft, the only part that
+    changes between rounds, so it comes last. Both are system messages because a trailing system
+    message does not end a cacheable prompt and a trailing user message does: the cached prefix
+    then ends with the transcript, which every review round of a turn shares. The call does not
+    open with the research agent's system prompt to reuse that call's cache, chiefly because it
+    runs at another reasoning effort; the faithful-relay spec lists the premises.
+    """
+    return [
+        SystemMessage(content=GROUNDED_REVIEW_SYSTEM_MESSAGE),
+        *transcript,
+        SystemMessage(content=instructions),
+        SystemMessage(content=request),
+    ]
+
+
+_NUMBERED_ITEM = re.compile(r"^(\d+)[.)]\s+")
+
+# Markdown a model may wrap the bare answer in, and the punctuation that may end it.
+_ANSWER_WRAPPING = "`*_\"' "
+_ANSWER_ENDING = ".!;:"
+
+# Deep enough for a line after "10. " to stay inside its Markdown list item.
+_CONTINUATION_INDENT = "    "
+
+
+class EmptyReviewAnswerError(Exception):
+    """A plain-text review answered with no text, so it checked nothing."""
+
+
+def parse_review_items(text: str) -> list[str]:
+    """The violations of a plain-text review: one per numbered item, with the lines after an item
+    joined to it.
+
+    A line opens an item only when it starts, unindented, with the next number in sequence, so an
+    indented sub-list or a line that starts with a year stays inside the item above it. Joined
+    lines are indented, so that a sub-list stays nested when the items are numbered again. Only an
+    answer that is "No violations", with any Markdown around it and any punctuation after it,
+    gives none. A non-empty answer with no numbered line is one item, so a violation is never
+    dropped for being written in prose. An empty answer raises `EmptyReviewAnswerError`: it is not
+    an approval.
+    """
+    stripped = text.strip()
+    if not stripped:
+        raise EmptyReviewAnswerError("the review answered with no text")
+    bare = stripped.strip(_ANSWER_WRAPPING).rstrip(_ANSWER_ENDING).strip(_ANSWER_WRAPPING)
+    if bare.lower() == "no violations":
+        return []
+    items: list[str] = []
+    for line in stripped.splitlines():
+        match = _NUMBERED_ITEM.match(line)
+        if match is not None and int(match.group(1)) == len(items) + 1:
+            items.append(line[match.end() :].strip())
+        elif items and line.strip():
+            items[-1] += "\n" + _CONTINUATION_INDENT + line.strip()
+    return items or [stripped]
+
+
+def _log_review_call(
+    *,
+    name: Literal["blind", "grounded"],
+    draft_number: int,
+    duration: float,
+    messages: int,
+    items: int,
+    error: str | None,
+    usage: UsageMetadata | None,
+) -> None:
+    """Log one review call's record. Its items are LLM response text, so only their count is
+    logged."""
+    logger.info(
+        "Report %s-reviewed: draft=%d duration=%.1fs messages=%d items=%d error=%s tokens=%s",
+        name,
+        draft_number,
+        duration,
+        messages,
+        items,
+        error,
+        format_token_usage(usage),
+    )
+
+
 def make_report_review_node(
     today_date: str,
     sections: Sequence[ReportSection],
@@ -584,14 +679,17 @@ def make_report_review_node(
     """Build the report-review node: judge the draft, emit its result stage, decide the next step.
 
     Two judgements meet here. The app's own rules (`report_rules`) are checked in Python over the
-    draft text, and the review model judges what needs a reader — padding, banned annotations,
-    protected-section rules, citation format, and the report-review parts of the quality rules
-    (`client_rules` holds the channel's own). It sees the draft, the configuration and the query
-    and plan, never the research findings, which is why it cannot reopen evidence coverage. A
-    failing call never fails the turn: the rules still run and their violations still stand.
+    draft text, and two model calls judge what needs a reader. The blind review judges padding,
+    banned annotations, protected-section rules, citation format, and the report-review parts of
+    the quality rules (`client_rules` holds the channel's own). It sees the draft, the
+    configuration and the query and plan, never the research findings, which is why it cannot
+    reopen evidence coverage. The grounded review runs beside it and does see the findings: the
+    transcript the writer received, then the faithful-relay rules' writer parts and the review
+    request, and its items follow the blind review's. A failing call never fails the turn: the
+    rules still run, and their violations and the other call's still stand.
 
     The identifier rules need the cited ids looked up first, and the rules are synchronous, so
-    the lookups the draft needs run concurrently with the review call, before the rules.
+    the lookups the draft needs run concurrently with the two reviews, before the rules.
 
     On a glossary channel the reviewer also receives the research agent's successful glossary
     tool results, and the terminology check whenever the app's fetch listed a term
@@ -600,6 +698,9 @@ def make_report_review_node(
     """
     rules = build_report_rules(
         sections=sections, max_words=max_words, references_name=references_name, lookups=lookups
+    )
+    grounded_review_instructions = render_grounded_review_prompt(
+        today_date=today_date, data_sources=data_sources
     )
 
     async def report_review(state: ResearchState) -> dict[str, Any]:
@@ -610,7 +711,7 @@ def make_report_review_node(
         draft_number = state.get("report_version", 0)
 
         tool_results = glossary_tool_results(state["messages"], glossary=glossary)
-        system_prompt = render_report_review_system_prompt(
+        system_prompt = render_blind_review_system_prompt(
             today_date=today_date,
             data_sources=data_sources,
             glossary=glossary is not None,
@@ -620,52 +721,104 @@ def make_report_review_node(
             client_rules=client_rules,
             source_kinds=source_kinds,
         )
-        review_messages = [
+        review_request = REPORT_REVIEW_REQUEST.format(
+            report_structure=render_report_structure(sections),
+            protected_sections=render_protected_section_names(sections),
+            query=state["original_query"],
+            plan=render_plan(state["plans"][0]) if state["plans"] else "(none)",
+            draft=draft,
+        )
+        blind_messages = [
             SystemMessage(content=system_prompt),
-            HumanMessage(
-                content=REPORT_REVIEW_REQUEST.format(
-                    report_structure=render_report_structure(sections),
-                    protected_sections=render_protected_section_names(sections),
-                    query=state["original_query"],
-                    plan=render_plan(state["plans"][0]) if state["plans"] else "(none)",
-                    draft=draft,
-                )
-            ),
+            HumanMessage(content=review_request),
         ]
+        grounded_messages = grounded_review_messages(
+            transcript=_strip_status_calls(state["messages"]),
+            instructions=grounded_review_instructions,
+            request=review_request,
+        )
 
-        async def review_call() -> tuple[list[str], str | None, UsageMetadata | None, float]:
-            """The review model's violations, the failure kind, the usage and the call's time."""
+        async def blind_review_call() -> tuple[list[str], str | None, float]:
+            """The blind review's violations, its failure kind and its duration.
+
+            It logs its own record.
+            """
             llm_start = time.monotonic()
+            usage: UsageMetadata | None = None
+            items: list[str] = []
+            error: str | None = None
             try:
                 llm = with_stream_drop_retry(
                     get_chat_model(
                         LLMModelConfig(reasoning_effort=ReasoningEffortEnum.MEDIUM)
                     ).with_structured_output(ReportReview, include_raw=True)
                 )
-                result: dict[str, Any] = await llm.ainvoke(review_messages)
-                llm_duration = time.monotonic() - llm_start
+                result: dict[str, Any] = await llm.ainvoke(blind_messages)
+                usage = result["raw"].usage_metadata
                 if result["parsing_error"] is not None:
                     raise result["parsing_error"]
                 review: ReportReview = result["parsed"]
-                return (
-                    list(review.report_violations),
-                    None,
-                    result["raw"].usage_metadata,
-                    llm_duration,
-                )
+                items = list(review.report_violations)
             except Exception as exc:
-                # A failed review must not cost the report. The measured count still applies, so
-                # the loop can still shorten an over-long draft on its own instruction.
+                # A failed blind review must not cost the report. The measured count still
+                # applies, so the loop can still shorten an over-long draft on its own instruction.
                 error = type(exc).__name__
                 logger.warning(
-                    "Report review failed, falling back to the measured length: draft=%d error=%s",
+                    "Blind review failed, falling back to the measured length: draft=%d error=%s",
                     draft_number,
                     error,
                 )
-                return [], error, None, time.monotonic() - llm_start
+            call_seconds = time.monotonic() - llm_start
+            _log_review_call(
+                name="blind",
+                draft_number=draft_number,
+                duration=call_seconds,
+                messages=len(blind_messages),
+                items=len(items),
+                error=error,
+                usage=usage,
+            )
+            return items, error, call_seconds
 
-        (violations, error, usage, llm_duration), _ = await asyncio.gather(
-            review_call(), lookups.prefetch(draft)
+        async def grounded_review_call() -> tuple[list[str], str | None, float]:
+            """The grounded review's items, its failure kind and its duration.
+
+            It logs its own record.
+            """
+            llm_start = time.monotonic()
+            usage: UsageMetadata | None = None
+            items: list[str] = []
+            error: str | None = None
+            try:
+                llm = with_stream_drop_retry(
+                    get_chat_model(LLMModelConfig(reasoning_effort=ReasoningEffortEnum.MEDIUM))
+                )
+                response = await llm.ainvoke(grounded_messages)
+                usage = response.usage_metadata
+                items = parse_review_items(extract_text_from_content(response.content))
+            except Exception as exc:
+                # Like a failed blind review, a failed grounded review must not cost the report:
+                # the other violations still stand.
+                error = type(exc).__name__
+                logger.warning("Grounded review failed: draft=%d error=%s", draft_number, error)
+            call_seconds = time.monotonic() - llm_start
+            _log_review_call(
+                name="grounded",
+                draft_number=draft_number,
+                duration=call_seconds,
+                messages=len(grounded_messages),
+                items=len(items),
+                error=error,
+                usage=usage,
+            )
+            return items, error, call_seconds
+
+        (
+            (blind_violations, blind_error, blind_seconds),
+            (grounded_items, grounded_error, grounded_seconds),
+            _,
+        ) = await asyncio.gather(
+            blind_review_call(), grounded_review_call(), lookups.prefetch(draft)
         )
 
         # The rules are the app's own, not the model's opinion: their violations join the list
@@ -673,29 +826,40 @@ def make_report_review_node(
         # review cannot pass a draft that breaks one, and a failed review still shortens an
         # over-long draft and reports a mis-headed section.
         rule_violations = [v for rule in rules for v in rule.violations(draft)]
-        violations = [*rule_violations, *violations]
+        violations = [*rule_violations, *blind_violations, *grounded_items]
         duration = time.monotonic() - start
         outcome = ReportReviewOutcome(
             draft_number=draft_number,
             word_count=word_count,
             max_words=max_words,
             violations=violations,
-            error=error,
+            blind_review_error=blind_error,
             duration_seconds=duration,
+            grounded_review_error=grounded_error,
+            reviews=[
+                ReviewTally(name="code checks", violation_count=len(rule_violations)),
+                ReviewTally(
+                    name="blind review",
+                    violation_count=len(blind_violations),
+                    duration_seconds=blind_seconds,
+                ),
+                ReviewTally(
+                    name="grounded review",
+                    violation_count=len(grounded_items),
+                    duration_seconds=grounded_seconds,
+                ),
+            ],
         )
         emit_result_stage(outcome)
         logger.info(
-            "Report reviewed: draft=%d duration=%.1fs messages=%d outcome=%s error=%s words=%d "
-            "ceiling=%d violations=%d tokens=%s",
+            "Report reviewed: draft=%d duration=%.1fs outcome=%s words=%d ceiling=%d "
+            "violations=%d",
             draft_number,
-            llm_duration,
-            len(review_messages),
+            duration,
             "revise" if outcome.revision_instruction else "deliver",
-            error,
             word_count,
             max_words,
             len(violations),
-            format_token_usage(usage),
         )
         return {"report_revision_instruction": outcome.revision_instruction}
 
@@ -798,7 +962,7 @@ def route_after_report(
     draft: returning to review would re-judge an unchanged draft and route straight back to a
     call that fails again, and since a failed revision writes nothing, no counter would bound
     that cycle — the report node has already announced that one. The last permitted version is
-    delivered without a review call — a verdict that cannot be acted on is not worth one — and this
+    delivered without a review — a verdict that cannot be acted on is not worth one — and this
     router announces it, the way its research counterpart announces the review the iteration cap
     skipped. Otherwise the draft is reviewed.
 

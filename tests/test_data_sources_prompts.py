@@ -17,8 +17,8 @@ from dial_deep_research.app.research.prompts import (
     GLOSSARY_TERMINOLOGY_RULE,
     RESEARCH_AGENT_SYSTEM_PROMPT,
     ReportReview,
+    render_blind_review_system_prompt,
     render_data_sources_instructions,
-    render_report_review_system_prompt,
     render_report_system_prompt,
 )
 from dial_deep_research.app_properties import DEFAULT_REPORT_STRUCTURE, GlossaryTools
@@ -240,7 +240,7 @@ def test_the_research_agent_carries_the_data_sources_and_the_instruction() -> No
         verdict_retry_now="v1",
         verdict_retry_later="v2",
         verdict_will_not_help="v3",
-        source_selection="",
+        generic_rules="",
         client_rules="",
     )
     assert (
@@ -249,11 +249,20 @@ def test_the_research_agent_carries_the_data_sources_and_the_instruction() -> No
 
 
 class _RecordingLLM:
-    """A chat model and a structured-output model in one, recording every call's messages."""
+    """A chat model and a structured-output model in one, recording every call's messages.
+
+    The grounded review, a plain call, approves and is not recorded.
+    """
 
     def __init__(self, result: Any) -> None:
         self._result = result
         self.calls: list[list[Any]] = []
+
+    def with_retry(self, **kwargs: Any) -> _RecordingLLM:
+        return self
+
+    async def ainvoke(self, messages: list[Any]) -> AIMessage:
+        return AIMessage(content="No violations.")
 
     def with_structured_output(self, _schema: Any, *, include_raw: bool = False) -> Any:
         async def call(messages: list[Any]) -> Any:
@@ -382,7 +391,7 @@ def test_the_writer_and_the_reviewer_share_the_terminology_wording() -> None:
         data_sources=_TEXT,
         glossary=True,
     )
-    reviewer = render_report_review_system_prompt(
+    reviewer = render_blind_review_system_prompt(
         source_kinds=BOTH_SOURCE_KINDS,
         client_rules=(),
         today_date="d",
@@ -407,6 +416,23 @@ def test_the_terminology_rule_makes_the_glossary_the_only_source_of_terms() -> N
     assert "The glossary is the only source of glossary terms and definitions." in rule
     assert "such as in a dataset description, a document or a data-query result" in rule
     assert "A term the glossary does not list may be used freely" in rule
+
+
+def test_the_terminology_rule_accepts_every_form_a_glossary_term_gives() -> None:
+    """A slash term may be written as any of its names, and a term with an abbreviation in either
+    form, the abbreviation spelled out at its first use, and a first letter may be lower case in
+    mid-sentence; the citation keeps the whole term."""
+    rule = " ".join(GLOSSARY_TERMINOLOGY_RULE.split())
+    assert "may be written as any one of those names; the whole slash form is not required" in rule
+    assert (
+        "where the report uses the abbreviation, its first use is written as the full form followed"
+        " by the abbreviation in parentheses"
+    ) in rule
+    assert "In mid-sentence, a glossary term's first letter may be written in lower case." in rule
+    assert (
+        "A `[glossary <term>]` citation still writes the whole term, as the glossary spells it."
+        in rule
+    )
 
 
 def test_the_writer_is_told_the_data_sources_count_as_retrieved_sources() -> None:
@@ -434,7 +460,7 @@ def test_no_prompt_on_a_channel_without_a_glossary_mentions_the_glossary() -> No
         data_sources=_TEXT,
         glossary=False,
     )
-    reviewer = render_report_review_system_prompt(
+    reviewer = render_blind_review_system_prompt(
         source_kinds=BOTH_SOURCE_KINDS,
         client_rules=(),
         today_date="d",

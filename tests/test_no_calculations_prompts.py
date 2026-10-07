@@ -7,8 +7,8 @@ from dial_deep_research.app.research.prompts import (
     CALCULATION_DEFINITION,
     RESEARCH_AGENT_SYSTEM_PROMPT,
     RESEARCH_REVIEW_SYSTEM_PROMPT,
+    render_blind_review_system_prompt,
     render_client_rules,
-    render_report_review_system_prompt,
     render_report_system_prompt,
 )
 from dial_deep_research.app_properties import QualityRule, RuleStep
@@ -29,7 +29,7 @@ def _writer() -> str:
 
 
 def _reviewer(*, glossary_check: bool) -> str:
-    return render_report_review_system_prompt(
+    return render_blind_review_system_prompt(
         source_kinds=BOTH_SOURCE_KINDS,
         today_date="d",
         data_sources="Datasets:\n[]",

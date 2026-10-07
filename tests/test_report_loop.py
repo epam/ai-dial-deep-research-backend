@@ -312,12 +312,21 @@ async def test_a_failed_first_draft_propagates(monkeypatch: pytest.MonkeyPatch) 
 class _FakeReviewLLM:
     """A structured-output LLM returning one canned result, or raising it.
 
-    Records the messages of each call so the request's own contract can be checked.
+    Records the messages of each call so the request's own contract can be checked. The
+    grounded review, a plain call on the same model, approves and is not recorded.
     """
 
     def __init__(self, result: dict[str, Any] | Exception) -> None:
         self._result = result
         self.calls: list[list[BaseMessage]] = []
+        self.grounded_review_calls = 0
+
+    def with_retry(self, **kwargs: Any) -> _FakeReviewLLM:
+        return self
+
+    async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:
+        self.grounded_review_calls += 1
+        return AIMessage(content="No violations.")
 
     def with_structured_output(
         self, schema: type[Any], *, include_raw: bool = False
@@ -381,7 +390,7 @@ async def test_an_approved_draft_within_the_ceiling_is_delivered(
     assert result == {"report_revision_instruction": None}
     [outcome] = stages
     assert outcome.violations == []
-    assert outcome.error is None
+    assert outcome.blind_review_error is None
     assert outcome.draft_number == 1
     # The heading's two words count with the body's three.
     assert outcome.word_count == 5
@@ -429,7 +438,7 @@ async def test_violations_become_the_revision_instruction_and_reach_the_stage(
     assert violation in result["report_revision_instruction"]
     [outcome] = stages
     assert outcome.violations == [violation]
-    assert outcome.error is None
+    assert outcome.blind_review_error is None
 
 
 async def test_an_approving_review_cannot_pass_an_over_ceiling_draft(
@@ -447,7 +456,7 @@ async def test_an_approving_review_cannot_pass_an_over_ceiling_draft(
     [length_violation] = outcome.violations
     assert "7 words" in length_violation
     assert "3-word ceiling" in length_violation
-    assert outcome.error is None
+    assert outcome.blind_review_error is None
 
 
 async def test_citations_do_not_push_a_draft_over_the_ceiling(
@@ -506,7 +515,7 @@ async def test_a_rule_violation_survives_an_approving_review(
     [violation] = outcome.violations
     assert "'Summary'" in violation
     assert "'Overview'" in violation
-    assert outcome.error is None
+    assert outcome.blind_review_error is None
 
 
 async def test_a_failed_review_call_still_shortens_an_over_long_draft(
@@ -520,7 +529,7 @@ async def test_a_failed_review_call_still_shortens_an_over_long_draft(
     assert result["report_revision_instruction"] is not None
     [outcome] = stages
     # The failure and the length violation are separate facts, and both stay visible.
-    assert outcome.error == "RuntimeError"
+    assert outcome.blind_review_error == "RuntimeError"
     [length_violation] = outcome.violations
     assert "7 words" in length_violation
 
@@ -536,7 +545,7 @@ async def test_a_failed_review_call_delivers_a_draft_within_the_ceiling(
     assert result == {"report_revision_instruction": None}
     # The failure is visible as a stage of its own, with nothing to revise against.
     [outcome] = stages
-    assert outcome.error == "RuntimeError"
+    assert outcome.blind_review_error == "RuntimeError"
     assert outcome.violations == []
 
 
@@ -550,7 +559,7 @@ async def test_an_unparseable_verdict_is_absorbed_like_a_failed_call(
 
     assert result == {"report_revision_instruction": None}
     [outcome] = stages
-    assert outcome.error == "ValueError"
+    assert outcome.blind_review_error == "ValueError"
     assert outcome.violations == []
 
 
@@ -573,7 +582,7 @@ async def test_the_logged_duration_is_the_call_only_not_the_whole_node(
 
     [stage] = stages
     records = [record.getMessage() for record in caplog.records]
-    [logged] = [r for r in records if r.startswith("Report reviewed")]
+    [logged] = [r for r in records if r.startswith("Report blind-reviewed")]
     logged_duration = float(re.search(r"duration=(\d+\.\d+)s", logged)[1])
     # The call starts strictly after the node does and the node's own duration is computed
     # strictly after the call returns, so the logged (call-only) duration is always the smaller
@@ -703,7 +712,7 @@ async def test_the_review_system_prompt_can_decide_the_dataset_citation_check(
 ) -> None:
     """The citation check is worded against a citation's shape, which is all this call can see.
 
-    The review call receives neither the transcript nor any tool result, so "is this the
+    The blind review receives neither the transcript nor any tool result, so "is this the
     identifier the dataset tool reported?" is a question it cannot answer, and a model asked it
     resolves it by guessing — a readable name inside a URN reads as a display name. It is given
     an example and told to judge the shape instead.
