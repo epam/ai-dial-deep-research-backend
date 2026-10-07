@@ -38,6 +38,11 @@ e.g. `conv.json` -> `conv.raw.json`, one entry per turn in the order sent:
 and just after the last chunk arrives or the turn fails, so their difference is the turn's wall
 time as the client saw it.
 
+A streamed turn also records `stage_times`: for every stage of `custom_content.stages`, by its
+index, when a chunk first carried it (`first_seen`) and when a chunk first marked it completed or
+failed (`completed`), as UTC timestamps. They time each step of the turn as the client saw it,
+such as each research iteration and each report draft. A blocking turn records none.
+
 `response` is the whole chat-completion response in the blocking shape, every field
 kept. A streamed response is merged the way the SDK merges one into its blocking form, so
 nothing it carried is lost. Fields outside the message, such as
@@ -178,6 +183,7 @@ def append_raw_turn(
     ended_at: str,
     response: dict | None,
     error: str | None,
+    stage_times: list[dict] | None = None,
 ) -> Path:
     """Append one turn's entry to the raw file, creating the file if it is missing."""
     raw_path = raw_path_for(path)
@@ -192,6 +198,7 @@ def append_raw_turn(
             "ended_at": ended_at,
             "response": response,
             "error": error,
+            "stage_times": stage_times or None,
         }
     )
     raw_path.parent.mkdir(parents=True, exist_ok=True)
@@ -277,12 +284,31 @@ def reply_of(response: dict) -> dict:
     return message
 
 
+def note_stage_times(chunk: dict, times: dict[int, dict]) -> None:
+    """Record when this chunk first carried each stage, and when it first marked one finished."""
+    now = utc_now()
+    for choice in chunk.get("choices") or []:
+        delta = (choice or {}).get("delta") or {}
+        for stage in (delta.get("custom_content") or {}).get("stages") or []:
+            index = stage.get("index")
+            if not isinstance(index, int):
+                continue
+            record = times.setdefault(index, {"index": index, "first_seen": now, "completed": None})
+            if record["completed"] is None and stage.get("status") in ("completed", "failed"):
+                record["completed"] = now
+
+
+def stage_times_list(times: dict[int, dict]) -> list[dict]:
+    return [times[i] for i in sorted(times)]
+
+
 def send(
     timeout: float,
     messages: list[dict],
     conversation_id: str,
     deployment: str,
     stream: bool,
+    stage_times: dict[int, dict] | None = None,
 ) -> list[dict]:
     """POST the chat-completion request and return the chunks received.
 
@@ -349,6 +375,8 @@ def send(
                 raise TurnFailedError(f"HTTP {resp.status_code} from {url}:\n{resp.text}")
             for chunk in iter_sse_chunks(resp):
                 chunks.append(chunk)
+                if stage_times is not None:
+                    note_stage_times(chunk, stage_times)
                 fail_on_error(chunk)
     except httpx.RequestError as exc:
         raise TurnFailedError(f"request failed ({url}): {exc}", chunks) from None
@@ -400,6 +428,7 @@ def main() -> None:
 
     turn = sum(1 for message in messages if message.get("role") == "user")
     chunks: list[dict] = []
+    times: dict[int, dict] = {}
     started_at = utc_now()
     try:
         chunks = send(
@@ -408,6 +437,7 @@ def main() -> None:
             conversation_id=conversation_id,
             deployment=deployment,
             stream=not args.no_stream,
+            stage_times=times,
         )
         response = merge_response(chunks)
         reply = reply_of(response)
@@ -423,6 +453,7 @@ def main() -> None:
             ended_at=ended_at,
             response=partial,
             error=str(exc),
+            stage_times=stage_times_list(times),
         )
         print(f"failed turn recorded: {raw_path}", file=sys.stderr)
         raise SystemExit(str(exc)) from None
@@ -438,6 +469,7 @@ def main() -> None:
         ended_at=ended_at,
         response=response,
         error=None,
+        stage_times=stage_times_list(times),
     )
     print(f"raw response: {raw_path}", file=sys.stderr)
 

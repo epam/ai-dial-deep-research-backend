@@ -9,6 +9,7 @@ from dial_deep_research.utils.dial_stages import (
     DialStageResearchReviewFormatter,
     DialStageToolCallFormatter,
     PendingToolCall,
+    ReviewTally,
     log_tool_call_completed,
     timed_stage_title,
 )
@@ -131,7 +132,7 @@ class TestReportReviewStage:
         )
         # Its own prefix, not the tool-call one: a review is not a tool call. A revision is the
         # loop going round again, so it carries the in-progress mark; the cross is reserved for a
-        # failed review call.
+        # failed review call, blind or grounded.
         assert title == "[REPORT REVIEW RESULT] draft 2 - revise 🔄 (1.50s)"
 
     def test_delivered_draft_is_titled_as_a_success(self) -> None:
@@ -157,7 +158,7 @@ class TestReportReviewStage:
             max_words=2750,
             length_exemptions="the inline citations and the References section",
             violations=["The draft is over the ceiling.", "Two lines:\nthe second one."],
-            error=None,
+            blind_review_error=None,
         )
         assert "**Draft** 1" in body
         assert "3910 words, excluding the inline citations and the References section" in body
@@ -167,6 +168,25 @@ class TestReportReviewStage:
         # No fencing: stage content renders as markdown, so the list renders as a list.
         assert "```" not in body
 
+    def test_body_says_which_review_found_how_many(self) -> None:
+        body = DialStageReportReviewFormatter.format_body(
+            draft_number=2,
+            word_count=1600,
+            max_words=2750,
+            length_exemptions="the inline citations",
+            violations=["a", "b", "c"],
+            blind_review_error=None,
+            reviews=[
+                ReviewTally(name="code checks", violation_count=1),
+                ReviewTally(name="blind review", violation_count=0, duration_seconds=21.4),
+                ReviewTally(name="grounded review", violation_count=2, duration_seconds=30.94),
+            ],
+        )
+        assert (
+            "**Reviews** code checks 1 · blind review 0 (21.4s) · grounded review 2 (30.9s)" in body
+        )
+        assert "3. c" in body
+
     def test_body_records_an_approval_when_there_are_no_violations(self) -> None:
         body = DialStageReportReviewFormatter.format_body(
             draft_number=1,
@@ -174,7 +194,7 @@ class TestReportReviewStage:
             max_words=2750,
             length_exemptions="the inline citations and the References section",
             violations=[],
-            error=None,
+            blind_review_error=None,
         )
         assert "900 words, excluding the inline citations and the References section" in body
         assert "(ceiling 2750)" in body
@@ -187,9 +207,35 @@ class TestReportReviewStage:
             max_words=2750,
             length_exemptions="the inline citations and the References section",
             violations=[],
-            error="RuntimeError",
+            blind_review_error="RuntimeError",
         )
-        assert "❌ **Error** the LLM review call failed (RuntimeError)" in body
+        assert "❌ **Error** the blind review failed (RuntimeError)" in body
+        assert "satisfies every check" not in body
+
+    def test_body_records_a_failed_grounded_review_beside_the_violations(self) -> None:
+        body = DialStageReportReviewFormatter.format_body(
+            draft_number=1,
+            word_count=900,
+            max_words=2750,
+            length_exemptions="the inline citations and the References section",
+            violations=["A review item."],
+            blind_review_error=None,
+            grounded_review_error="RuntimeError",
+        )
+        assert "❌ **Error** the grounded review failed (RuntimeError)" in body
+        assert "the blind review failed" not in body
+        assert "1. A review item." in body
+
+    def test_body_claims_no_approval_when_only_the_check_failed(self) -> None:
+        body = DialStageReportReviewFormatter.format_body(
+            draft_number=1,
+            word_count=900,
+            max_words=2750,
+            length_exemptions="the inline citations and the References section",
+            violations=[],
+            blind_review_error=None,
+            grounded_review_error="RuntimeError",
+        )
         assert "satisfies every check" not in body
 
     def test_body_shows_both_the_failure_and_the_length_violation(self) -> None:
@@ -199,9 +245,9 @@ class TestReportReviewStage:
             max_words=2750,
             length_exemptions="the inline citations and the References section",
             violations=["The draft is 3910 words, over the 2750-word ceiling."],
-            error="RuntimeError",
+            blind_review_error="RuntimeError",
         )
-        assert "❌ **Error** the LLM review call failed (RuntimeError)" in body
+        assert "❌ **Error** the blind review failed (RuntimeError)" in body
         assert "1. The draft is 3910 words" in body
 
     def test_an_exhausted_budget_has_its_own_title_without_a_duration(self) -> None:

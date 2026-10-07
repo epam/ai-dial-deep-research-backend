@@ -19,6 +19,13 @@ Each step's system prompt SHALL carry that step's part of every rule, each under
 in the order the rules are defined. A rule with no part for a step SHALL add nothing to that
 step's prompt, not even its name.
 
+The generic rules SHALL be grouped into policies: source selection, then faithful relay (see
+**faithful-relay**). Each policy SHALL be rendered as a block of its own, with a heading and an
+opening sentence for each step, in that order, and the client rules SHALL follow the last one. A
+policy with no part for a step SHALL add no block to that step's prompt. Report review's blocks
+SHALL present their parts as checks. The statement of the channel's kinds of source SHALL open the
+source-selection block, whose parts it governs.
+
 The parts of one rule SHALL fit together: a step SHALL NOT be asked to check or to present what
 the earlier steps were not asked to produce, and no step SHALL be asked for what it cannot do.
 Three constraints follow from what the steps can do:
@@ -74,16 +81,28 @@ Three constraints follow from what the steps can do:
 - **THEN** each step's generic block SHALL say that the channel has datasets and no publications,
   and that the parts about publications do not apply
 
+#### Scenario: The policies render in order, each under its own heading
+
+- **WHEN** any step's system prompt is rendered
+- **THEN** it SHALL carry the source-selection block, then the faithful-relay block, then the client
+  rules, each block under its own heading, and only the source-selection block SHALL open with the
+  statement of the channel's kinds of source
+
+#### Scenario: A policy with no part for a step adds no block
+
+- **WHEN** a policy has no rule with a part for some step
+- **THEN** that step's prompt SHALL carry neither the policy's heading nor its opening sentence
+
 ### Requirement: The rules and the existing prompt text do not contradict each other
 
-Where the text a step's prompt already carries would contradict a source-selection rule, that text
-SHALL be amended in the same change, so a model never has to choose between two instructions:
+Where the text a step's prompt already carries would contradict a generic rule, that text SHALL be
+amended in the same change, so a model never has to choose between two instructions:
 
 - **Research agent.** Its pre-finish checklist SHALL exempt a publication's stated date from "every
   date confirmed on the page itself", since rule 7 takes it from the document metadata. The
-  checklist SHALL gain an item for the source-selection rules, and the exception that lets a plan
-  item count as done without evidence only a failed tool could give SHALL name the checklist items
-  it applies to rather than pointing at "the last check"; it SHALL apply to the new item too.
+  checklist SHALL gain an item for the generic rules, and the exception that lets a plan item count
+  as done without evidence only a failed tool could give SHALL name the checklist items it applies
+  to rather than pointing at "the last check"; it SHALL apply to the new item too.
 - **Research review.** Its task sentence, its list of gaps, its sentence saying that research is
   complete when every plan item is covered, its scope paragraph, the description of its output
   schema and the descriptions of its two output fields SHALL each include the gaps the rules
@@ -96,14 +115,18 @@ SHALL be amended in the same change, so a model never has to choose between two 
 - **Report writer.** Its list of rules that outrank the request SHALL include the source-selection
   prohibitions: a request never makes the report average or merge differing values, leave out a
   value's described period or the stated date of a forecast or an estimate, or present a near match
-  as an exact match. A request may still narrow what the report covers. Where the report declines a request to average or merge differing values,
-  it SHALL give each value separately with its source and say in one sentence that the values are
-  given separately because the sources differ, as the one exception to the rule that the report
-  does not explain a declined request. A request declined under the other two prohibitions is declined
-  without comment.
-- **Report review.** Its instruction to check "exactly these" SHALL name the source-selection checks
-  and the client-specific checks too, and both SHALL come before its "Not your job" section, whose
-  "the checks above" then covers them.
+  as an exact match. A request may still narrow what the report covers. Where the report declines a
+  request to average or merge differing values, it SHALL give each value separately with its source
+  and say in one sentence that the values are given separately because the sources differ, as the
+  one exception to the rule that the report does not explain a declined request. A request declined
+  under the other two prohibitions is declined without comment.
+- **Report review.** Its instruction to check "exactly these" SHALL name the checks of every rule
+  section below it, the client-specific checks included, and all of them SHALL come before its
+  "Not your job" section, whose "the checks above" then covers them.
+- **Every step.** A sentence that names the rules a step follows, such as research review's task
+  sentence, its gap bullet and its output schema's descriptions, or the research agent's checklist
+  item, SHALL name the rule sections as a whole rather than the source-selection rules alone, since
+  faithful relay defines gaps and checks too.
 
 #### Scenario: A request to average two forecasts
 
@@ -118,6 +141,12 @@ SHALL be amended in the same change, so a model never has to choose between two 
 - **WHEN** every plan item has evidence and a rule's gap is open
 - **THEN** no sentence of research review's prompt or of its output schema SHALL say that research
   is complete, and research review SHALL return a next step for the gap
+
+#### Scenario: Research review's rule sentences cover faithful relay
+
+- **WHEN** research review's prompt and output schema are rendered
+- **THEN** none of their sentences that name the rules defining gaps SHALL name the
+  source-selection rules alone
 
 ### Requirement: Client rules follow the generic rules in a tagged block
 
@@ -418,11 +447,12 @@ The rule's parts SHALL tell each step the following.
   including one.
 - **Report review:** judges only what the draft shows. A range or an average spanning two sources'
   values for the same fact is a violation, and so are two values for the same fact that the draft
-  presents as differing unless each carries its own citation and a reason, or the statement that
-  the sources do not explain the difference. A figure computed from values of different facts,
-  such as the difference between two indicators' growth rates, merges no values for one fact and
-  is outside this check. Whether a figure carrying two citations hides a disagreement is not report
-  review's to judge, because it cannot see the sources.
+  presents as differing unless each carries its own citation and a reason, or the statement that the
+  sources do not explain the difference. A figure computed from values of different facts, such as
+  the difference between two indicators' growth rates, merges no values for one fact and is outside
+  this check; report review's "No calculations" check covers it (see **report-composition**,
+  "Reports contain no calculations"). Whether a figure carrying two citations hides a disagreement
+  is not report review's to judge, because it cannot see the sources.
 
 #### Scenario: Two editions with a methodology change
 
@@ -442,7 +472,9 @@ The rule's parts SHALL tell each step the following.
 
 - **WHEN** a draft gives a column of differences between export growth and GDP growth, each
   computed from two cited values of different indicators
-- **THEN** report review SHALL NOT report the column as a range or an average of differing values
+- **THEN** report review SHALL NOT report the column under this rule as a range or an average of
+  differing values, and SHALL report it under report review's "No calculations" check as figures
+  computed from other figures
 
 #### Scenario: Research review does not start an open-ended search
 

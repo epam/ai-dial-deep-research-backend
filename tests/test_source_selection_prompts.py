@@ -14,14 +14,15 @@ from langchain_core.runnables import RunnableLambda
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.prompts import (
     RESEARCH_REVIEW_SYSTEM_PROMPT,
+    SOURCE_SELECTION_POLICY,
     ReportReview,
     ResearchReview,
+    render_blind_review_system_prompt,
     render_client_rules,
-    render_report_review_system_prompt,
+    render_policy,
     render_report_system_prompt,
     render_rules,
     render_source_kinds,
-    render_source_selection,
 )
 from dial_deep_research.app.research.source_selection import SOURCE_SELECTION_RULES
 from dial_deep_research.app_properties import (
@@ -33,6 +34,14 @@ from dial_deep_research.app_properties import (
 from dial_deep_research.utils.llm import LLMModelConfig, ReasoningEffortEnum
 from tests.citation_fakes import no_lookups
 from tests.mcp_fakes import BOTH_SOURCE_KINDS
+
+
+def render_source_selection(step: RuleStep, source_kinds: set[SourceKind]) -> str:
+    """The source-selection block of `step`'s prompt."""
+    return render_policy(
+        SOURCE_SELECTION_POLICY, step, source_kinds_statement=render_source_kinds(source_kinds)
+    )
+
 
 _WRITER_ONLY = QualityRule(name="Writer rule", report_writer="Write it this way.")
 _CLIENT_RULE = QualityRule(
@@ -139,7 +148,7 @@ def test_the_writer_and_the_reviewer_are_told_the_channels_kinds_of_source() -> 
         source_kinds={"dataset"},
         client_rules=(),
     )
-    reviewer = render_report_review_system_prompt(
+    reviewer = render_blind_review_system_prompt(
         today_date="d",
         data_sources="x",
         glossary=False,
@@ -240,7 +249,7 @@ def test_the_research_agent_prompt_carries_both_blocks(monkeypatch: pytest.Monke
     assert render_client_rules([_CLIENT_RULE], RuleStep.RESEARCH_AGENT) in prompt
     assert prompt.index("## Source selection") < prompt.index("## Data sources")
     assert "A\n  publication's stated date is the exception" in prompt
-    assert "checks on the plan's items and on the source-selection rules" in prompt
+    assert "checks on the plan's items and on the rule sections" in prompt
 
 
 async def test_research_review_prompt_carries_both_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -269,14 +278,14 @@ async def test_research_review_prompt_carries_both_blocks(monkeypatch: pytest.Mo
     )
     assert "<client_rules>\n### Dataset releases\n\nA release is never a gap." in system.content
     assert "Writer rule" not in system.content
-    assert "never ask for one" in system.content
+    assert "so never ask for a calculation either." in system.content
 
 
 def test_the_research_review_schema_names_the_rules_gaps() -> None:
     schema = ResearchReview.model_json_schema()
-    assert "source-selection rules" in schema["description"]
-    assert "source-selection rules" in schema["properties"]["assessment"]["description"]
-    assert "source-selection rules" in schema["properties"]["next_steps"]["description"]
+    assert "rule sections" in schema["description"]
+    assert "rule sections" in schema["properties"]["assessment"]["description"]
+    assert "rule sections" in schema["properties"]["next_steps"]["description"]
 
 
 def test_the_writer_prompt_carries_both_blocks_and_the_prohibitions() -> None:
@@ -300,7 +309,7 @@ def test_the_writer_prompt_carries_both_blocks_and_the_prohibitions() -> None:
 
 def test_the_report_review_prompt_places_the_checks_before_not_your_job() -> None:
     rule = QualityRule(name="Dates", report_review="Check the dates.")
-    prompt = render_report_review_system_prompt(
+    prompt = render_blind_review_system_prompt(
         source_kinds=BOTH_SOURCE_KINDS,
         today_date="d",
         data_sources="Datasets:\n[]",
@@ -311,7 +320,7 @@ def test_the_report_review_prompt_places_the_checks_before_not_your_job() -> Non
     )
     assert prompt.index("## Source-selection checks") < prompt.index("## Not your job")
     assert prompt.index("## Client-specific checks") < prompt.index("## Not your job")
-    assert "together with the source-selection checks and any client-specific checks" in prompt
+    assert "together with the checks of every rule section below" in _words(prompt)
     assert "right one to use" not in prompt
 
 
@@ -325,7 +334,7 @@ def test_no_client_rules_leave_no_client_block() -> None:
         data_sources="x",
         glossary=False,
     )
-    reviewer = render_report_review_system_prompt(
+    reviewer = render_blind_review_system_prompt(
         source_kinds=BOTH_SOURCE_KINDS,
         client_rules=(),
         today_date="d",
@@ -414,7 +423,8 @@ async def test_report_review_reasons(monkeypatch: pytest.MonkeyPatch) -> None:
 
     await node(_state())  # type: ignore[arg-type]
 
-    assert [c.reasoning_effort for c in configs] == [ReasoningEffortEnum.MEDIUM]
+    # The blind review and the grounded review.
+    assert [c.reasoning_effort for c in configs] == [ReasoningEffortEnum.MEDIUM] * 2
 
 
 def test_the_research_agent_is_told_the_channels_kinds_of_source(

@@ -138,7 +138,7 @@ def _outcome(**overrides: Any) -> ReportReviewOutcome:
         "max_words": 2750,
         "length_exemptions": "the inline citations and the References section",
         "violations": [],
-        "error": None,
+        "blind_review_error": None,
         "duration_seconds": 1.0,
     }
     return ReportReviewOutcome(**{**fields, **overrides})

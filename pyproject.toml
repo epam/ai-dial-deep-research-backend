@@ -16,7 +16,11 @@ dependencies = [
     "pydantic-settings>=2.10.0,<3.0.0",
     "python-dotenv>=1.2.0,<2.0.0",
     "langchain>=1.2.0,<2.0.0",
-    "langchain-openai>=1.1.0,<2.0.0",
+    # openai 3 makes HTTPX2 its default HTTP client, and the stream-drop retry and the error
+    # resolution catch `httpx` exceptions. langchain-openai 1.5.0 is the first release that allows
+    # openai 3, so both stay below it.
+    "langchain-openai>=1.1.0,<1.5.0",
+    "openai>=2.45.0,<3.0.0",
     "langchain-mcp-adapters>=0.1.0,<1.0.0",
     "langgraph>=1.1,<2",
     "pyyaml>=6.0.0,<7.0.0",
