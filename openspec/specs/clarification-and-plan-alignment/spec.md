@@ -71,6 +71,10 @@ agent SHALL fold the answer into a refined query and call `update_query` again,
 supporting multiple rounds until the check returns no questions. There SHALL be no
 sentinel answer string.
 
+The restated query SHALL keep the user's formatting requests, such as rounding figures, a
+number of decimals or a unit, because the report writer and report review see the user's
+request only as this query restates it (see **faithful-relay**).
+
 #### Scenario: Under-specified query yields clarifying questions
 - **WHEN** `update_query` runs on a query missing a material dimension (e.g. region or period)
 - **THEN** it SHALL record clarifying questions, and the agent SHALL present them and end the turn without recording a plan
@@ -94,6 +98,13 @@ sentinel answer string.
 #### Scenario: Changing the query invalidates the plan
 - **WHEN** `update_query` is called after a plan was recorded (and possibly approved)
 - **THEN** the recorded plan SHALL be cleared and the plan-approved flag SHALL be reset to false
+
+
+#### Scenario: A rounding request survives the restatement
+
+- **WHEN** the user asks for GDP growth by region "rounded to one decimal"
+- **THEN** the query the agent records with `update_query` SHALL keep the request to round to
+  one decimal
 
 ### Requirement: update_plan records the plan; the agent presents the query and plan verbatim after each edit
 

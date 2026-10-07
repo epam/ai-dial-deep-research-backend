@@ -19,7 +19,7 @@ from dial_deep_research.app.history import Plan, PrepState
 from dial_deep_research.app.research import graph as graph_module
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.graph import build_research_graph
-from dial_deep_research.app.research.prompts import ReportReview
+from dial_deep_research.app.research.prompts import GROUNDED_REVIEW_SYSTEM_MESSAGE, ReportReview
 from dial_deep_research.app.research.state import build_initial_state
 from dial_deep_research.app_properties import QualityRule, ReportSection
 from tests.citation_fakes import no_lookups
@@ -37,24 +37,38 @@ def _draft(body: str) -> str:
 
 
 class _FakeChatModel:
-    """Serves the report node (plain `ainvoke`) and the report-review node (structured one).
+    """Serves the report node and the grounded review (plain `ainvoke`), and the report-review
+    call (structured one).
 
-    Both nodes wrap the model in `with_stream_drop_retry`, hence `with_retry` on each object;
-    `with_structured_output` hands back a separate object so the two `ainvoke` calls stay apart.
+    Every node wraps the model in `with_stream_drop_retry`, hence `with_retry` on each object;
+    `with_structured_output` hands back a separate object so the `ainvoke` calls stay apart. The
+    grounded review's messages open with its own system message, which tells its call from the
+    report node's.
     """
 
-    def __init__(self, drafts: list[str | Exception], reviews: list[ReportReview]) -> None:
+    def __init__(
+        self,
+        drafts: list[str | Exception],
+        reviews: list[ReportReview],
+        grounded_answers: list[str] | None = None,
+    ) -> None:
         self._drafts = list(drafts)
         self._reviews = list(reviews)
+        self._grounded_answers = list(grounded_answers or [])
         self.report_calls = 0
-        self.review_calls = 0
+        self.blind_review_calls = 0
+        self.grounded_review_calls = 0
         self.report_messages: list[list[BaseMessage]] = []
 
-    # --- report node: with_retry(...).ainvoke(...) ---
+    # --- report node and grounded review: with_retry(...).ainvoke(...) ---
     def with_retry(self, **kwargs: Any) -> _FakeChatModel:
         return self
 
     async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:
+        if messages[0].content == GROUNDED_REVIEW_SYSTEM_MESSAGE:
+            self.grounded_review_calls += 1
+            answer = self._grounded_answers.pop(0) if self._grounded_answers else "No violations."
+            return AIMessage(content=answer)
         self.report_calls += 1
         self.report_messages.append(list(messages))
         draft = self._drafts.pop(0) if self._drafts else "a draft"
@@ -67,7 +81,7 @@ class _FakeChatModel:
         return _FakeReviewModel(self)
 
     def next_review(self) -> ReportReview:
-        self.review_calls += 1
+        self.blind_review_calls += 1
         return self._reviews.pop(0) if self._reviews else ReportReview(report_violations=[])
 
 
@@ -104,9 +118,10 @@ def _build(
     reviews: list[ReportReview],
     max_report_versions: int = 3,
     max_report_words: int = 2750,
+    grounded_answers: list[str] | None = None,
 ) -> tuple[Any, _FakeChatModel, list[Any]]:
     _stub_research(monkeypatch)
-    llm = _FakeChatModel(drafts, reviews)
+    llm = _FakeChatModel(drafts, reviews, grounded_answers)
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: llm)
     stages: list[Any] = []
     compiled = _compile(
@@ -194,11 +209,26 @@ async def test_approved_first_draft_ends_the_loop(monkeypatch: pytest.MonkeyPatc
     )
     final = await _run(compiled)
 
-    assert (llm.report_calls, llm.review_calls) == (1, 1)
+    assert (llm.report_calls, llm.blind_review_calls) == (1, 1)
     assert final["report"] == _draft("short draft")
     assert final["report_version"] == 1
     assert len(stages) == 1
     assert stages[0].revision_instruction is None
+
+
+async def test_a_grounded_review_item_drives_a_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    compiled, llm, stages = _build(
+        monkeypatch,
+        drafts=[_draft("first draft"), _draft("second draft")],
+        reviews=[ReportReview(report_violations=[]), ReportReview(report_violations=[])],
+        grounded_answers=["1. A figure no page gives.", "No violations."],
+    )
+    final = await _run(compiled)
+
+    assert (llm.report_calls, llm.blind_review_calls, llm.grounded_review_calls) == (2, 2, 2)
+    assert final["report"] == _draft("second draft")
+    assert stages[0].violations == ["A figure no page gives."]
+    assert stages[1].revision_instruction is None
 
 
 async def test_violations_drive_a_revision_then_approval(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,7 +242,7 @@ async def test_violations_drive_a_revision_then_approval(monkeypatch: pytest.Mon
     )
     final = await _run(compiled)
 
-    assert (llm.report_calls, llm.review_calls) == (2, 2)
+    assert (llm.report_calls, llm.blind_review_calls) == (2, 2)
     assert final["report"] == _draft("second draft")
     assert final["report_version"] == 2
     assert [stage.revision_instruction is not None for stage in stages] == [True, False]
@@ -235,7 +265,7 @@ async def test_budget_caps_report_calls_at_the_version_count(
     )
     final = await _run(compiled)
 
-    assert (llm.report_calls, llm.review_calls) == (3, 2)
+    assert (llm.report_calls, llm.blind_review_calls) == (3, 2)
     assert final["report"] == _draft("draft three")
     assert final["report_version"] == 3
     assert all(stage.revision_instruction is not None for stage in stages)
@@ -250,7 +280,7 @@ async def test_budget_of_one_skips_the_review_entirely(monkeypatch: pytest.Monke
     )
     final = await _run(compiled)
 
-    assert (llm.report_calls, llm.review_calls) == (1, 0)
+    assert (llm.report_calls, llm.blind_review_calls) == (1, 0)
     assert final["report"] == _draft("the only draft")
     assert stages == []
 
@@ -268,7 +298,7 @@ async def test_over_ceiling_draft_is_revised_despite_approval(
     )
     final = await _run(compiled)
 
-    assert (llm.report_calls, llm.review_calls) == (2, 2)
+    assert (llm.report_calls, llm.blind_review_calls) == (2, 2)
     assert final["report"] == _draft("two words")
     # The approving review's empty list gained the app-measured length violation.
     assert len(stages[0].violations) == 1
@@ -287,7 +317,7 @@ async def test_failed_revision_delivers_the_previous_draft(
     )
     final = await _run(compiled)
 
-    assert (llm.report_calls, llm.review_calls) == (2, 1)
+    assert (llm.report_calls, llm.blind_review_calls) == (2, 1)
     assert final["report"] == _draft("the first draft")
     # The failed write recorded no version, so the state still names the delivered draft.
     assert final["report_version"] == 1

@@ -766,14 +766,14 @@ DEFAULT_REPORT_STRUCTURE: list[ReportSection] = [
     ),
     ReportSection(
         name="Detailed Analysis",
-        description="The substance of the report: what the sources say, how they fit together, and"
-        " what follows from them. Use sub-headings, short paragraphs, and tables where they aid"
-        " clarity. Note where sources disagree or where a figure rests on a single source.",
+        description="The substance of the report: what the sources say and how their findings"
+        " compare. Use sub-headings, short paragraphs, and tables where they aid clarity. Note"
+        " where sources disagree or where a figure rests on a single source.",
     ),
     ReportSection(
         name="Conclusion",
-        description="The bottom line the analysis supports, and the limits of what the findings can"
-        " answer. No new facts here.",
+        description="A summary of what the findings answer, and what they cannot answer. No new"
+        " facts here.",
     ),
 ]
 
@@ -942,7 +942,7 @@ class ApplicationProperties(BaseModel):
         ge=1,
         description="How many report versions may be written in one turn. Version 1 is the first"
         " draft; each later version is a rewrite the review demanded, costing one report call plus"
-        " one review call. The last permitted version is delivered without another review — its"
+        " one report review. The last permitted version is delivered without another review — its"
         " verdict could not be acted on. 1 means the first draft is delivered unreviewed, with no"
         " review at all.",
     )

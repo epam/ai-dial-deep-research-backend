@@ -1066,7 +1066,8 @@ class ResearchRunner:
         title = DialStageReportReviewFormatter.format_title(
             draft_number=outcome.draft_number,
             revising=outcome.revision_instruction is not None,
-            review_failed=outcome.error is not None,
+            review_failed=outcome.blind_review_error is not None
+            or outcome.grounded_review_error is not None,
             duration_seconds=outcome.duration_seconds,
         )
         body = DialStageReportReviewFormatter.format_body(
@@ -1075,7 +1076,9 @@ class ResearchRunner:
             max_words=outcome.max_words,
             length_exemptions=LENGTH_EXEMPTIONS,
             violations=outcome.violations,
-            error=outcome.error,
+            blind_review_error=outcome.blind_review_error,
+            grounded_review_error=outcome.grounded_review_error,
+            reviews=outcome.reviews,
         )
         with self._choice.create_stage(title) as stage:
             stage.append_content(body)

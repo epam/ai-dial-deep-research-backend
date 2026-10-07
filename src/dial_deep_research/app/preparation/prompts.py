@@ -27,6 +27,8 @@ your tools enforce this, so do not try to skip ahead.
 
 Call `update_query` with a faithful, concise restatement of what the user asked for,
 using ONLY what they actually said — never invent scope, regions, time periods, or caveats.
+Keep the user's formatting requests in it, such as rounding figures, a number of decimals or a
+unit: the report is written from this query, and a request left out of it is lost.
 The tool checks the query and either returns clarifying questions or confirms it is clear.
 
 - If it returns questions, relay them to the user clearly and then STOP and wait for their answer.

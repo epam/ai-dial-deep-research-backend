@@ -160,6 +160,17 @@ class DialStageReportFormatter:
         )
 
 
+class ReviewTally(BaseModel):
+    """How many of a report review's violations one check found, and how long its call took.
+
+    `duration_seconds` is None for a check that makes no model call.
+    """
+
+    name: str
+    violation_count: int
+    duration_seconds: float | None = None
+
+
 class DialStageReportReviewFormatter:
     """Renders one report review as a DIAL stage, and the closing stage of a draft the
     revision budget left unreviewed.
@@ -177,9 +188,9 @@ class DialStageReportReviewFormatter:
         cls, *, draft_number: int, revising: bool, review_failed: bool, duration_seconds: float
     ) -> str:
         action = "revise" if revising else "deliver"
-        # The cross marks a real error — the review call failed — and outranks the action in the
-        # title; a revision is the loop going round again, which the in-progress mark says without
-        # claiming anything is wrong.
+        # The cross marks a real error — a review call failed, blind or grounded — and outranks the
+        # action in the title; a revision is the loop going round again, which the in-progress mark
+        # says without claiming anything is wrong.
         emoji = _ERROR_EMOJI if review_failed else _IN_PROGRESS_EMOJI if revising else _RESULT_EMOJI
         return f"{cls._PREFIX} draft {draft_number} - {action} {emoji} ({duration_seconds:.2f}s)"
 
@@ -192,7 +203,9 @@ class DialStageReportReviewFormatter:
         max_words: int,
         length_exemptions: str,
         violations: Sequence[str],
-        error: str | None,
+        blind_review_error: str | None,
+        grounded_review_error: str | None = None,
+        reviews: Sequence[ReviewTally] | None = None,
     ) -> str:
         lines = [
             f"**Draft** {draft_number}",
@@ -201,12 +214,32 @@ class DialStageReportReviewFormatter:
             f" (ceiling {max_words})",
             "",
         ]
-        if error is not None:
+        if reviews:
+            # Which check found how many of the violations below, in their order, and how long each
+            # review call took, so that a reader or an eval can tell the reviews apart.
+            parts = [
+                f"{review.name} {review.violation_count}"
+                + (
+                    f" ({review.duration_seconds:.1f}s)"
+                    if review.duration_seconds is not None
+                    else ""
+                )
+                for review in reviews
+            ]
+            lines.append("**Reviews** " + " · ".join(parts))
+            lines.append("")
+        if blind_review_error is not None:
             # A failed call still lists the app-measured length violation when there is one, so
             # the two facts stay separate: what broke, and what the revision still acts on.
             lines.append(
-                f"{_ERROR_EMOJI} **Error** the LLM review call failed ({error}), and "
+                f"{_ERROR_EMOJI} **Error** the blind review failed ({blind_review_error}), and "
                 "produced no review. The deterministic checks were still executed."
+            )
+            lines.append("")
+        if grounded_review_error is not None:
+            lines.append(
+                f"{_ERROR_EMOJI} **Error** the grounded review failed ({grounded_review_error}),"
+                " and checked nothing against the sources. The other checks still stand."
             )
             lines.append("")
         if violations:
@@ -214,7 +247,7 @@ class DialStageReportReviewFormatter:
             lines.append("")
             # Stage content renders as markdown, so the numbered lines render as a list.
             lines.extend(f"{i}. {violation}" for i, violation in enumerate(violations, start=1))
-        elif error is None:
+        elif blind_review_error is None and grounded_review_error is None:
             lines.append("**Violations** none — the draft satisfies every check.")
         return "\n".join(lines)
 
