@@ -180,6 +180,7 @@ class _Harness:
                 client_name="ACME",
                 data_sources="The topics map.",
                 data_sources_instructions="",
+                glossary=None,
             )
             # `research_iteration` is the research graph's channel the agent's iteration counter
             # increments; the agent runs here without that graph around it.

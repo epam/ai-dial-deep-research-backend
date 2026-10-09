@@ -611,8 +611,9 @@ Some report rules are decidable from the draft text alone, or from the draft and
 itself captured during the turn. Those SHALL be owned by the app: the **section structure** (every
 section the writer writes present, named exactly as configured, in the configured order, as a `##`
 heading, and no other `##` heading), the **word ceiling**, the **absence of hyperlinks** (see the
-requirement above), the **data-query citations**, and the **dataset and document identifiers**
-(below). They SHALL be checked in Python on
+requirement above), the **absence of emojis** (see "The app reports every emoji in a draft"), the
+**data-query citations**, and the **dataset and document identifiers** (below). They SHALL be
+checked in Python on
 every reviewed draft, and their violations SHALL join the review model's violations as one list,
 so a revision acts on all of them together.
 
@@ -681,12 +682,14 @@ the configured structure itself, with nothing added and nothing subtracted anywh
 References section is no part of it, so no derivation stands between the instruction and the check.
 
 **The review model SHALL NOT be asked to judge any of them.** It is told that the app checks the
-headings, the length, the hyperlinks and the cited query, dataset and document ids, and its own checks are the ones that need a reader: a
+headings, the length, the hyperlinks, the emojis and the cited query, dataset and document ids, and
+its own checks are the ones that need a reader: a
 padded section, a section that should admit it has nothing to say, the protected-section rules, the
 prohibited annotations, valid Markdown, the citation format, a list of sources the draft
 carries, and, on a turn whose glossary fetch listed at least one term or whose research agent
 obtained a successful glossary tool result, the glossary terminology (see
-**A report uses the glossary's terminology**). A model verdict SHALL NOT be able to pass a draft that breaks an app-checked
+**A report uses the glossary's terminology**). A model verdict SHALL NOT be able to pass a draft
+that breaks an app-checked
 rule, and a review call that fails SHALL NOT suppress one.
 
 **A list of sources is the review model's to report, because the app cannot see every form of
@@ -748,8 +751,8 @@ called, so naming it there would add a per-instance input to a call that does no
 #### Scenario: The review model is not asked about headings, length or hyperlinks
 
 - **WHEN** the report-review call is issued
-- **THEN** its prompt SHALL state that the app checks the headings, the length and the hyperlinks
-  itself, and SHALL NOT ask it to verify any of them
+- **THEN** its prompt SHALL state that the app checks the headings, the length, the hyperlinks and
+  the emojis itself, and SHALL NOT ask it to verify any of them
 
 #### Scenario: The expected headings are the configured structure itself
 
@@ -869,20 +872,21 @@ user's formatting instruction lives, and without them the step cannot tell a leg
 instruction from an override of a protected rule. It SHALL judge the draft against the section
 content rules, the protected sections and their rules, the prohibited meta-annotations, well-formed
 Markdown, the citation format rules the **research-execution** capability defines, and the
-report-review part of every quality rule: the generic source-selection and faithful-relay rules and
-the channel's client rules (see **source-selection** and **faithful-relay**). These parts judge only
+blind-review part of every quality rule: the generic rules of every policy and the channel's client
+rules (see **source-selection** and **faithful-relay**). These parts judge only
 what the draft shows — how two values for one fact are presented, whether a value states its dates,
 whether a near match says how it differs, whether a claim carries a citation — because the blind
 review never sees the sources.
 
 The review step SHALL make a second call beside it, the **grounded review**, which sees the
-research transcript and judges the draft against the faithful-relay rules' writer parts and the
-writer's "No calculations" rule (see **faithful-relay**). The two calls SHALL run concurrently, and
+research transcript and judges the draft against the source-selection and faithful-relay rules'
+writer parts, the writer's "No calculations" rule, and the grounded-review part of every other
+quality rule, generic and client (see **faithful-relay**). The two calls SHALL run concurrently, and
 the grounded review's items SHALL be appended to the blind review's violations, so the loop below
 treats every item alike.
 
-The section structure, the word ceiling and the absence of hyperlinks are not the review step's to
-judge — the app checks those itself (see the
+The section structure, the word ceiling, the absence of hyperlinks and the absence of emojis are not
+the review step's to judge — the app checks those itself (see the
 requirement above). The citation-format check becomes load-bearing with this change: the app parses
 those markers out of the delivered report (see **report-citations**), so a draft that adopted
 numbered footnotes would yield no pills at all, and this step is what pushes it back to the defined
@@ -915,16 +919,19 @@ answer. A reviewed draft always has a rewrite in budget — the review is gated 
 so a failed review never has to reason about an exhausted budget.
 
 **A swallowed revision failure ends the loop, overriding the count gate.** It is the third delivery
-case beside "within the ceiling" and "budget exhausted": an over-ceiling draft MAY therefore ship with
+case beside "within the ceiling" and "budget exhausted": an over-ceiling draft MAY therefore ship
+with
 version budget still remaining, and that unresolved length SHALL be recorded in the logs exactly as
 an exhausted budget is. The count gate above applies while revisions are still being written
 successfully, not after one has failed.
 
 **A failed revision SHALL NOT cost the report either.** Once a draft exists, no later failure in the
-loop may discard it: if a revision's own model call fails — after its transient-drop retries, or on a
+loop may discard it: if a revision's own model call fails — after its transient-drop retries, or on
+a
 non-retryable error such as an exceeded context length, which a revision is likelier to hit than the
 first draft was because its request is strictly larger — the **previous** draft SHALL be delivered
-and the failure logged as a warning. The turn SHALL NOT fail. Before this loop existed the report was
+and the failure logged as a warning. The turn SHALL NOT fail. Before this loop existed the report
+was
 written once and a failure had nothing to discard; adding revisions must not turn a finished report
 into a failed turn.
 
@@ -951,7 +958,8 @@ to its source, which is what it judges.
 Once the loop has settled on the draft to deliver, that draft's wording is final: no later step may
 rewrite, shorten, reorder, or reformat it. The one permitted exception is the citation step, which
 replaces each citation marker it converts into an inline citation annotation with that citation's
-marker tag and changes nothing else (see the **report-citations** capability). The review step judges
+marker tag and changes nothing else (see the **report-citations** capability). The review step
+judges
 the draft with its markers in place, which is the form the citation rules are written against.
 
 #### Scenario: Approved first draft is delivered as judged
@@ -1000,13 +1008,15 @@ the draft with its markers in place, which is the form the citation rules are wr
 
 - **WHEN** a revision's model call fails — its transient-drop retries exhausted, or a non-retryable
   error such as an exceeded context length — after a first draft was already written
-- **THEN** the previous draft SHALL be delivered as the answer, the turn SHALL complete successfully,
+- **THEN** the previous draft SHALL be delivered as the answer, the turn SHALL complete
+  successfully,
   and the failure SHALL be logged as a warning
 
 #### Scenario: An over-long draft ships when the budget runs out
 
 - **WHEN** the version budget is exhausted and the latest draft still measures above the ceiling
-- **THEN** that draft SHALL be delivered as the answer, the turn SHALL complete successfully, and the
+- **THEN** that draft SHALL be delivered as the answer, the turn SHALL complete successfully, and
+  the
   unresolved length SHALL be recorded in the logs
 
 #### Scenario: A forced revision carries an instruction even with nothing from the model
@@ -1310,3 +1320,57 @@ writer.
 - **WHEN** a draft states a fact that only the description of a publication series gives
 - **THEN** the sentence SHALL name the series as its source in words and carry no citation, and
   report review SHALL NOT report it as an uncited claim
+
+### Requirement: The app reports every emoji in a draft
+
+The report SHALL carry no emoji (see **language-and-style**). The app SHALL check every draft for
+emojis itself, as one of the rules it checks in Python, and SHALL add a violation that quotes each
+emoji found, once, and asks for each to be removed, and for a word to be written where an emoji
+stood for one, such as "yes" for a check mark. The writer SHALL be told the rule with the other
+app-checked rules: no emoji in prose, headings, lists or tables, and that pictographic arrows and
+symbols such as ↗, ⬆, ✔ and ⚠ count as emojis, since the definition below covers them.
+
+An emoji is:
+
+- a character with the Unicode property `Extended_Pictographic`, other than ©, ® and ™, which carry
+  the property but can appear in a quoted name, together with the variation selectors, skin-tone
+  modifiers and tag characters that follow it, and any zero-width-joined pictograph that follows,
+  so that the violation quotes the emoji as it was written;
+- a skin-tone modifier on its own;
+- a flag: a pair of regional-indicator letters;
+- a keycap: a digit, `#` or `*`, an optional variation selector, and the combining keycap.
+
+Flags and keycaps are built from characters without the property, so they are named separately.
+The check cannot tell a quotation from the report's own prose, so it reports an emoji wherever it
+stands. The blind review SHALL be told, in its list of what it does not judge, that the app checks
+emojis.
+
+#### Scenario: An emoji is caught by the app
+
+- **WHEN** a draft's Key Findings starts a bullet with "✅"
+- **THEN** the app SHALL add a violation quoting "✅", whatever the reviews returned
+
+#### Scenario: A flag and a keycap are emojis
+
+- **WHEN** a draft writes "🇺🇸 United States" and "1️⃣ First"
+- **THEN** the app SHALL report both
+
+#### Scenario: A trademark sign is not an emoji
+
+- **WHEN** a draft quotes a product name carrying "™" or "®"
+- **THEN** the app SHALL NOT report it
+
+#### Scenario: A skin-toned emoji is quoted whole
+
+- **WHEN** a draft writes "👍🏽"
+- **THEN** the app SHALL quote "👍🏽" in one violation item, modifier included
+
+#### Scenario: A pictographic arrow is an emoji
+
+- **WHEN** a draft's table marks a trend with "↗"
+- **THEN** the app SHALL report it
+
+#### Scenario: A draft without emojis passes
+
+- **WHEN** a draft carries no emoji
+- **THEN** the emoji check SHALL add no violation

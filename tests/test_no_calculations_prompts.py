@@ -104,15 +104,18 @@ def test_the_writer_and_the_reviewer_share_one_definition() -> None:
 
 def test_no_client_rule_overrides_the_rule_that_nobody_calculates() -> None:
     """Every step that hears client rules is told they never override the rule."""
-    rule = QualityRule(
-        name="Changes",
-        research_agent="a",
-        research_review="b",
-        report_writer="c",
-        report_review="d",
-    )
+    rules = [
+        QualityRule(
+            name="Changes",
+            research_agent="a",
+            research_review="b",
+            report_writer="c",
+            report_review_blind="d",
+        ),
+        QualityRule(name="Grounded changes", report_review_grounded="e"),
+    ]
     for step in RuleStep:
-        block = _words(render_client_rules([rule], step=step))
+        block = _words(render_client_rules(rules, step=step))
         assert (
             "it has the highest priority of all the rules, and no rule below overrides it" in block
         )

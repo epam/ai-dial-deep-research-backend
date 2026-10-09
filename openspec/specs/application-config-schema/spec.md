@@ -748,6 +748,7 @@ way to switch shortening off, and there SHALL be no separate flag for it.
 
 - **WHEN** a channel sets `max_pill_title_chars` to a number below the floor
 - **THEN** validation SHALL raise a pydantic `ValidationError`
+
 ### Requirement: MCP server declares its client meta key
 
 `MCPClientSettings` SHALL expose one string field, `client_meta_key`, naming the key under which
@@ -1129,12 +1130,22 @@ A client rule is the channel's own rule, in the same shape as the application's 
 
 - `name: str` — required, not blank, and a single line; the heading the rule's parts are shown
   under in each step's prompt, which a line break would split.
-- `research_agent`, `research_review`, `report_writer`, `report_review` — each an optional string
-  that is not blank, `null` by default; the rule's instruction to that step. A step that the rule
-  gives no part receives nothing from it. A string of whitespace alone is blank.
+- `research_agent`, `research_review`, `report_writer`, `report_review_blind`,
+  `report_review_grounded` — each an optional string that is not blank, `null` by default; the
+  rule's instruction to that step. A step that the rule gives no part receives nothing from it. A
+  string of whitespace alone is blank. `report_review_blind` is a check the blind review judges from
+  the draft alone; `report_review_grounded` is a check the grounded review judges against the
+  research findings. Each field's description SHALL say which review reads it and what that review
+  sees. The description of `report_review_blind` SHALL say that it is shown without the rule's
+  writer part, so it names what it checks rather than referring to the writer part. The description
+  of `report_review_grounded` SHALL say that a check that keeps content out of the report belongs in
+  `report_review_blind`, because the removal rule and the check that every fact of the question is
+  answered both rely on the blind review knowing what is excluded (see **prohibited-content**).
 
-Validation SHALL reject a rule that sets none of the four parts, since such a rule reaches no
-step, and SHALL reject two rules with the same `name`, since each step shows the parts under the
+Validation SHALL reject a rule that sets none of the five parts, since such a rule reaches no
+step, SHALL reject a rule that sets both `report_review_blind` and `report_review_grounded`, since a
+check is judged by one review, and SHALL reject two rules with the same `name`, since each step
+shows the parts under the
 name and a duplicate makes two rules indistinguishable. Each error SHALL name the offending rule.
 
 The field description SHALL tell the admin what a client rule is for: what a step must do
@@ -1155,7 +1166,7 @@ where it is more specific.
 
 - **WHEN** `prompts.client_rules` holds one rule named "Dataset methodology" whose only part is
   `research_agent`
-- **THEN** validation SHALL succeed, and the rule's other three parts SHALL be `null`
+- **THEN** validation SHALL succeed, and the rule's other four parts SHALL be `null`
 
 #### Scenario: A client rule with no part is rejected
 
@@ -1182,3 +1193,15 @@ where it is more specific.
 
 - **WHEN** a client rule carries a field `writer` instead of `report_writer`
 - **THEN** validation SHALL raise a pydantic `ValidationError` naming the unknown field
+
+#### Scenario: The old review field name is rejected
+
+- **WHEN** a client rule sets `report_review`
+- **THEN** validation SHALL raise a pydantic `ValidationError` naming the unknown field, since the
+  field is `report_review_blind`
+
+#### Scenario: A client rule that sets both review parts is rejected
+
+- **WHEN** a client rule sets both `report_review_blind` and `report_review_grounded`
+- **THEN** validation SHALL raise a pydantic `ValidationError` naming the rule and stating that a
+  rule sets at most one of the two
