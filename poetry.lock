@@ -5237,6 +5237,18 @@ files = [
 ]
 
 [[package]]
+name = "types-regex"
+version = "2026.9.29.20261005"
+description = "Typing stubs for regex"
+optional = false
+python-versions = ">=3.10"
+groups = ["dev"]
+files = [
+    {file = "types_regex-2026.9.29.20261005-py3-none-any.whl", hash = "sha256:24a74fa7fdf0c17300a499f49c0b6dc6865851e138d76a24922d220c048fa9d3"},
+    {file = "types_regex-2026.9.29.20261005.tar.gz", hash = "sha256:544b8f5b45e4d10e3d3222c92f8280426588cc98fd34eb1e2c5311f7c68a4189"},
+]
+
+[[package]]
 name = "types-s3transfer"
 version = "0.16.0"
 description = "Type annotations and code completion for s3transfer"
@@ -6266,4 +6278,4 @@ tracing = ["opik"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<3.14"
-content-hash = "1bf26313ab53cdeeb3e958d2776b8eb5682c433beb20596942ca06659a941e71"
+content-hash = "00c66f9fecdc236a1c60b01fa515d69599af4e647118e671f753414907fcf060"

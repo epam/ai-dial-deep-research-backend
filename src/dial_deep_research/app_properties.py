@@ -784,15 +784,17 @@ class RuleStep(StrEnum):
     RESEARCH_AGENT = "research_agent"
     RESEARCH_REVIEW = "research_review"
     REPORT_WRITER = "report_writer"
-    REPORT_REVIEW = "report_review"
+    REPORT_REVIEW_BLIND = "report_review_blind"
+    REPORT_REVIEW_GROUNDED = "report_review_grounded"
 
 
 class QualityRule(BaseModel):
     """One rule, as the instruction it gives each research step.
 
     A rule's parts live together so that they cannot drift apart: what the research agent is asked
-    to retrieve, what research review counts as a gap, what the writer presents and what report
-    review checks are one edit. The application's generic rules and a channel's client rules share
+    to retrieve, what research review counts as a gap, what the writer presents and what a report
+    review checks are one edit. A check is judged by one of the two report reviews, so a rule sets
+    at most one of their parts. The application's generic rules and a channel's client rules share
     this shape.
     """
 
@@ -820,11 +822,24 @@ class QualityRule(BaseModel):
         min_length=1,
         description="What the report writer does for this rule.",
     )
-    report_review: str | None = Field(
+    report_review_blind: str | None = Field(
         default=None,
         min_length=1,
-        description="What report review checks for this rule. It sees the draft, not the sources, so"
-        " a check must be decidable from the draft.",
+        description="What the blind review checks for this rule. It sees the draft, the question,"
+        " the plan and the data sources, but not the research findings, so a check must be"
+        " decidable from the draft. It is shown without the rule's writer part, so it names what"
+        " it checks rather than referring to the writer part. Put a check that keeps content out"
+        " of the report here. Set at most one of report_review_blind and report_review_grounded.",
+    )
+    report_review_grounded: str | None = Field(
+        default=None,
+        min_length=1,
+        description="What the grounded review checks for this rule. It sees the draft and the"
+        " research findings, so a check may compare the report with its sources. It also reads the"
+        " client rules' writer parts as context, but is not shown the blind parts, so a check that"
+        " keeps content out of the report belongs in report_review_blind, where the rule on"
+        " removing excluded content and the check that every fact of the question is answered both"
+        " rely on it. Set at most one of report_review_blind and report_review_grounded.",
     )
 
     def part(self, step: RuleStep) -> str | None:
@@ -857,6 +872,16 @@ class QualityRule(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _validate_one_review(self) -> QualityRule:
+        # A check is judged by the one review that can decide it, so a rule never gives both.
+        if self.report_review_blind is not None and self.report_review_grounded is not None:
+            raise ValueError(
+                f"quality rule {self.name!r} sets both report_review_blind and"
+                " report_review_grounded; a rule sets at most one of the two"
+            )
+        return self
+
 
 class Prompts(BaseModel):
     """Per-instance content injected into the prompt templates.
@@ -881,7 +906,8 @@ class Prompts(BaseModel):
         description="This channel's own rules: what the research steps must do differently for this"
         " channel's sources, such as how its datasets document their methodology, which tool"
         " lists its documents, or which metadata key holds a publication's date. Each rule gives"
-        " any of the four steps an instruction. A step's prompt shows these rules after the"
+        " any of the five steps an instruction: the research agent, research review, the report"
+        " writer, and one of the two report reviews. A step's prompt shows these rules after the"
         " application's generic rules, and a client rule is followed where it is more specific than"
         " a generic one. Rule names must be unique.",
     )

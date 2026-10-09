@@ -246,28 +246,40 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   research-agent obtained a glossary result; it also receives those results, selected from the
   transcript by the configured glossary tool names, as its one kind of tool result.
 
-- **Quality rules**: the system prompt of every node also carries its part of each quality rule — a
-  rule is one bundle of four instructions, one per node, so what research-agent retrieves, what
-  research-review counts as a gap, what the report writer presents and what report-review checks
-  are defined together. The generic rules come first, grouped into policies, one block each in
-  this order: source selection (`app/research/source_selection.py`), then faithful relay
-  (`app/research/faithful_relay.py`), whose terms use the source-selection ones. A policy with no
-  part for a node adds no block. The source-selection block opens with a sentence naming the kinds
-  of source the channel's servers give it (publications, datasets or both), so a part about a kind
-  the channel lacks does not apply. A channel's `prompts.client_rules` follow in a
-  `<client_rules>` block. See [source-selection](../openspec/specs/source-selection/spec.md) and
-  [faithful-relay](../openspec/specs/faithful-relay/spec.md).
+- **Quality rules**: the system prompt of every call also carries its part of each quality rule —
+  a rule is one bundle of instructions, one per call: research-agent, research-review, the report
+  writer, and one of the two report reviews, the blind or the grounded one. So what research-agent
+  retrieves, what research-review counts as a gap, what the report writer presents and what a
+  review checks are defined together. The generic rules come first, grouped into policies, one
+  block each in this order: source selection (`app/research/source_selection.py`), faithful relay
+  (`app/research/faithful_relay.py`), whose terms use the source-selection ones, terminology
+  (`app/research/terminology.py`), language and style (`app/research/language_style.py`), and
+  removal (`app/research/prohibited_content.py`). A policy's terms open its block, and a policy
+  with no part for a call adds no block. Some rules render only on a channel that configures a
+  glossary. The source-selection block opens with a sentence naming the kinds of source the
+  channel's servers give it (publications, datasets or both), so a part about a kind the channel
+  lacks does not apply. A channel's `prompts.client_rules` follow in a `<client_rules>` block. See
+  [source-selection](../openspec/specs/source-selection/spec.md),
+  [faithful-relay](../openspec/specs/faithful-relay/spec.md),
+  [terminology](../openspec/specs/terminology/spec.md),
+  [language-and-style](../openspec/specs/language-and-style/spec.md) and
+  [prohibited-content](../openspec/specs/prohibited-content/spec.md).
 
 - **The blind review and the grounded review**: report-review makes two LLM calls. The blind
-  review sees the draft, the configured sections, the query and the plan, but not the findings.
-  The grounded review runs beside it, in the same `asyncio.gather` as the identifier lookups, so
-  the node takes as long as the slower call. It is the one review that sees the findings: a
-  neutral system message, the transcript exactly as the report writer receives it, then two
-  system messages — the faithful-relay rules' writer parts and the writer's "No
-  calculations" rule, with the source-selection terms, and the review request ending in the
-  draft. It answers with a plain numbered list, whose items follow the blind review's in the
-  node's one list of violations, so the loop routes as before. A failed grounded review adds no
-  item and fails nothing. See
+  review sees the draft, the configured sections, the query and the plan, but not the findings;
+  it judges every rule's blind part, the client rules' included. The grounded review runs beside
+  it, in the same `asyncio.gather` as the identifier lookups, so the node takes as long as the
+  slower call. It is the one review that sees the findings: a neutral system message, the
+  transcript exactly as the report writer receives it, then two system messages — its
+  instructions, and the review request ending in the draft. The instructions carry the
+  source-selection and faithful-relay blocks with those rules' writer parts, which both reviews
+  therefore check, then every other rule's grounded part, the writer's "No calculations" rule, the
+  client rules' grounded parts, and the client rules' writer parts as context it does not check,
+  so that it can ask for a missing value without asking for content a client rule excludes. The
+  grounded review answers with a plain numbered list, whose
+  items follow the blind review's in the node's one list of violations, so the loop routes as
+  before. The app's own checks, such as the length, the hyperlinks and the emojis, come first in
+  that list. A failed grounded review adds no item and fails nothing. See
   [faithful-relay](../openspec/specs/faithful-relay/spec.md), "The grounded review checks the draft
   against the sources".
 

@@ -18,6 +18,7 @@ from dial_deep_research.app.research.nodes import (
     parse_review_items,
 )
 from dial_deep_research.app.research.prompts import (
+    FAITHFUL_RELAY_POLICY,
     GROUNDED_REVIEW_SYSTEM_MESSAGE,
     NO_CALCULATIONS_WRITER_RULE,
     RESEARCH_AGENT_SYSTEM_PROMPT,
@@ -48,7 +49,11 @@ _HEADINGS = {
     RuleStep.RESEARCH_AGENT: ("## Source selection", "## Faithful relay"),
     RuleStep.RESEARCH_REVIEW: ("## Source selection", "## Faithful relay"),
     RuleStep.REPORT_WRITER: ("## Source selection", "## Faithful relay"),
-    RuleStep.REPORT_REVIEW: ("## Source-selection checks", "## Faithful-relay checks"),
+    RuleStep.REPORT_REVIEW_BLIND: ("## Source-selection checks", "## Faithful-relay checks"),
+    RuleStep.REPORT_REVIEW_GROUNDED: (
+        "## Source selection, judged against the findings",
+        "## Faithful relay, judged against the findings",
+    ),
 }
 
 
@@ -87,7 +92,7 @@ def _review_prompt() -> str:
 
 @pytest.mark.parametrize("step", list(RuleStep))
 def test_every_step_gets_source_selection_then_faithful_relay(step: RuleStep) -> None:
-    block = render_generic_rules(step, source_kinds=BOTH_SOURCE_KINDS)
+    block = render_generic_rules(step, source_kinds=BOTH_SOURCE_KINDS, glossary=False)
     source_selection, faithful_relay = _HEADINGS[step]
     assert block.index(source_selection) < block.index(faithful_relay)
     # The kinds-of-source statement opens the source-selection block only.
@@ -98,9 +103,10 @@ def test_every_step_gets_source_selection_then_faithful_relay(step: RuleStep) ->
 
 @pytest.mark.parametrize("step", list(RuleStep))
 def test_every_step_gets_its_faithful_relay_parts(step: RuleStep) -> None:
-    block = render_generic_rules(step, source_kinds=BOTH_SOURCE_KINDS)
+    block = render_generic_rules(step, source_kinds=BOTH_SOURCE_KINDS, glossary=False)
+    assert "### Faithful-relay terms\n\n" in block
     for rule in FAITHFUL_RELAY_RULES:
-        part = rule.part(step)
+        part = rule.part(FAITHFUL_RELAY_POLICY.rule_step(step))
         if part is None:
             assert f"### {rule.name}\n" not in block
         else:
@@ -112,8 +118,60 @@ def test_a_policy_with_no_part_for_a_step_adds_no_block() -> None:
         headings={RuleStep.REPORT_WRITER: ("Writing", "Write so.")},
         rules=(QualityRule(name="Only writer", report_writer="Do it."),),
     )
-    assert render_policy(policy, RuleStep.RESEARCH_AGENT) == ""
-    assert "## Writing" in render_policy(policy, RuleStep.REPORT_WRITER)
+    assert render_policy(policy, RuleStep.RESEARCH_AGENT, glossary=False) == ""
+    assert "## Writing" in render_policy(policy, RuleStep.REPORT_WRITER, glossary=False)
+
+
+def test_terms_alone_add_no_block() -> None:
+    policy = GenericPolicy(
+        headings={RuleStep.REPORT_WRITER: ("Writing", "Write so.")},
+        rules=(QualityRule(name="Only writer", report_writer="Do it."),),
+        terms_name="Terms",
+        terms={RuleStep.REPORT_WRITER: "A word means this."},
+    )
+    assert render_policy(policy, RuleStep.RESEARCH_AGENT, glossary=False) == ""
+    assert render_policy(policy, RuleStep.REPORT_WRITER, glossary=False) == (
+        "## Writing\n\nWrite so.\n\n### Terms\n\nA word means this.\n\n"
+        "### Only writer\n\nDo it.\n\n"
+    )
+
+
+def test_glossary_rules_render_only_with_a_glossary() -> None:
+    policy = GenericPolicy(
+        headings={RuleStep.REPORT_WRITER: ("Writing", "Write so.")},
+        rules=(QualityRule(name="Always", report_writer="Do it."),),
+        glossary_rules=(QualityRule(name="Glossary only", report_writer="Use the glossary."),),
+    )
+    assert "### Glossary only" not in render_policy(policy, RuleStep.REPORT_WRITER, glossary=False)
+    assert "### Glossary only" in render_policy(policy, RuleStep.REPORT_WRITER, glossary=True)
+
+
+def test_a_writer_parts_policy_rejects_a_grounded_part() -> None:
+    with pytest.raises(ValueError, match="sets a grounded part, which its policy never renders"):
+        GenericPolicy(
+            headings={RuleStep.REPORT_WRITER: ("Writing", "Write so.")},
+            rules=(QualityRule(name="Checked", report_review_grounded="Check it."),),
+            grounded_by_writer_parts=True,
+        )
+
+
+def test_a_policy_with_terms_needs_them_for_every_step_it_renders() -> None:
+    with pytest.raises(ValueError, match="no report_writer terms"):
+        GenericPolicy(
+            headings={RuleStep.REPORT_WRITER: ("Writing", "Write so.")},
+            rules=(QualityRule(name="Only writer", report_writer="Do it."),),
+            terms_name="Terms",
+            terms={RuleStep.RESEARCH_AGENT: "A word means this."},
+        )
+
+
+def test_a_glossary_rule_whose_step_has_no_heading_fails_when_the_policy_is_defined() -> None:
+    with pytest.raises(ValueError, match="no research_agent heading"):
+        GenericPolicy(
+            headings={RuleStep.REPORT_WRITER: ("Writing", "Write so.")},
+            rules=(QualityRule(name="Only writer", report_writer="Do it."),),
+            glossary_rules=(QualityRule(name="Search", research_agent="Find it."),),
+        )
 
 
 def test_the_source_kinds_are_stated_once_in_the_first_block_that_needs_them(
@@ -137,7 +195,9 @@ def test_the_source_kinds_are_stated_once_in_the_first_block_that_needs_them(
         ),
     )
     statement = render_source_kinds(BOTH_SOURCE_KINDS)
-    block = render_generic_rules(RuleStep.REPORT_WRITER, source_kinds=BOTH_SOURCE_KINDS)
+    block = render_generic_rules(
+        RuleStep.REPORT_WRITER, source_kinds=BOTH_SOURCE_KINDS, glossary=False
+    )
     assert block.count(statement) == 1
     assert block.index("First intro.") < block.index(statement) < block.index("## Second")
 
@@ -183,8 +243,9 @@ def test_research_review_says_nobody_calculates() -> None:
 def test_the_writer_outrank_list_carries_the_faithful_relay_prohibitions() -> None:
     text = _words(_writer_prompt())
     assert (
-        'the "No calculations" rule, these three source-selection rules' in text
-        and "or these two faithful-relay rules: infer nothing, and keep every figure as its source"
+        'the "No calculations" rule, the rules that exclude content, these three source-selection'
+        " rules" in text
+        and "these two faithful-relay rules: infer nothing, and keep every figure as its source"
         in text
     )
     assert 'does not override the "No calculations" rule or those two faithful-relay rules' in text
@@ -219,45 +280,80 @@ def test_the_default_sections_ask_for_no_inference() -> None:
 def test_source_selection_points_a_computed_figure_at_no_calculations() -> None:
     other_sources = next(r for r in SOURCE_SELECTION_RULES if r.name.startswith("Other sources"))
     assert 'this check does not cover it, and the check "No calculations" does' in _words(
-        other_sources.report_review or ""
+        other_sources.report_review_blind or ""
     )
 
 
 # --- The grounded review: its prompt and its messages ---
 
 
-def _check_prompt() -> str:
-    return render_grounded_review_prompt(today_date="2026-10-02", data_sources="Datasets:\n[]")
+def _check_prompt(**overrides: Any) -> str:
+    kwargs: dict[str, Any] = {
+        "today_date": "2026-10-02",
+        "data_sources": "Datasets:\n[]",
+        "source_kinds": BOTH_SOURCE_KINDS,
+        "glossary": False,
+        "client_rules": [],
+    }
+    return render_grounded_review_prompt(**(kwargs | overrides))
 
 
 def test_the_check_carries_the_terms_and_the_writer_parts() -> None:
     prompt = _check_prompt()
     assert SOURCE_SELECTION_TERMS in prompt
+    assert render_rules(SOURCE_SELECTION_RULES, step=RuleStep.REPORT_WRITER) in prompt
     assert render_rules(FAITHFUL_RELAY_RULES, step=RuleStep.REPORT_WRITER) in prompt
-    assert prompt.index("## Source-selection terms") < prompt.index("### Faithful-relay terms")
+    assert prompt.index("## Rules, judged against the findings") < prompt.index("### Terms")
+    assert prompt.index("### Terms") < prompt.index("### Faithful-relay terms")
     assert "<data_sources>\nDatasets:\n[]\n</data_sources>" in prompt
 
 
 def test_the_check_and_the_writer_share_the_no_calculations_rule() -> None:
-    assert f"### No calculations\n\n{NO_CALCULATIONS_WRITER_RULE}" in _check_prompt()
-    assert f"## No calculations\n\n{NO_CALCULATIONS_WRITER_RULE}" in _writer_prompt()
-
-
-def test_the_check_carries_no_other_rules() -> None:
     prompt = _check_prompt()
-    for rule in SOURCE_SELECTION_RULES:
-        assert f"### {rule.name}\n" not in prompt
-    for rule in FAITHFUL_RELAY_RULES:
-        review_part = rule.part(RuleStep.REPORT_REVIEW)
-        if review_part and review_part != rule.part(RuleStep.REPORT_WRITER):
-            assert review_part not in prompt
+    assert f"## No calculations\n\n{NO_CALCULATIONS_WRITER_RULE}" in prompt
+    assert f"## No calculations\n\n{NO_CALCULATIONS_WRITER_RULE}" in _writer_prompt()
+    # The rule follows every policy block, so it never reads as part of the last one.
+    assert prompt.index("## Language and style, judged") < prompt.index("## No calculations")
+
+
+def test_the_check_carries_no_blind_part() -> None:
+    prompt = _check_prompt()
+    for rule in SOURCE_SELECTION_RULES + FAITHFUL_RELAY_RULES:
+        blind_part = rule.part(RuleStep.REPORT_REVIEW_BLIND)
+        if blind_part:
+            assert blind_part not in prompt
     assert "<client_rules>" not in prompt
     assert "Glossary terminology" not in prompt
     assert "**Section content.**" not in prompt
+    assert "## Removal checks" not in prompt
 
 
-def test_the_check_leaves_terminology_to_the_channels_rules() -> None:
-    assert "which term or name the report uses for a concept" in _words(_check_prompt())
+def test_the_check_carries_the_grounded_parts_and_the_client_grounded_parts() -> None:
+    client_rule = QualityRule(name="Units", report_review_grounded="Check the units.")
+    blind_rule = QualityRule(name="Dates", report_review_blind="Check the dates.")
+    prompt = _check_prompt(client_rules=[client_rule, blind_rule])
+    assert "### Names, not codes\n\nA codelist code or a dataset id outside a citation" in prompt
+    assert "### Accurate and consistent terms\n\nThese are violations:" in prompt
+    assert "### Verbatim names\n\nA verbatim name is" in prompt
+    assert "<client_rules>\n### Units\n\nCheck the units.\n</client_rules>" in prompt
+    assert "Check the dates." not in prompt
+    assert prompt.index("## No calculations") < prompt.index("## Client-specific checks")
+
+
+def test_the_check_leaves_same_meaning_terms_to_the_channels_rules() -> None:
+    text = _words(_check_prompt())
+    assert "which of two terms with the same meaning the report uses for a concept" in text
+    assert "When the findings hold such a value and the draft leaves it out, report it" in text
+    assert "you are not shown" not in text
+
+
+def test_the_answer_example_parses_into_two_items() -> None:
+    prompt = _check_prompt()
+    example = prompt[prompt.index("1. No inference:") : prompt.index("\n\nIf the draft breaks")]
+    items = parse_review_items(example)
+    assert len(items) == 2
+    assert items[0].startswith("No inference:")
+    assert items[1].startswith("Names, not codes:")
 
 
 def test_the_checks_messages_and_their_roles() -> None:
@@ -438,7 +534,11 @@ async def test_the_check_sees_the_writers_transcript(monkeypatch: pytest.MonkeyP
     assert "status set" not in [m.content for m in messages]
     instructions, request = messages[-2], messages[-1]
     assert "## Faithful relay, judged against the findings" in str(instructions.content)
-    assert "Write the client's way." not in str(instructions.content)
+    # The client rules' writer parts reach the grounded review as context, not as checks.
+    assert (
+        "<client_writer_rules>\n### Client rule\n\nWrite the client's way.\n</client_writer_rules>"
+        in str(instructions.content)
+    )
     assert f"<draft>\n{_DRAFT}\n</draft>" in str(request.content)
 
 

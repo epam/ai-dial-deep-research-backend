@@ -29,6 +29,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
+import regex
+
 from dial_deep_research.app_properties import ReportSection
 
 from .citation_lookups import CitationLookups
@@ -76,6 +78,7 @@ def build_report_rules(
         ReportStructureRule(sections=sections, references_name=references_name),
         ReportLengthRule(max_words=max_words),
         ReportHyperlinkRule(),
+        ReportEmojiRule(),
         ReportDataQueryRule(data_queries=lookups.data_queries),
         ReportDatasetIdRule(lookups=lookups),
         ReportDocumentIdRule(lookups=lookups),
@@ -195,6 +198,30 @@ class ReportHyperlinkRule(ReportRule):
             _HYPERLINK_VIOLATION.format(form=_HYPERLINK_FORMS[link.kind], text=link.text)
             for link in find_hyperlinks(draft)
         ]
+
+
+class ReportEmojiRule(ReportRule):
+    """The report carries no emoji.
+
+    An emoji is a character with the Unicode property `Extended_Pictographic`, which the `regex`
+    package matches and the standard `re` module does not, or a flag or a keycap, which are built
+    from characters without it. ©, ® and ™ carry the property too, but can appear in a quoted name,
+    so they are left out. A match takes along the variation selectors, skin-tone modifiers, tag
+    characters and zero-width-joined pictographs that follow it, so the violation quotes the emoji
+    as it was written. The property also covers pictographic arrows and symbols such as ↗ and ⚠,
+    which a writer may reach for in a trend column, so the writer instruction names them. The check
+    cannot tell a quotation from the report's own prose, so it reports an emoji wherever it stands.
+    Exclamation marks and slang need a reader, and stay with the blind review.
+    """
+
+    def writer_instruction(self) -> str:
+        return _EMOJI_INSTRUCTION
+
+    def violations(self, draft: str) -> list[str]:
+        found = list(dict.fromkeys(match.group() for match in _EMOJI.finditer(draft)))
+        if not found:
+            return []
+        return [_EMOJI_VIOLATION.format(emojis=", ".join(f"`{emoji}`" for emoji in found))]
 
 
 class ReportDataQueryRule(ReportRule):
@@ -395,3 +422,29 @@ _UNKNOWN_DOCUMENT_VIOLATION = """\
 The draft cites document {document_id}, but no document with the id {document_id} exists. Cite \
 the document by its id exactly as the search tool reported it for the document the fact came \
 from."""
+
+
+# A pictograph, then what may follow it as part of the same emoji: variation selectors (U+FE0E,
+# U+FE0F), skin-tone modifiers, and the tag characters that end a subdivision flag such as
+# England's; then any further pictograph joined by a zero-width joiner (U+200D), such as a family
+# emoji. A skin-tone modifier also counts alone. Two emoji kinds are built from characters without
+# the property: a flag, which is a pair of regional-indicator letters, and a keycap, which is a
+# digit, `#` or `*` followed by U+20E3. Each is matched on its own.
+_EMOJI = regex.compile(
+    r"(?![\u00a9\u00ae\u2122])\p{Extended_Pictographic}"
+    r"(?:[\ufe0e\ufe0f]|\p{Emoji_Modifier}|[\U000E0020-\U000E007E]+\U000E007F)*"
+    r"(?:\u200d\p{Extended_Pictographic}(?:[\ufe0e\ufe0f]|\p{Emoji_Modifier})*)*"
+    r"|\p{Emoji_Modifier}"
+    r"|\p{Regional_Indicator}{2}"
+    r"|[0-9#*]\ufe0f?\u20e3"
+)
+
+_EMOJI_INSTRUCTION = """\
+## No emojis
+
+Do not use emojis anywhere in the report: not in prose, headings, lists or tables. Pictographic
+arrows and symbols, such as ↗, ⬆, ✔ and ⚠, count as emojis."""
+
+_EMOJI_VIOLATION = """\
+The draft contains these emojis: {emojis}. Remove each one. If an emoji stands for a word, such as a
+check mark for "yes", write the word."""
