@@ -39,7 +39,10 @@ from tests.mcp_fakes import BOTH_SOURCE_KINDS
 def render_source_selection(step: RuleStep, source_kinds: set[SourceKind]) -> str:
     """The source-selection block of `step`'s prompt."""
     return render_policy(
-        SOURCE_SELECTION_POLICY, step, source_kinds_statement=render_source_kinds(source_kinds)
+        SOURCE_SELECTION_POLICY,
+        step,
+        glossary=False,
+        source_kinds_statement=render_source_kinds(source_kinds),
     )
 
 
@@ -54,12 +57,14 @@ def test_a_part_reaches_only_its_step() -> None:
     assert render_rules([rule], RuleStep.RESEARCH_AGENT) == "### Two steps\n\nAgent text."
     assert render_rules([rule], RuleStep.REPORT_WRITER) == "### Two steps\n\nWriter text."
     assert render_rules([rule], RuleStep.RESEARCH_REVIEW) == ""
-    assert render_rules([rule], RuleStep.REPORT_REVIEW) == ""
+    assert render_rules([rule], RuleStep.REPORT_REVIEW_BLIND) == ""
+    assert render_rules([rule], RuleStep.REPORT_REVIEW_GROUNDED) == ""
 
 
 def test_no_client_rule_for_a_step_renders_no_block() -> None:
     assert render_client_rules([], RuleStep.RESEARCH_AGENT) == ""
-    assert render_client_rules([_WRITER_ONLY], RuleStep.REPORT_REVIEW) == ""
+    assert render_client_rules([_WRITER_ONLY], RuleStep.REPORT_REVIEW_BLIND) == ""
+    assert render_client_rules([_WRITER_ONLY], RuleStep.REPORT_REVIEW_GROUNDED) == ""
 
 
 def test_a_client_rule_is_tagged_after_its_introduction() -> None:
@@ -72,11 +77,10 @@ def test_a_client_rule_is_tagged_after_its_introduction() -> None:
     ) in block
 
 
-def test_report_review_reads_client_rules_as_checks() -> None:
-    rule = QualityRule(name="Dates", report_review="Check the dates.")
-    assert render_client_rules([rule], RuleStep.REPORT_REVIEW).startswith(
-        "## Client-specific checks\n\n"
-    )
+@pytest.mark.parametrize("step", [RuleStep.REPORT_REVIEW_BLIND, RuleStep.REPORT_REVIEW_GROUNDED])
+def test_both_reviews_read_client_rules_as_checks(step: RuleStep) -> None:
+    rule = QualityRule(name="Dates", **{step.value: "Check the dates."})
+    assert render_client_rules([rule], step).startswith("## Client-specific checks\n\n")
 
 
 @pytest.mark.parametrize("step", list(RuleStep))
@@ -84,9 +88,20 @@ def test_every_step_gets_the_terms_and_its_parts(step: RuleStep) -> None:
     block = render_source_selection(step, source_kinds=BOTH_SOURCE_KINDS)
     assert "### Terms" in block
     assert "**Supersede**" in block
+    assert "**Qualifying context**" in block
     for rule in SOURCE_SELECTION_RULES:
-        part = rule.part(step)
-        assert (part is not None) == (f"### {rule.name}\n\n" in block)
+        part = rule.part(SOURCE_SELECTION_POLICY.rule_step(step))
+        assert (part is not None) == (f"### {rule.name}\n\n{part}" in block)
+
+
+def test_the_grounded_review_reads_the_writer_parts() -> None:
+    block = render_source_selection(RuleStep.REPORT_REVIEW_GROUNDED, source_kinds=BOTH_SOURCE_KINDS)
+    assert block.startswith("## Source selection, judged against the findings\n\n")
+    for rule in SOURCE_SELECTION_RULES:
+        if rule.report_writer is not None:
+            assert rule.report_writer in block
+        if rule.report_review_blind is not None:
+            assert rule.report_review_blind not in block
 
 
 def test_only_the_research_steps_get_the_reasonable_attempt() -> None:
@@ -99,9 +114,10 @@ def test_only_the_research_steps_get_the_reasonable_attempt() -> None:
     assert "**Reasonable attempt**" not in render_source_selection(
         RuleStep.REPORT_WRITER, source_kinds=BOTH_SOURCE_KINDS
     )
-    assert "**Reasonable attempt**" not in render_source_selection(
-        RuleStep.REPORT_REVIEW, source_kinds=BOTH_SOURCE_KINDS
-    )
+    for step in (RuleStep.REPORT_REVIEW_BLIND, RuleStep.REPORT_REVIEW_GROUNDED):
+        assert "**Reasonable attempt**" not in render_source_selection(
+            step, source_kinds=BOTH_SOURCE_KINDS
+        )
 
 
 @pytest.mark.parametrize(
@@ -241,6 +257,7 @@ def test_the_research_agent_prompt_carries_both_blocks(monkeypatch: pytest.Monke
         data_sources="Datasets:\n[]",
         data_sources_instructions="",
         client_rules=[_CLIENT_RULE],
+        glossary=None,
     )
     prompt = captured["system_prompt"]
     assert (
@@ -266,6 +283,7 @@ async def test_research_review_prompt_carries_both_blocks(monkeypatch: pytest.Mo
         emit_result_stage=lambda _o: None,
         emit_activity=lambda _t: None,
         client_rules=[rule, _WRITER_ONLY],
+        glossary=None,
     )
 
     await node(_state())  # type: ignore[arg-type]
@@ -308,7 +326,7 @@ def test_the_writer_prompt_carries_both_blocks_and_the_prohibitions() -> None:
 
 
 def test_the_report_review_prompt_places_the_checks_before_not_your_job() -> None:
-    rule = QualityRule(name="Dates", report_review="Check the dates.")
+    rule = QualityRule(name="Dates", report_review_blind="Check the dates.")
     prompt = render_blind_review_system_prompt(
         source_kinds=BOTH_SOURCE_KINDS,
         today_date="d",
@@ -350,7 +368,7 @@ def test_no_client_rules_leave_no_client_block() -> None:
 
 
 async def test_report_review_node_passes_its_client_rules(monkeypatch: pytest.MonkeyPatch) -> None:
-    rule = QualityRule(name="Dates", report_review="Check the dates.")
+    rule = QualityRule(name="Dates", report_review_blind="Check the dates.")
     llm = _RecordingLLM(
         {"parsed": ReportReview(report_violations=[]), "parsing_error": None, "raw": AIMessage("")}
     )
@@ -391,6 +409,7 @@ async def test_research_review_reasons(monkeypatch: pytest.MonkeyPatch) -> None:
         emit_result_stage=lambda _o: None,
         emit_activity=lambda _t: None,
         client_rules=[],
+        glossary=None,
     )
 
     await node(_state())  # type: ignore[arg-type]
@@ -441,6 +460,7 @@ def test_the_research_agent_is_told_the_channels_kinds_of_source(
         data_sources_instructions="",
         source_kinds={"document"},
         client_rules=(),
+        glossary=None,
     )
     assert render_source_kinds({"document"}) in captured["system_prompt"]
 
@@ -460,6 +480,7 @@ async def test_research_review_is_told_the_channels_kinds_of_source(
         emit_activity=lambda _t: None,
         source_kinds={"dataset"},
         client_rules=(),
+        glossary=None,
     )
 
     await node(_state())  # type: ignore[arg-type]

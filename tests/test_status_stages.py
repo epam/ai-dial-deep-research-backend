@@ -337,6 +337,7 @@ async def test_research_review_names_its_work_before_calling_a_model(
         data_sources="The topics map.",
         emit_result_stage=lambda _outcome: None,
         emit_activity=seen.append,
+        glossary=None,
     )
 
     with pytest.raises(RuntimeError):

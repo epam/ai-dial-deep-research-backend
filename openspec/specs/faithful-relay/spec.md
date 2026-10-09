@@ -14,12 +14,16 @@ against the sources.
 
 The faithful-relay rules SHALL be generic quality rules (see **source-selection**), rendered as a
 block of their own in each step's system prompt, under a heading that names faithful relay, after
-the source-selection block and before the client rules. Report review's block SHALL present the
-rules' parts as checks. The rules SHALL name no client, dataset, publication or tool.
+the source-selection block and before the other generic policies and the client rules. The blind
+review's block SHALL present the rules' parts as checks. The grounded review's block SHALL carry
+the rules' report-writer parts (see "The grounded review checks the draft against the sources"). The
+rules SHALL name no client, dataset, publication or tool.
 
 The block SHALL open with the definitions of the terms the rules use, under a name distinct from
-the source-selection terms, presented as definitions rather than as a rule, and every step SHALL
-receive them. The definitions SHALL say that the source-selection terms, such as value, stated date
+the source-selection terms, presented as definitions rather than as a rule, and every step, the
+grounded review included, SHALL receive them. The terms are the policy's terms, not one of its
+rules (see **source-selection**, "A quality rule is one bundle of step instructions"). The
+definitions SHALL say that the source-selection terms, such as value, stated date
 and described period, apply here too, which is why the faithful-relay block comes after the
 source-selection block that defines them.
 
@@ -57,13 +61,13 @@ source-selection block that defines them.
 #### Scenario: Every step receives the terms
 
 - **WHEN** a research turn runs
-- **THEN** the system prompts of the research agent, research review, the report writer and report
-  review SHALL each carry the faithful-relay block, opening with the definitions above, after the
-  source-selection block
+- **THEN** the system prompts of the research agent, research review, the report writer, the blind
+  review and the grounded review SHALL each carry the faithful-relay block, opening with the
+  definitions above, after the source-selection block
 
-#### Scenario: Report review reads the rules as checks
+#### Scenario: The blind review reads the rules as checks
 
-- **WHEN** report review's system prompt is rendered
+- **WHEN** the blind review's system prompt is rendered
 - **THEN** its faithful-relay block SHALL introduce the parts below it as checks to judge the draft
   against, and SHALL come before its "Not your job" section
 
@@ -164,7 +168,8 @@ rule, so the faithful-relay block SHALL carry no part of it at any step.
 
 The grounded review SHALL judge the draft against the writer's "No calculations" rule as well as
 against the faithful-relay rules: its instructions SHALL carry the writer's "No calculations"
-section in the one wording the writer receives, after the faithful-relay rules' writer parts. The
+section in the one wording the writer receives, as a section of its own after the generic policy
+blocks and before the client rules, which never override it. The
 blind review's "No calculations" check can judge only a number the draft presents as computed;
 the grounded review can also find a computed number the draft presents as stated, because it sees
 that no source gives it.
@@ -327,15 +332,41 @@ gap.
 
 - **Report writer:** says what is missing and what therefore cannot be concluded, and never fills
   the gap with its own knowledge or an inference.
-- **Report review:** a part of the research question that the draft neither answers nor declares
-  unavailable is a violation. A sentence saying that the report does not cover a topic declares
-  it.
+- **Blind review:** a fact that the research question or the approved plan asks for, and that the
+  draft neither answers nor declares unavailable, is a violation. A plan item that names a source is
+  answered when its fact is answered, from that source or from another, since the source-selection
+  rules let the report leave out a source that only repeats another. A fact that a rule excludes
+  from the report is the exception: leaving it out without comment is correct, and mentioning it is
+  a violation of
+  the removal rule (see **prohibited-content**). The blind review judges this because it sees the
+  client rules that exclude content. This blind part is the one faithful-relay text this change
+  rewrites. The sentence it replaces accepted a "does not cover" sentence as declaring a part,
+  which the removal rule forbids for excluded content. A part that is not excluded is declared
+  unavailable by saying that the sources do not give it.
 
 #### Scenario: An unanswered part of the question
 
 - **WHEN** the question asks for a forecast for two regions and the draft covers one region and says
   nothing of the other
-- **THEN** report review SHALL report the missing region as a violation
+- **THEN** the blind review SHALL report the missing region as a violation
+
+#### Scenario: An unanswered plan item
+
+- **WHEN** the approved plan has an item on import prices and the draft neither covers it nor says
+  that the sources do not give it
+- **THEN** the blind review SHALL report the plan item as a violation
+
+#### Scenario: A plan item naming a source is answered from another
+
+- **WHEN** a plan item asks to search a named publication for a 2026 forecast, the publication
+  only repeats the dataset value, and the draft gives the dataset value
+- **THEN** the blind review SHALL NOT report the plan item
+
+#### Scenario: An excluded part of the question is left out
+
+- **WHEN** the question asks for the results of named companies, a client rule excludes company
+  results, and the draft leaves them out without comment
+- **THEN** the blind review SHALL NOT report the omission
 
 ### Requirement: The grounded review checks the draft against the sources
 
@@ -422,7 +453,7 @@ of these premises. If one of them stops holding, the decision SHALL be reconside
    cache serves on a hit.
 3. **A hit is not certain anyway.** Even an exact shared prefix is read only when DIAL routes the
    call to the upstream that holds the entry: about half of the unpinned tries hit, and pinned calls
-   still missed a few times in about 55. Reconsider when routing makes a hit close to certain.
+   still missed occasionally. Reconsider when routing makes a hit close to certain.
 4. **The research agent's instructions would come first.** Its system prompt tells the model that
    it is the research agent, that every step is a tool call and that it never writes prose. A
    review opening with it would have to override those instructions with later ones in the same
@@ -441,28 +472,71 @@ The grounded review's instructions SHALL carry, in this order:
   finding that reverses or outweighs the source, a forecast, an estimate or a source's own view
   written as an observed fact, and a conclusion, a cause or an explanation no source states — and
   that it then checks the rest of the rules against the whole draft before answering;
-- the source-selection terms as the report writer receives them, presented as definitions — not the
-  source-selection rules;
-- the faithful-relay rules' **report-writer** parts, as what the report must do, introduced as
-  rules judged against the findings, because the report-review parts assume a reviewer who cannot
-  see the sources, followed by the writer's "No calculations" section (see Rule 3);
+- a sentence, before every rule block, saying that each rule below says what the report must do
+  or what counts as a violation, that the transcript before the instructions is the findings, and
+  that the draft is judged against them and every passage that breaks a rule is reported; and that
+  when a rule asks the report to give a value or its context, such as both a dataset value and a
+  publication value, and the findings hold it but the draft leaves it out, the grounded review
+  reports it and asks for it to be added, unless a rule keeps that content out of the report;
+- the generic policies' blocks, in the policy order (see **source-selection**): the
+  source-selection block, with the source-selection terms and every source-selection rule's
+  **report-writer** part; the faithful-relay block, with the faithful-relay terms and every
+  faithful-relay rule's **report-writer** part; and the **grounded** parts of the other policies'
+  rules, such as "Names, not codes" (see **language-and-style**) and "Accurate and consistent
+  terms" (see **terminology**). The source-selection and faithful-relay rules are given in their
+  writer parts, as what the report must do, because their blind parts assume a reviewer who cannot
+  see the sources;
+- the writer's "No calculations" section, as a section of its own (see Rule 3);
+- the grounded parts of the channel's client rules, in a `<client_rules>` block, when a client rule
+  sets one;
+- the writer parts of the channel's client rules, in a `<client_writer_rules>` block under its own
+  heading, when a client rule sets one, introduced as context and not as checks: the grounded
+  review does not report a passage under them unless a client check names it, uses them to know
+  which content the report must leave out and which terms it must use, and never asks for content
+  they keep out of the report. This is how the grounded review can ask for a missing value without
+  asking for content a client rule excludes; the client rules' blind parts, which judge exclusions,
+  stay with the blind review;
 - the turn's data-sources string in a `<data_sources>` block, which counts as a source;
 - that the transcript before the instructions is the findings, to be used for every check that
   compares the report with its sources, and that a claim the findings hold only in a search tool's
   summarising answer is not supported by a source;
-- what is not its job: whether the research was thorough; whether a claim carries a citation or
-  where a citation stands, which the blind review judges; which term or name the report uses for a
-  concept, which the channel's own rules may set and the grounded review does not see; the report's
-  sections, headings, Markdown and citation format, which the blind review judges; the length,
-  hyperlinks, and whether a cited identifier exists, which the app checks itself; it never asks for
-  more research, more sources, a different analysis, a rewrite or wording it would prefer;
-- that it answers with a numbered list, one item per wrong claim, naming the rule it breaks, the
-  passage quoted exactly, what the source says instead and what to change, where a claim the draft
-  repeats in several places is one item that quotes every place; or with exactly `No violations.`
-  when the draft breaks none; and that it calls no tool.
+- what is not its job: whether the research was thorough; whether the draft answers every part of
+  the question and the plan, which the blind review judges and which the channel's own rules may
+  narrow; whether a claim carries a citation or where a citation stands, which the blind review
+  judges; which of two terms with the same meaning the report uses for a concept, which the
+  channel's own rules may set; the report's sections, headings, Markdown and citation format,
+  which the blind review judges; the length, hyperlinks, and whether a cited identifier exists,
+  which the app checks itself; it never asks for more research, more sources, a different
+  analysis, a rewrite or wording it would prefer;
+- that it answers with a numbered list, one item per violation, naming the rule it breaks, the
+  passage quoted exactly, what the source says instead and what to change, where a violation the
+  draft repeats in several places is one item that quotes every place; or with exactly
+  `No violations.` when the draft breaks none; and that it calls no tool. The answer format SHALL
+  state the layout the answer is read by, below: each item starts on a new line with its number, a
+  full stop and a space, with nothing before the number, and every further line of an item is
+  indented. It SHALL give a short example of two items.
 
-The grounded review SHALL NOT receive the client rules, the blind review's numbered checks, the
-glossary rule, the source-selection rules or any other policy's rules. No tool SHALL be bound and no
+**Why both reviews check the source-selection and faithful-relay rules.** The blind review judges
+these rules by their blind parts, and the grounded review by their writer parts. The duplication is
+deliberate, and SHALL stay until an eval shows that the blind review finds nothing the grounded
+review misses:
+
+- the two checks of the faithful-relay rules were evaluated together, so dropping either one risks
+  a regression;
+- the blind parts carry sentences whose only job is to stop a review from flagging a correct draft,
+  such as "a table's year column states the described period of every value in it", which the
+  grounded review does not receive;
+- a failed review call does not fail the turn, so the blind review still checks a draft when the
+  grounded call fails.
+
+The grounded review lacking those guarding sentences is a known risk for the source-selection
+rules, whose writer parts it newly receives: it may flag a correct draft that the blind review would
+pass. The eval of this change SHALL check the grounded review's source-selection items for such
+mistakes. The code that renders the grounded review's instructions SHALL state the duplication and
+this risk in a comment.
+
+The grounded review SHALL NOT receive the client rules' research parts, any rule's blind part, the
+blind review's numbered checks or the glossary rule. No tool SHALL be bound and no
 output schema SHALL be set. It SHALL use the default chat model at reasoning effort `medium`.
 
 Its answer SHALL be read as a numbered list: each numbered item is one violation, and the lines
@@ -485,20 +559,47 @@ An empty answer SHALL count as a failed grounded review, not as an approval.
 - **THEN** the grounded review's transcript SHALL carry the page's image and SHALL NOT carry the
   status calls or their acknowledgements, exactly as the report writer's transcript does
 
-#### Scenario: The grounded review carries the writer parts and the terms, not other rules
+#### Scenario: The grounded review carries the writer parts, the grounded parts and the terms
 
-- **WHEN** the grounded review's instructions are rendered on a channel with client rules and a
-  glossary
-- **THEN** they SHALL carry the source-selection terms and the faithful-relay rules' report-writer
-  parts, and SHALL carry no client rule, no source-selection rule, no glossary rule and none of
-  the blind review's numbered checks
+- **WHEN** the grounded review's instructions are rendered on a channel with a glossary and client
+  rules, one of which sets a grounded part
+- **THEN** they SHALL carry the source-selection and faithful-relay terms, the source-selection and
+  faithful-relay rules' report-writer parts, every generic rule's grounded part, and that client
+  rule's grounded part in a `<client_rules>` block, every client rule's writer part in a
+  `<client_writer_rules>` block introduced as context, and SHALL carry no rule's blind part, no
+  client rule's research part, no glossary rule and none of the blind review's numbered checks
 
-#### Scenario: A term set by a channel rule is not a violation
+#### Scenario: A term with the same meaning set by a channel rule is not a violation
 
 - **WHEN** a channel's own rule makes the writer use another term than a source's for one concept,
-  and the draft does so
-- **THEN** the grounded review's instructions SHALL have said that the term a report uses for a
-  concept is not its to judge
+  with the same meaning, and the draft does so
+- **THEN** the grounded review's instructions SHALL have said that which of two terms with the same
+  meaning the report uses is not its to judge
+
+#### Scenario: A missing value is asked for
+
+- **WHEN** the findings hold a publication value and a dataset value for one fact, and the draft
+  gives only the dataset value
+- **THEN** the grounded review SHALL report the missing publication value and ask for it to be added
+
+#### Scenario: An excluded value is not asked for
+
+- **WHEN** a client rule's writer part keeps some values out of the report, and the draft leaves
+  such a value out although the findings hold it
+- **THEN** the grounded review's instructions SHALL carry that writer part as context and SHALL say
+  never to ask for content it keeps out of the report
+
+#### Scenario: Without client writer rules there is no context section
+
+- **WHEN** the channel configures no client rule with a writer part
+- **THEN** the grounded review's instructions SHALL carry no `<client_writer_rules>` block and no
+  sentence that refers to one
+
+#### Scenario: The answer format is stated with an example
+
+- **WHEN** the grounded review's instructions are rendered
+- **THEN** their answer section SHALL say that each item starts on a new line with its number and a
+  full stop, with further lines indented, and SHALL carry an example of two numbered items
 
 #### Scenario: An empty answer is a failed grounded review
 

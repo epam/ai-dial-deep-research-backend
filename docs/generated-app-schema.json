@@ -531,10 +531,10 @@
           "type": "string"
         },
         "client_rules": {
-          "description": "This channel's own rules: what the research steps must do differently for this channel's sources, such as how its datasets document their methodology, which tool lists its documents, or which metadata key holds a publication's date. Each rule gives any of the four steps an instruction. A step's prompt shows these rules after the application's generic rules, and a client rule is followed where it is more specific than a generic one. Rule names must be unique.",
+          "description": "This channel's own rules: what the research steps must do differently for this channel's sources, such as how its datasets document their methodology, which tool lists its documents, or which metadata key holds a publication's date. Each rule gives any of the five steps an instruction: the research agent, research review, the report writer, and one of the two report reviews. A step's prompt shows these rules after the application's generic rules, and a client rule is followed where it is more specific than a generic one. Rule names must be unique.",
           "items": {
             "additionalProperties": false,
-            "description": "One rule, as the instruction it gives each research step.\n\nA rule's parts live together so that they cannot drift apart: what the research agent is asked\nto retrieve, what research review counts as a gap, what the writer presents and what report\nreview checks are one edit. The application's generic rules and a channel's client rules share\nthis shape.",
+            "description": "One rule, as the instruction it gives each research step.\n\nA rule's parts live together so that they cannot drift apart: what the research agent is asked\nto retrieve, what research review counts as a gap, what the writer presents and what a report\nreview checks are one edit. A check is judged by one of the two report reviews, so a rule sets\nat most one of their parts. The application's generic rules and a channel's client rules share\nthis shape.",
             "properties": {
               "name": {
                 "description": "The rule's name. Each step's prompt shows the rule's part under this name.",
@@ -584,7 +584,7 @@
                 "description": "What the report writer does for this rule.",
                 "title": "Report Writer"
               },
-              "report_review": {
+              "report_review_blind": {
                 "anyOf": [
                   {
                     "minLength": 1,
@@ -595,8 +595,22 @@
                   }
                 ],
                 "default": null,
-                "description": "What report review checks for this rule. It sees the draft, not the sources, so a check must be decidable from the draft.",
-                "title": "Report Review"
+                "description": "What the blind review checks for this rule. It sees the draft, the question, the plan and the data sources, but not the research findings, so a check must be decidable from the draft. It is shown without the rule's writer part, so it names what it checks rather than referring to the writer part. Put a check that keeps content out of the report here. Set at most one of report_review_blind and report_review_grounded.",
+                "title": "Report Review Blind"
+              },
+              "report_review_grounded": {
+                "anyOf": [
+                  {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "What the grounded review checks for this rule. It sees the draft and the research findings, so a check may compare the report with its sources. It also reads the client rules' writer parts as context, but is not shown the blind parts, so a check that keeps content out of the report belongs in report_review_blind, where the rule on removing excluded content and the check that every fact of the question is answered both rely on it. Set at most one of report_review_blind and report_review_grounded.",
+                "title": "Report Review Grounded"
               }
             },
             "required": [

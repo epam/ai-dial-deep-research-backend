@@ -113,6 +113,7 @@ def build_research_agent(
     data_sources_instructions: str,
     source_kinds: Collection[SourceKind],
     client_rules: Sequence[QualityRule],
+    glossary: GlossaryTools | None,
 ) -> Any:
     """Build research-agent: a `create_agent` over the tools, forced to call a tool every step.
 
@@ -120,7 +121,8 @@ def build_research_agent(
     agent is told about the app's own dataset and glossary calls (empty when nothing applies).
     `client_rules` is the channel's own rules, whose research-agent parts follow the generic ones.
     `source_kinds` is the kinds of source the channel's servers give it; the generic rules are
-    told them, so their parts about a missing kind do not apply.
+    told them, so their parts about a missing kind do not apply. `glossary` is the channel's
+    glossary configuration, which adds the generic rules that need a glossary.
     """
     return create_agent(
         model=get_chat_model(LLMModelConfig()),
@@ -130,7 +132,9 @@ def build_research_agent(
             client_name=client_name,
             data_sources=data_sources,
             data_sources_instructions=data_sources_instructions,
-            generic_rules=render_generic_rules(RuleStep.RESEARCH_AGENT, source_kinds=source_kinds),
+            generic_rules=render_generic_rules(
+                RuleStep.RESEARCH_AGENT, source_kinds=source_kinds, glossary=glossary is not None
+            ),
             client_rules=render_client_rules(client_rules, step=RuleStep.RESEARCH_AGENT),
             # The two rules the status tool quotes back when it catches one being broken, so the
             # correction repeats the instruction word for word. The prompt writes its other status
@@ -288,16 +292,20 @@ def make_research_review_node(
     emit_activity: ActivityEmitter,
     source_kinds: Collection[SourceKind],
     client_rules: Sequence[QualityRule],
+    glossary: GlossaryTools | None,
 ) -> ResearchReviewNode:
     """Build the research-review node: judge coverage, emit its result stage, plan what remains.
 
     `max_research_iterations` is not a bound this node enforces — the router does that before the
     node is reached. It is here for the stage, which states the cap beside the iteration number.
+    `glossary` is the channel's glossary configuration, which adds the generic rules that need one.
     """
     system_prompt = RESEARCH_REVIEW_SYSTEM_PROMPT.format(
         today_date=today_date,
         data_sources=data_sources,
-        generic_rules=render_generic_rules(RuleStep.RESEARCH_REVIEW, source_kinds=source_kinds),
+        generic_rules=render_generic_rules(
+            RuleStep.RESEARCH_REVIEW, source_kinds=source_kinds, glossary=glossary is not None
+        ),
         client_rules=render_client_rules(client_rules, step=RuleStep.RESEARCH_REVIEW),
     )
 
@@ -680,11 +688,12 @@ def make_report_review_node(
 
     Two judgements meet here. The app's own rules (`report_rules`) are checked in Python over the
     draft text, and two model calls judge what needs a reader. The blind review judges padding,
-    banned annotations, protected-section rules, citation format, and the report-review parts of
-    the quality rules (`client_rules` holds the channel's own). It sees the draft, the
-    configuration and the query and plan, never the research findings, which is why it cannot
-    reopen evidence coverage. The grounded review runs beside it and does see the findings: the
-    transcript the writer received, then the faithful-relay rules' writer parts and the review
+    banned annotations, protected-section rules, citation format, and the blind parts of the
+    quality rules (`client_rules` holds the channel's own). It sees the draft, the configuration
+    and the query and plan, never the research findings, which is why it cannot reopen evidence
+    coverage. The grounded review runs beside it and does see the findings: the transcript the
+    writer received, then its instructions (the source-selection and faithful-relay rules' writer
+    parts, and every other rule's grounded part, the client rules' included) and the review
     request, and its items follow the blind review's. A failing call never fails the turn: the
     rules still run, and their violations and the other call's still stand.
 
@@ -700,7 +709,11 @@ def make_report_review_node(
         sections=sections, max_words=max_words, references_name=references_name, lookups=lookups
     )
     grounded_review_instructions = render_grounded_review_prompt(
-        today_date=today_date, data_sources=data_sources
+        today_date=today_date,
+        data_sources=data_sources,
+        source_kinds=source_kinds,
+        glossary=glossary is not None,
+        client_rules=client_rules,
     )
 
     async def report_review(state: ResearchState) -> dict[str, Any]:

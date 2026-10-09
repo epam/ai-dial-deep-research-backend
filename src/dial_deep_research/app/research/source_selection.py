@@ -1,10 +1,12 @@
 """The source-selection rules: which values research looks for, and how the report presents them.
 
-Each rule is one `QualityRule`, whose four parts are what the research agent, research review, the
-report writer and report review are told for it. The parts are written against what each step can
-do: the research agent only calls tools, so its parts ask for retrievals and never for a note or a
-summary; research review's gaps become the research agent's next plan, so they name retrievals too;
-report review sees the draft and not the sources, so its checks judge only what the draft shows.
+Each rule is one `QualityRule`, whose parts are what the research agent, research review, the
+report writer and the blind review are told for it. The parts are written against what each step
+can do: the research agent only calls tools, so its parts ask for retrievals and never for a note or
+a summary; research review's gaps become the research agent's next plan, so they name retrievals
+too; the blind review sees the draft and not the sources, so its checks judge only what the draft
+shows. The grounded review, which sees the sources, judges the draft against the writer parts, so
+no rule here sets a grounded part.
 
 The rules name no client, dataset, publication or tool. What a channel's sources contain goes into
 that channel's client rules.
@@ -14,7 +16,7 @@ from __future__ import annotations
 
 from dial_deep_research.app_properties import QualityRule
 
-# The grounded review gives these definitions without the rules, so they are named here.
+# The policy's terms, which open its block in every step. They are not a rule.
 SOURCE_SELECTION_TERMS = """\
 These definitions say what the rules below mean. They are not a rule or a check of their own.
 
@@ -35,12 +37,17 @@ These definitions say what the rules below mean. They are not a rule or a check 
   the previous edition.
 - **Methodology**: the details a source gives on how a figure or an analysis was obtained, such as
   its geography, time range, sectors and other splits, sample size, adjustments and definitions.
+- **Qualifying context**: what a source states that changes how a value is read. This is its
+  methodology, and also its assumptions, scenario conditions, limitations and caveats, such as
+  "preliminary estimate", "the baseline assumes unchanged policies" or "excludes financial
+  services".
 - **Supersede**: a newer value may supersede an older one for the same fact only when the two were
   obtained with a methodology that is obviously identical, or very likely so. Editions of one
   publication series usually share a methodology, but the series alone decides nothing. When the
   methodology differs or is unclear, such as a changed sample, model or coverage, neither value
   supersedes the other, and the report gives both. A dataset value is never superseded, because a
-  dataset is an independent source.
+  dataset is an independent source. A dataset value never supersedes a publication's value
+  either.
 - **Obviously outdated**: a value that meets all four conditions: a newer retrieved value for the
   same fact supersedes it; it is neither the latest nor the previous edition; the question does not
   ask how the value evolved; and it does not contribute meaningfully to answering the question.
@@ -61,14 +68,10 @@ one-off event, which has no previous period; a previous edition of an estimate o
 recalculated as information arrived, is an earlier value for the same fact, which the rules on the
 latest value and on other sources cover."""
 
+# The terms as the two research steps read them.
+SOURCE_SELECTION_RESEARCH_TERMS = SOURCE_SELECTION_TERMS + _REASONABLE_ATTEMPT
+
 SOURCE_SELECTION_RULES: tuple[QualityRule, ...] = (
-    QualityRule(
-        name="Terms",
-        research_agent=SOURCE_SELECTION_TERMS + _REASONABLE_ATTEMPT,
-        research_review=SOURCE_SELECTION_TERMS + _REASONABLE_ATTEMPT,
-        report_writer=SOURCE_SELECTION_TERMS,
-        report_review=SOURCE_SELECTION_TERMS,
-    ),
     QualityRule(
         name="Missing evidence",
         research_agent="""\
@@ -82,7 +85,7 @@ and missing evidence is not a gap: do not plan another search for it.""",
 Evidence these rules ask for, including a methodology or a date, may not exist. Where the findings
 show it was not found, say what is missing and what therefore cannot be concluded, as you do for
 evidence that could not be retrieved.""",
-        report_review="""\
+        report_review_blind="""\
 A check below that asks for some evidence, such as a stated date or the reason for a difference, is
 satisfied by a statement that the sources do not give it. Do not report such a statement as a
 violation.""",
@@ -160,21 +163,25 @@ An indicator of a fact the question asks about, held by a dataset that was never
 is a gap.""",
         report_writer="""\
 Cite the data query that returned a dataset value, even when a newer publication gives a different
-value: a dataset is an independent source, and its value is never superseded. When a publication
+value: a dataset is an independent source, and its value is never superseded. A dataset value never
+replaces a publication's value either. Give both, each with its citation and its stated date, unless
+the publication's value is obviously outdated or irrelevant. When a publication
 gives the same figure as the dataset, the dataset is primary, and a publication that only repeats
 it may be left out.""",
     ),
     QualityRule(
-        name="Methodology",
+        name="Qualifying context",
         research_agent="""\
-For every value the report may use, retrieve the methodology that affects how it is read, wherever
-the sources document one: methodology pages, boxes, footnotes, and notes under tables and charts.
+For every value the report may use, retrieve its qualifying context, wherever the sources document
+it: methodology pages, boxes, footnotes, and notes under tables and charts.
 Without it, a superseded forecast cannot be told from a disagreement.""",
         research_review="""\
-For a value of a fact the question asks about, a methodology that the findings show is documented,
-because a page that was read or a search result points to it, and that was not read, is a gap.""",
+For a value of a fact the question asks about, qualifying context that the findings show is
+documented, because a page that was read or a search result points to it, and that was not read, is
+a gap.""",
         report_writer="""\
-Give a value's methodology with the value where it materially affects how the value is read.""",
+Give a value's qualifying context with the value, where it materially affects how the value is
+read.""",
     ),
     QualityRule(
         name="Other sources and disagreements",
@@ -191,7 +198,7 @@ values differ or that the sources do not explain it. "The forecast was updated b
 dates" is a valid reason, and so is a methodology change between two editions, which leaves neither
 value superseded. Never average or merge values. Leave a value out only when it is obviously
 outdated or irrelevant: omitting a relevant value costs more than including one.""",
-        report_review="""\
+        report_review_blind="""\
 Judge only what the draft shows. Report a violation for:
 
 - a range or an average spanning two sources' values for the same fact;
@@ -237,7 +244,7 @@ for 2027: cite both, each with its stated date.
 Take a publication's stated date from the document metadata in the findings, such as its entry in
 a document listing. Never take it from a date printed on the publication's pages: that date can
 differ from the publication date.""",
-        report_review="""\
+        report_review_blind="""\
 Report a violation for a value without its described period, and for a forecast or an estimate
 without its stated date. This includes a previous forecast that the draft gives only as the
 starting point of a revision, such as "revised down from 1.5%". An edition name alone is not a
@@ -257,7 +264,7 @@ region that contains a country or the nearest years, so ask only for those.""",
         report_writer="""\
 When no exact match was found for a fact, present the near matches found, label each with how it
 differs from what was asked, and state the limitation.""",
-        report_review="""\
+        report_review_blind="""\
 Report a violation for a near match presented without how it differs from what the question
 asks.""",
     ),

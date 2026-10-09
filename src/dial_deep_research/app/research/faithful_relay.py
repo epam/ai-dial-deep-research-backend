@@ -3,10 +3,10 @@
 It invents, infers and computes nothing, keeps every figure as its source gives it, and states no
 finding more firmly or more broadly than its source does. Each rule is one `QualityRule`, written
 against what each step can do, as the source-selection rules are: the research agent only calls
-tools, research review's gaps become the research agent's next plan, and report review's own call
-sees the draft and not the sources, so its checks judge only what the draft shows. Whether a cited
-claim is faithful to its source is judged by report review's grounded review, which sees the
-research transcript and judges the draft against the writer parts.
+tools, research review's gaps become the research agent's next plan, and the blind review sees the
+draft and not the sources, so its checks judge only what the draft shows. Whether a cited claim is
+faithful to its source is judged by the grounded review, which sees the research transcript and
+judges the draft against the writer parts, so no rule here sets a grounded part.
 
 The rules name no client, dataset, publication or tool.
 """
@@ -15,9 +15,9 @@ from __future__ import annotations
 
 from dial_deep_research.app_properties import QualityRule
 
-# The source-selection block renders before this one and defines "value" and "stated date", which
-# these definitions use.
-_TERMS = """\
+# The policy's terms, which open its block in every step. They are not a rule. The source-selection
+# block renders before this one and defines "value" and "stated date", which these definitions use.
+FAITHFUL_RELAY_TERMS = """\
 These definitions say what the rules below mean. They are not a rule or a check of their own. The
 source-selection terms above, such as value, stated date and described period, apply here too.
 
@@ -53,13 +53,6 @@ source-selection terms above, such as value, stated date and described period, a
 
 FAITHFUL_RELAY_RULES: tuple[QualityRule, ...] = (
     QualityRule(
-        name="Faithful-relay terms",
-        research_agent=_TERMS,
-        research_review=_TERMS,
-        report_writer=_TERMS,
-        report_review=_TERMS,
-    ),
-    QualityRule(
         name="Only the sources",
         research_agent="""\
 A search tool's answer summarises pages, and a summary can change, distort or invent what they say.
@@ -82,7 +75,7 @@ rests on, or stands directly after them; a summary elsewhere, such as in an open
 conclusion, repeats their citations. A sentence that can be neither cited nor built from cited
 claims, and is not a statement about the evidence, is left out. A fact from the description of a
 publication series, which has no citation form, names the series as its source in words.""",
-        report_review="""\
+        report_review_blind="""\
 A claim without a citation is a violation, unless it is a summary or a comparison standing directly
 after the cited claims it rests on, a fact that names a publication series as its source, or a
 statement about the evidence. A sentence the draft labels as its own inference, synthesis or
@@ -103,7 +96,7 @@ link, forecast, extrapolated trend, implication, recommendation or position of a
 that the sources do not state. Give a cause, a driver or an effect only as a source states it, and
 attribute it to that source. Where the question asks for an explanation the sources do not give,
 say that they do not give it.""",
-        report_review="""\
+        report_review_blind="""\
 A cause, a driver, an effect or a forecast stated without a citation is a violation. Whether a
 cited claim goes beyond its source is not yours to judge: you cannot see the sources.""",
     ),
@@ -124,7 +117,7 @@ calculation:
 - **Requested rounding.** Round a figure as the research question or the plan asks.
 
 Otherwise keep each figure's precision.""",
-        report_review="""\
+        report_review_blind="""\
 A figure without its unit or its currency is a violation, and so is a figure with more digits than
 a reader can use, and a figure not rounded as the research question or the plan asks. Whether a
 figure matches its source is not yours to judge.""",
@@ -137,7 +130,7 @@ Name a forecast as a forecast and an estimate as an estimate, in the source's ow
 dataset's stated date is its last update: its values for any later period are forecasts, and the
 report names them so and writes them in the future or conditional tense, such as "the dataset's
 forecast for 2030", never "grew by 3% in 2030".""",
-        report_review="""\
+        report_review_blind="""\
 A value for a period that had not ended by its stated date, or has not ended today, stated as
 observed, such as "exports grew 3% in 2027", is a violation. Where the draft states a dataset's
 last update, a value from that dataset for a later period is a forecast, and stating it as
@@ -157,14 +150,14 @@ hypothetical or conditional, and a scenario value names its scenario. Never stat
 firmly than its source does, and add no promissory or guarantee-style wording the source does not
 use, such as "will certainly" or "is guaranteed". Relaying a source's own hedging, such as "the
 publication expects", is not a certainty label.""",
-        report_review="""\
+        report_review_blind="""\
 Wording that promises or guarantees an outcome is a violation, and so is a value the draft calls
 conditional or a scenario in one place and states as an established fact in another. A source's
 hedging relayed in prose, such as "the publication expects", is correct wording, and is neither
 speculative wording nor a certainty label.""",
     ),
-    # Report review's own call has no part: a distortion shows only against the source, which it
-    # does not see. The grounded review judges the writer part against the transcript.
+    # The blind review has no part: a distortion shows only against the source, which it does not
+    # see. The grounded review judges the writer part against the transcript.
     QualityRule(
         name="No distortion",
         report_writer="""\
@@ -182,8 +175,10 @@ product line stated for a whole industry.""",
 Where the sources lack the evidence for part of the question, say what is missing and what
 therefore cannot be concluded. Never fill the gap with your own knowledge or with an
 inference.""",
-        report_review="""\
-A part of the research question that the draft neither answers nor declares unavailable is a
-violation. A sentence saying that the report does not cover a topic declares it.""",
+        report_review_blind="""\
+Each fact that the research question or the approved plan asks for must be answered or declared
+unavailable. A fact that the draft does neither is a violation. A plan item that names a source is
+answered when its fact is answered, from that source or from another. Exception: a fact that a rule
+excludes from the report. Leaving it out without comment is correct.""",
     ),
 )

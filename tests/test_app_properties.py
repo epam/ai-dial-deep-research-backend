@@ -92,7 +92,8 @@ def test_client_rule_with_one_part_validates() -> None:
     assert rule.research_agent == "Do this."
     assert rule.research_review is None
     assert rule.report_writer is None
-    assert rule.report_review is None
+    assert rule.report_review_blind is None
+    assert rule.report_review_grounded is None
 
 
 def test_client_rule_without_parts_is_rejected() -> None:
@@ -121,7 +122,7 @@ def test_blank_or_multiline_client_rule_name_is_rejected(name: str) -> None:
 def test_duplicate_client_rule_names_are_rejected() -> None:
     rules = [
         {"name": "Dates", "report_writer": "One."},
-        {"name": "Dates", "report_review": "Two."},
+        {"name": "Dates", "report_review_blind": "Two."},
     ]
     with pytest.raises(ValidationError, match=r"duplicate client rule name\(s\): \['Dates'\]"):
         ApplicationProperties.model_validate(_with_client_rules(rules))
@@ -131,6 +132,32 @@ def test_unknown_client_rule_field_is_rejected() -> None:
     with pytest.raises(ValidationError) as excinfo:
         ApplicationProperties.model_validate(_with_client_rules([{"name": "Dates", "writer": "x"}]))
     assert any(err["type"] == "extra_forbidden" for err in excinfo.value.errors())
+
+
+def test_old_review_field_name_is_rejected() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        ApplicationProperties.model_validate(
+            _with_client_rules([{"name": "Dates", "report_review": "Check the dates."}])
+        )
+    assert any(
+        err["type"] == "extra_forbidden" and err["loc"][-1] == "report_review"
+        for err in excinfo.value.errors()
+    )
+
+
+def test_client_rule_with_both_review_parts_is_rejected() -> None:
+    rule = {"name": "Dates", "report_review_blind": "One.", "report_review_grounded": "Two."}
+    with pytest.raises(ValidationError, match="'Dates' sets both report_review_blind and"):
+        ApplicationProperties.model_validate(_with_client_rules([rule]))
+
+
+def test_client_rule_with_grounded_part_validates() -> None:
+    properties = ApplicationProperties.model_validate(
+        _with_client_rules([{"name": "Units", "report_review_grounded": "Check the units."}])
+    )
+    (rule,) = properties.prompts.client_rules
+    assert rule.report_review_grounded == "Check the units."
+    assert rule.report_review_blind is None
 
 
 def test_missing_prompts_is_rejected() -> None:

@@ -91,6 +91,7 @@ def build_research_graph(
         data_sources_instructions=data_sources_instructions,
         client_rules=client_rules,
         source_kinds=source_kinds,
+        glossary=glossary,
     )
 
     builder = StateGraph(ResearchState)
@@ -107,6 +108,7 @@ def build_research_graph(
             emit_activity=emit_activity,
             client_rules=client_rules,
             source_kinds=source_kinds,
+            glossary=glossary,
         ),
     )
     builder.add_node(

@@ -298,6 +298,7 @@ async def test_research_review_carries_the_data_sources(monkeypatch: pytest.Monk
         data_sources=_TEXT,
         emit_result_stage=lambda _o: None,
         emit_activity=lambda _t: None,
+        glossary=None,
     )
 
     await node(_state())  # type: ignore[arg-type]

@@ -51,6 +51,7 @@ def _one_iteration_graph(monkeypatch: pytest.MonkeyPatch) -> Any:
         client_name="ACME",
         data_sources="The topics map.",
         data_sources_instructions="",
+        glossary=None,
     )
     builder = StateGraph(ResearchState)
     builder.add_node(node="research-agent", action=agent)

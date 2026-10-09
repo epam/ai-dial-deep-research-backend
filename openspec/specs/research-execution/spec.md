@@ -582,7 +582,8 @@ research-review and the report nodes see all accumulated tool results).
 
 The research graph makes five kinds of LLM call: one per node, and a second one in the
 report-review node. Each one's inputs SHALL be exactly what is listed here — nothing else reaches
-a model, and adding an input SHALL require updating this requirement. Where a call deliberately omits something another call receives, the omission
+a model, and adding an input SHALL require updating this requirement. Where a call deliberately
+omits something another call receives, the omission
 is part of the contract, not an accident of implementation.
 
 **1. research-agent** (one call per agent step)
@@ -602,7 +603,8 @@ is part of the contract, not an accident of implementation.
   with at most three calls (see **data-sources-discovery**).
 - System prompt, additionally: the research-agent part of every generic quality rule, in one
   block per policy — source selection, opened by the statement of the kinds of source the channel's
-  configured servers give it, then faithful relay — and, when
+  configured servers give it, then faithful relay, then, on a channel that configures a glossary,
+  terminology — and, when
   a rule of the channel's `prompts.client_rules` has a research-agent part, those parts in a
   `<client_rules>` block after them (see **source-selection**).
 - Messages: the graph's accumulated `messages` — the seed instruction (the aligned query and the
@@ -650,11 +652,14 @@ is part of the contract, not an accident of implementation.
   never by a hyperlink (see **report-composition**) — and the turn's data-sources string in a
   `<data_sources>` block, the same string research-agent receives. On a channel that configures a
   glossary, they also carry the rule that the report uses the glossary's terminology, whether or
-  not the app's glossary fetch succeeded (see **report-composition**). They carry no instruction to request missing definitions, because this
+  not the app's glossary fetch succeeded (see **report-composition**). They carry no instruction to
+  request missing definitions, because this
   call has no tools.
 - System prompt, additionally: the report-writer part of every generic quality rule, in one block
   per policy — source selection, opened by the statement of the kinds of source the channel's
-  configured servers give it, then faithful relay — and, when a
+  configured servers give it, then faithful relay, terminology, language and style, and removal,
+  each where it has a
+  report-writer part — and, when a
   rule of the channel's `prompts.client_rules` has a report-writer part, those parts in a
   `<client_rules>` block after them (see **source-selection**).
 - Messages: the accumulated `messages` transcript **including images** (already clamped by
@@ -688,13 +693,16 @@ is part of the contract, not an accident of implementation.
   marked as an error is left out. The block is absent when there is no such result. This is the one
   kind of tool result this call receives: it is the glossary the check judges against when the
   app's own fetch missed terms or definitions.
-- System prompt, additionally: the report-review part of every generic quality rule, as checks
+- System prompt, additionally: the blind-review part of every generic quality rule, as checks
   beside the numbered ones, in one block per policy — source selection, opened by the statement of
-  the kinds of source the channel's configured servers give it, then faithful relay — and, when a
+  the kinds of source the channel's configured servers give it, then faithful relay, language and
+  style, and removal, each where it has a blind-review
+  part — and, when a
   rule of the channel's `prompts.client_rules` has a
-  report-review part, those parts in a `<client_rules>` block after them (see
+  blind-review part, those parts in a `<client_rules>` block after them (see
   **source-selection**).
-- Messages: one human message, assembled **stable content first** so successive review calls in a run
+- Messages: one human message, assembled **stable content first** so successive review calls in a
+  run
   share a byte prefix (the same rule as research-review's assembly, see **prompt-caching**): the
   configured report structure with each section's description, the protected sections, the aligned
   research question, and **the approved preparation plan only** — the plan list's first entry,
@@ -702,11 +710,13 @@ is part of the contract, not an accident of implementation.
   user's formatting instruction. The draft comes **last**, being the only part that differs between
   the calls of one run.
 - **Neither the measured word count nor the ceiling is included**, and the message tells this call
-  that the app checks the headings, the length and the hyperlinks itself. None of the three is
+  that the app checks the headings, the length, the hyperlinks and the emojis itself. None of the
+  four is
   its to judge: the app checks the draft and adds their violations on its own (see
   **report-composition**).
 - **The research findings are NOT included** — no transcript, no tool results other than the
-  glossary tool results above, no images, and so no status announcements either. Every criterion this call judges is decidable from the draft, the
+  glossary tool results above, no images, and so no status announcements either. Every criterion
+  this call judges is decidable from the draft, the
   configuration, the query and plan, and the data-sources string. Whether a claim is faithful to
   its source is judged by call 5, which sees the transcript.
 - Model: the default chat model with reasoning effort `medium`. The call judges every
@@ -726,18 +736,24 @@ is part of the contract, not an accident of implementation.
   `messages` **including images**, already clamped by the image budget, with the `update_status`
   calls and their acknowledgements removed — and no report request.
 - Then a system message with the grounded review's instructions: today's date, the
-  instruction to compare every claim with the source passage it relays, the source-selection terms
-  as call 3 receives them (the definitions only, not the source-selection rules), the
-  faithful-relay rules' **report-writer** parts and call 3's "No calculations" section as rules to
-  judge the draft against, the turn's data-sources string in a
-  `<data_sources>` block, the statement that the transcript is the findings, what is not its job,
-  and the answer format: one item per wrong claim.
+  instruction to compare every claim with the source passage it relays, the generic policy blocks
+  — source selection, opened by the statement of the kinds of source the channel's configured
+  servers give it, with its terms and its rules' **report-writer** parts; faithful relay, with its
+  terms and its rules' **report-writer** parts; and terminology and language and style with their
+  rules' **grounded-review** parts — then call 3's "No calculations" section, then, when a rule of
+  the channel's `prompts.client_rules` has a grounded-review part, those parts in a
+  `<client_rules>` block, then, when a client rule has a report-writer part, those parts as context
+  it does not check, in a `<client_writer_rules>` block, then the turn's data-sources string in a
+  `<data_sources>` block, the
+  statement that the transcript is the findings, what is not its job, and the answer format: one
+  item per violation, in the numbered layout its answer is read by, with an example.
 - Then a system message with the review request call 4 receives: the configured report
   structure with each section's description, the protected sections, the aligned research
   question, the approved preparation plan only, and the draft, last.
-- **Not included:** the client rules, call 4's numbered checks, the glossary rule and the glossary
-  tool results apart from what the transcript carries, the report-review parts of any rule, the
-  source-selection rules, the measured word count and the ceiling, and the drafts before this one.
+- **Not included:** the client rules' research and blind parts, call 4's numbered checks, the
+  glossary rule and the glossary tool results apart from what the transcript carries, the
+  blind-review parts of any rule, the measured word count and the ceiling, and the drafts before
+  this one.
 - Model: the default chat model with reasoning effort `medium`, chosen for the turn's time: at
   `high` the grounded review found slightly more and was more precise, but took about half again
   as long.
@@ -763,7 +779,8 @@ is part of the contract, not an accident of implementation.
 - **WHEN** the grounded review judges a draft on a channel with client rules
 - **THEN** its input SHALL contain the neutral system message, the report call's transcript with
   its images, the instructions and the review request as two trailing system messages, and
-  SHALL NOT contain a client rule, a report-review part of any rule or the status announcements
+  SHALL NOT contain a client rule's research or blind part, a blind-review part of any rule or the
+  status announcements
 
 #### Scenario: A revision's prompt extends the draft's prompt
 

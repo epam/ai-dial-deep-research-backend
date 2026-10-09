@@ -86,6 +86,7 @@ def _review_node(
         data_sources="The topics map.",
         emit_result_stage=outcomes.append,
         emit_activity=lambda _title: None,
+        glossary=None,
     )
     return node, outcomes
 
@@ -195,6 +196,7 @@ async def test_a_failed_review_call_emits_nothing_and_ends_the_turn(
         data_sources="The topics map.",
         emit_result_stage=outcomes.append,
         emit_activity=lambda _title: None,
+        glossary=None,
     )
 
     with pytest.raises(RuntimeError):

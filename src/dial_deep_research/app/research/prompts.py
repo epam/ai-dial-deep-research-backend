@@ -7,7 +7,7 @@ research-review judges coverage independently, and the report node owns formatti
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -20,9 +20,20 @@ from dial_deep_research.app_properties import (
     SourceKind,
 )
 
-from .faithful_relay import FAITHFUL_RELAY_RULES
+from .faithful_relay import FAITHFUL_RELAY_RULES, FAITHFUL_RELAY_TERMS
+from .language_style import (
+    LANGUAGE_AND_STYLE_GLOSSARY_RULES,
+    LANGUAGE_AND_STYLE_RULES,
+    LANGUAGE_AND_STYLE_TERMS,
+)
+from .prohibited_content import REMOVAL_RULES
 from .report_length import SECTION_HEADING_PREFIX
-from .source_selection import SOURCE_SELECTION_RULES, SOURCE_SELECTION_TERMS
+from .source_selection import (
+    SOURCE_SELECTION_RESEARCH_TERMS,
+    SOURCE_SELECTION_RULES,
+    SOURCE_SELECTION_TERMS,
+)
+from .terminology import TERMINOLOGY_GLOSSARY_RULES, TERMINOLOGY_RULES
 
 if TYPE_CHECKING:
     from dial_deep_research.app.data_sources import DataSources
@@ -60,27 +71,66 @@ def render_next_instruction(steps: list[str]) -> str:
 class GenericPolicy:
     """One policy of the application's generic rules, rendered as a block of its own.
 
-    `headings` gives each step with a part of some rule its heading and opening sentence. Report
-    review reads its parts as checks, so its opening sentence says so; the other steps read them as
-    rules to follow. `needs_source_kinds` marks a policy whose parts depend on the channel's kinds
-    of source; the prompt states them once, in the first block of such a policy.
+    `headings` gives each step with a part of some rule its heading and opening sentence. The two
+    reviews read their parts as checks, so their opening sentences say so; the other steps read
+    them as rules to follow. `terms` are the definitions the policy's rules use, shown under
+    `terms_name` at the top of the block in each step whose block renders; they are not a rule.
+    `glossary_rules` are rendered only on a channel that configures a glossary.
+    `needs_source_kinds` marks a policy whose parts depend on the channel's kinds of source; the
+    prompt states them once, in the first block of such a policy.
+
+    `grounded_by_writer_parts` makes the grounded review judge the draft against the rules' writer
+    parts, so such a policy's rules set no grounded part.
     """
 
     headings: Mapping[RuleStep, tuple[str, str]]
     rules: tuple[QualityRule, ...]
+    glossary_rules: tuple[QualityRule, ...] = ()
+    terms_name: str | None = None
+    terms: Mapping[RuleStep, str] = field(default_factory=dict)
     needs_source_kinds: bool = False
+    grounded_by_writer_parts: bool = False
 
     def __post_init__(self) -> None:
         # Checked when the policy is defined, at import, rather than when a step's prompt is first
-        # rendered in a turn.
-        for rule in self.rules:
+        # rendered in a turn, or only on a channel that configures a glossary.
+        if bool(self.terms) != (self.terms_name is not None):
+            raise ValueError("a policy's terms and their name are set together")
+        for rule in self.rules + self.glossary_rules:
+            if self.grounded_by_writer_parts and rule.report_review_grounded is not None:
+                raise ValueError(
+                    f"rule {rule.name!r} sets a grounded part, which its policy never renders: the"
+                    " grounded review reads the policy's writer parts"
+                )
             for step in RuleStep:
-                if rule.part(step) is not None and step not in self.headings:
+                if rule.part(self.rule_step(step)) is None:
+                    continue
+                if step not in self.headings:
                     raise ValueError(
-                        f"rule {rule.name!r} has a {step.value} part, and its policy has no"
+                        f"rule {rule.name!r} has a part for {step.value}, and its policy has no"
                         f" {step.value} heading"
                     )
+                if self.terms and step not in self.terms:
+                    raise ValueError(
+                        f"rule {rule.name!r} has a part for {step.value}, and its policy has no"
+                        f" {step.value} terms"
+                    )
 
+    def rule_step(self, step: RuleStep) -> RuleStep:
+        """The field whose parts render in `step`'s prompt."""
+        if step is RuleStep.REPORT_REVIEW_GROUNDED and self.grounded_by_writer_parts:
+            return RuleStep.REPORT_WRITER
+        return step
+
+
+_REVIEW_STEPS = frozenset({RuleStep.REPORT_REVIEW_BLIND, RuleStep.REPORT_REVIEW_GROUNDED})
+
+# The grounded review reads these two policies' writer parts, so it is introduced to them as the
+# writer is.
+_SOURCE_SELECTION_WRITER_INTRO = """\
+These rules say which values the report gives for each fact, and how it presents them."""
+_FAITHFUL_RELAY_WRITER_INTRO = """\
+These rules keep the report to what the sources say: it invents, infers and computes nothing."""
 
 SOURCE_SELECTION_POLICY = GenericPolicy(
     headings={
@@ -94,18 +144,28 @@ look for, and what the findings must show about each.""",
             "Source selection",
             "These rules define gaps beside the plan items, and say when such a gap closes.",
         ),
-        RuleStep.REPORT_WRITER: (
-            "Source selection",
-            "These rules say which values the report gives for each fact, and how it presents them.",
-        ),
-        RuleStep.REPORT_REVIEW: (
+        RuleStep.REPORT_WRITER: ("Source selection", _SOURCE_SELECTION_WRITER_INTRO),
+        RuleStep.REPORT_REVIEW_BLIND: (
             "Source-selection checks",
             'Check the draft against each rule below. The part "Terms" defines the words the checks'
             " use.",
         ),
+        RuleStep.REPORT_REVIEW_GROUNDED: (
+            "Source selection, judged against the findings",
+            _SOURCE_SELECTION_WRITER_INTRO,
+        ),
     },
     rules=SOURCE_SELECTION_RULES,
+    terms_name="Terms",
+    terms={
+        RuleStep.RESEARCH_AGENT: SOURCE_SELECTION_RESEARCH_TERMS,
+        RuleStep.RESEARCH_REVIEW: SOURCE_SELECTION_RESEARCH_TERMS,
+        RuleStep.REPORT_WRITER: SOURCE_SELECTION_TERMS,
+        RuleStep.REPORT_REVIEW_BLIND: SOURCE_SELECTION_TERMS,
+        RuleStep.REPORT_REVIEW_GROUNDED: SOURCE_SELECTION_TERMS,
+    },
     needs_source_kinds=True,
+    grounded_by_writer_parts=True,
 )
 
 FAITHFUL_RELAY_POLICY = GenericPolicy(
@@ -120,24 +180,87 @@ it can.""",
             "Faithful relay",
             "These rules define further gaps, and limit what a next step may ask for.",
         ),
-        RuleStep.REPORT_WRITER: (
-            "Faithful relay",
-            """\
-These rules keep the report to what the sources say: it invents, infers and computes nothing.""",
-        ),
-        RuleStep.REPORT_REVIEW: (
+        RuleStep.REPORT_WRITER: ("Faithful relay", _FAITHFUL_RELAY_WRITER_INTRO),
+        RuleStep.REPORT_REVIEW_BLIND: (
             "Faithful-relay checks",
             """\
 Check the draft against each rule below. The part "Faithful-relay terms" defines the words the
 checks use.""",
         ),
+        RuleStep.REPORT_REVIEW_GROUNDED: (
+            "Faithful relay, judged against the findings",
+            _FAITHFUL_RELAY_WRITER_INTRO,
+        ),
     },
     rules=FAITHFUL_RELAY_RULES,
+    terms_name="Faithful-relay terms",
+    terms=dict.fromkeys(RuleStep, FAITHFUL_RELAY_TERMS),
+    grounded_by_writer_parts=True,
+)
+
+TERMINOLOGY_POLICY = GenericPolicy(
+    headings={
+        RuleStep.RESEARCH_AGENT: (
+            "Terminology",
+            "This rule says how you search for a concept that the glossary names.",
+        ),
+        RuleStep.REPORT_WRITER: (
+            "Terminology",
+            "These rules say which term the report uses for each concept.",
+        ),
+        RuleStep.REPORT_REVIEW_GROUNDED: (
+            "Terminology, judged against the findings",
+            "Check the draft against the rule below.",
+        ),
+    },
+    rules=TERMINOLOGY_RULES,
+    glossary_rules=TERMINOLOGY_GLOSSARY_RULES,
+)
+
+LANGUAGE_AND_STYLE_POLICY = GenericPolicy(
+    headings={
+        RuleStep.REPORT_WRITER: ("Language and style", "These rules govern the report's wording."),
+        RuleStep.REPORT_REVIEW_BLIND: (
+            "Language-and-style checks",
+            """\
+Check the draft's wording against each rule below. The part "Verbatim names" defines the words the
+checks use. These checks are rules, not wording preferences.""",
+        ),
+        RuleStep.REPORT_REVIEW_GROUNDED: (
+            "Language and style, judged against the findings",
+            "Check the draft against the rule below.",
+        ),
+    },
+    rules=LANGUAGE_AND_STYLE_RULES,
+    glossary_rules=LANGUAGE_AND_STYLE_GLOSSARY_RULES,
+    terms_name="Verbatim names",
+    terms={
+        RuleStep.REPORT_WRITER: LANGUAGE_AND_STYLE_TERMS,
+        RuleStep.REPORT_REVIEW_BLIND: LANGUAGE_AND_STYLE_TERMS,
+        RuleStep.REPORT_REVIEW_GROUNDED: LANGUAGE_AND_STYLE_TERMS,
+    },
+)
+
+REMOVAL_POLICY = GenericPolicy(
+    headings={
+        RuleStep.REPORT_WRITER: (
+            "Removed content",
+            "This rule says how content that a rule excludes leaves the report.",
+        ),
+        RuleStep.REPORT_REVIEW_BLIND: ("Removal checks", "Check the draft against the rule below."),
+    },
+    rules=REMOVAL_RULES,
 )
 
 # The rendering order. Source selection comes first because it defines the terms, such as value
 # and stated date, that the faithful-relay rules use.
-GENERIC_POLICIES: tuple[GenericPolicy, ...] = (SOURCE_SELECTION_POLICY, FAITHFUL_RELAY_POLICY)
+GENERIC_POLICIES: tuple[GenericPolicy, ...] = (
+    SOURCE_SELECTION_POLICY,
+    FAITHFUL_RELAY_POLICY,
+    TERMINOLOGY_POLICY,
+    LANGUAGE_AND_STYLE_POLICY,
+    REMOVAL_POLICY,
+)
 
 _CLIENT_RULES_BLOCK = """## {heading}
 
@@ -184,27 +307,40 @@ def render_source_kinds(source_kinds: Collection[SourceKind]) -> str:
 
 
 def render_policy(
-    policy: GenericPolicy, step: RuleStep, *, source_kinds_statement: str | None = None
+    policy: GenericPolicy,
+    step: RuleStep,
+    *,
+    glossary: bool,
+    source_kinds_statement: str | None = None,
 ) -> str:
     """One policy's block of `step`'s system prompt, ending in a blank line.
 
-    `source_kinds_statement`, when given, follows the block's opening sentence. Empty when no rule
-    of the policy has a part for `step`, so such a policy adds nothing.
+    `glossary` says whether the channel configures a glossary, which adds the policy's glossary
+    rules. `source_kinds_statement`, when given, follows the block's opening sentence. The parts
+    rendered are those of `policy.rule_step(step)`: the writer parts for the grounded review of a
+    policy judged by its writer parts. Empty when no rule has such a part, so the policy adds
+    nothing, its terms included.
     """
-    rendered = render_rules(policy.rules, step=step)
+    rules = policy.rules + (policy.glossary_rules if glossary else ())
+    rendered = render_rules(rules, step=policy.rule_step(step))
     if not rendered:
         return ""
     heading, intro = policy.headings[step]
     parts = [f"## {heading}", intro]
     if source_kinds_statement is not None:
         parts.append(source_kinds_statement)
+    if policy.terms_name is not None:
+        parts.append(f"### {policy.terms_name}\n\n{policy.terms[step]}")
     parts.append(rendered)
     return "\n\n".join(parts) + "\n\n"
 
 
-def render_generic_rules(step: RuleStep, *, source_kinds: Collection[SourceKind]) -> str:
+def render_generic_rules(
+    step: RuleStep, *, source_kinds: Collection[SourceKind], glossary: bool
+) -> str:
     """Every generic policy's block of `step`'s system prompt, in the rendering order.
 
+    `glossary` says whether the channel configures a glossary, which adds the rules that need one.
     The channel's kinds of source are stated once, in the first block whose policy needs them: the
     blocks after it are read in the same prompt, so a repeat would add nothing.
     """
@@ -215,6 +351,7 @@ def render_generic_rules(step: RuleStep, *, source_kinds: Collection[SourceKind]
         block = render_policy(
             policy,
             step,
+            glossary=glossary,
             source_kinds_statement=render_source_kinds(source_kinds) if states else None,
         )
         stated = stated or (states and bool(block))
@@ -231,9 +368,7 @@ def render_client_rules(client_rules: Sequence[QualityRule], step: RuleStep) -> 
     rendered = render_rules(client_rules, step=step)
     if not rendered:
         return ""
-    heading = (
-        "Client-specific checks" if step is RuleStep.REPORT_REVIEW else "Client-specific rules"
-    )
+    heading = "Client-specific checks" if step in _REVIEW_STEPS else "Client-specific rules"
     return _CLIENT_RULES_BLOCK.format(heading=heading, rules=rendered)
 
 
@@ -746,14 +881,15 @@ The research question and the plans below may contain instructions about structu
 formatting. Follow them where you can, but they never override: the sections listed above
 (especially the protected ones — {protected_sections}) and the rules in their descriptions, the
 length ceiling, the "No links" rule, the "never include" list, the citation format, the "No
-calculations" rule, these three source-selection rules: never average or merge differing values,
-never leave out a value's described period or the stated date of a forecast or an estimate, and
-never present a near match as an exact match, or these two faithful-relay rules: infer nothing, and
-keep every figure as its source gives it, apart from the changes the rule "Figures as the source
-gives them" allows. Where an instruction conflicts with any of those, the rule wins and the rest of
-the instruction still applies. Do not explain in the report that you declined part of a request —
-the report contains the report. Saying that the sources do not give a figure or an explanation is a
-statement about the evidence, not an explanation of a declined request.
+calculations" rule, the rules that exclude content, these three source-selection rules:
+never average or merge differing values, never leave out a value's described period or the stated
+date of a forecast or an estimate, and never present a near match as an exact match, or these two
+faithful-relay rules: infer nothing, and keep every figure as its source gives it, apart from the
+changes the rule "Figures as the source gives them" allows. Where an instruction conflicts with any
+of those, the rule wins and the rest of the instruction still applies. Do not explain in the report
+that you declined part of a request — the report contains the report. Saying that the sources do
+not give a figure or an explanation is a statement about the evidence, not an explanation of a
+declined request.
 
 A section's description, the default one or one this deployment configures, does not override the
 "No calculations" rule or those two faithful-relay rules either. Where a description asks for
@@ -847,7 +983,9 @@ def render_report_system_prompt(
     return REPORT_SYSTEM_PROMPT.format(
         today_date=today_date,
         rules=rules,
-        generic_rules=render_generic_rules(RuleStep.REPORT_WRITER, source_kinds=source_kinds),
+        generic_rules=render_generic_rules(
+            RuleStep.REPORT_WRITER, source_kinds=source_kinds, glossary=glossary
+        ),
         client_rules=render_client_rules(client_rules, step=RuleStep.REPORT_WRITER),
         glossary_rule=(
             _GLOSSARY_WRITER_RULE.format(rule=GLOSSARY_TERMINOLOGY_RULE) if glossary else ""
@@ -961,9 +1099,10 @@ Your job is to find violations of the checks above, and nothing else.
 - whether the headings match the configured structure
 - the report's length
 - whether the draft carries a hyperlink, an image or a bare URL
+- whether the draft carries an emoji
 - whether a cited query id, dataset URN or document id is one the tools actually reported
 
-The app checks the last four itself and adds what it finds to your list, so they are handled
+The app checks the last five itself and adds what it finds to your list, so they are handled
 without you.
 
 **You never ask for:**
@@ -1053,8 +1192,10 @@ def render_blind_review_system_prompt(
             if glossary_check
             else ""
         ),
-        generic_rules=render_generic_rules(RuleStep.REPORT_REVIEW, source_kinds=source_kinds),
-        client_rules=render_client_rules(client_rules, step=RuleStep.REPORT_REVIEW),
+        generic_rules=render_generic_rules(
+            RuleStep.REPORT_REVIEW_BLIND, source_kinds=source_kinds, glossary=glossary
+        ),
+        client_rules=render_client_rules(client_rules, step=RuleStep.REPORT_REVIEW_BLIND),
         data_sources=data_sources,
         glossary_tool_results=(
             _GLOSSARY_TOOL_RESULTS.format(results="\n\n".join(glossary_tool_results))
@@ -1087,8 +1228,9 @@ You are part of a deep-research assistant. The messages that follow are the rese
 did for the question below: its instructions, every tool call and every tool result. The last
 messages say what to do with it."""
 
-# The rules are given in their report-writer parts, as what the report must do: the report-review
-# parts tell a reviewer who cannot see the sources what not to judge, and this one sees them.
+# The source-selection and faithful-relay rules are given in their report-writer parts, as what
+# the report must do: their blind parts tell a reviewer who cannot see the sources what not to
+# judge, and this one sees them. The other policies' rules are given in their grounded parts.
 _GROUNDED_REVIEW_PROMPT = """\
 You are the report check of a deep-research assistant. Today is {today_date}. You did not write
 the report; you judge it against a fixed set of rules and nothing else.
@@ -1107,24 +1249,21 @@ does not support as written, such as:
 Then check the rest of the rules below against the whole draft. Go through the whole draft before
 you answer, not only until you have found a few violations: the revision fixes only what you name.
 
-## Source-selection terms
+## Rules, judged against the findings
 
-The faithful-relay rules below use these definitions.
+Each rule below says what the report must do, or what counts as a violation. The research
+transcript before these instructions is the findings: judge the draft against it, and report every
+passage that breaks a rule.
 
-{source_selection_terms}
+Some rules ask the report to give a value or its context, such as both a dataset value and a
+publication value for one fact. When the findings hold such a value and the draft leaves it out,
+report it and ask for it to be added, unless a rule keeps that content out of the report.
 
-## Faithful relay, judged against the findings
-
-Each rule below says what the report must do. The research transcript before these instructions is
-the findings: judge the draft against it, and report every passage that breaks a rule.
-
-{rules}
-
-### No calculations
+{generic_rules}## No calculations
 
 {no_calculations_rule}
 
-## Data sources
+{client_rules}{client_writer_rules}## Data sources
 
 The report may draw on the data sources described below as well as on the findings: the knowledge
 base's own descriptions, and what the application fetched from the dataset server at the start of
@@ -1148,9 +1287,11 @@ Your job is to find violations of the rules above, and nothing else.
 **You do not judge:**
 
 - whether the research was thorough — evidence coverage was judged elsewhere
+- whether the draft answers every part of the question and the plan: another check judges this,
+  and this deployment's own rules may keep a part out of the report
 - whether a claim carries a citation, or where a citation stands
-- which term or name the report uses for a concept: this deployment's own rules may set it, and
-  you are not shown them
+- which of two terms with the same meaning the report uses for a concept: this deployment's own
+  rules may set it
 - the report's sections, headings, length, Markdown and citation format
 - whether the draft carries a hyperlink, an image or a bare URL
 - whether a cited query id, dataset URN or document id is one the tools actually reported
@@ -1167,22 +1308,80 @@ can imagine a better report.
 
 ## Your answer
 
-Answer with a numbered list, one item per wrong claim: the rule it breaks, the passage, quoted
-exactly, what the source says instead, and what to change. A claim the draft repeats in several
-places is one item that quotes every place. If the draft breaks none of the rules above, answer with
-exactly `No violations.` and nothing else. Do not call any tool.
+Answer with a numbered list, one item per violation. Start each item on a new line with its number,
+a full stop and a space, such as `1. `, with nothing before the number. Indent every further line of
+an item. Each item names the rule it breaks, quotes the passage exactly, says what the source says
+instead, and says what to change. A violation that the draft repeats in several places is one item
+that quotes every place. For example:
+
+1. No inference: "Higher interest rates caused the slowdown." No source states a cause. The source
+   says only that growth fell from 3.1% to 2.4%. Remove the cause.
+2. Names, not codes: "`USA`" in the table of growth by country. The findings name it "United
+   States". Write the name.
+
+If the draft breaks none of the rules above, answer with exactly `No violations.` and nothing else.
+Do not call any tool.
 """
 
 
-def render_grounded_review_prompt(*, today_date: str, data_sources: str) -> str:
+# The channel's client rules, as the writer reads them, given to the grounded review as context. The
+# grounded review asks for a missing value, and these rules are where a channel keeps content out of
+# the report and names its own terms; their checks stay with the reviews that their check parts
+# name, so the grounded review is told not to judge them.
+_CLIENT_WRITER_RULES_CONTEXT = """## This deployment's writer rules
+
+The writer follows the rules below, which come from this deployment's configuration. They are
+context, not checks: do not report a passage under them, unless a client-specific check above names
+it. Use them to know which content the report must leave out and which terms it must use. Never ask
+for content that they keep out of the report.
+
+<client_writer_rules>
+{rules}
+</client_writer_rules>
+
+"""
+
+
+def render_client_writer_rules_context(client_rules: Sequence[QualityRule]) -> str:
+    """The client rules' writer parts as the grounded review's context, ending in a blank line.
+
+    Empty when no client rule has a writer part, so the section and its introduction are left out.
+    """
+    rendered = render_rules(client_rules, step=RuleStep.REPORT_WRITER)
+    if not rendered:
+        return ""
+    return _CLIENT_WRITER_RULES_CONTEXT.format(rules=rendered)
+
+
+def render_grounded_review_prompt(
+    *,
+    today_date: str,
+    data_sources: str,
+    source_kinds: Collection[SourceKind],
+    glossary: bool,
+    client_rules: Sequence[QualityRule],
+) -> str:
     """The grounded review's instructions, sent after the transcript as a system message.
 
-    Built from the same rule texts the report writer receives, so a rule edit reaches both.
+    Built from the same rule texts the other steps receive, so a rule edit reaches all of them.
+    `glossary` says whether the channel configures one, which adds the rules that need one.
     """
+    # Both reviews check the source-selection and faithful-relay rules on purpose: the blind review
+    # by their blind parts, this one by their writer parts. A failed review call does not fail the
+    # turn, so the blind review still checks a draft when this call fails. The blind parts also
+    # carry sentences whose only job is to stop a review from flagging a correct draft, and this
+    # review does not receive them. That is a known risk for the source-selection rules, which it
+    # judges by their writer parts alone: it may flag a draft whose tables give each value's period
+    # in a year column, a check met by a statement that the sources do not give the evidence, or a
+    # figure computed from values of different facts as two merged values. The blind parts of
+    # "Dates", "Missing evidence" and "Other sources and disagreements" say that these are correct.
     return _GROUNDED_REVIEW_PROMPT.format(
         today_date=today_date,
-        source_selection_terms=SOURCE_SELECTION_TERMS,
-        rules=render_rules(FAITHFUL_RELAY_RULES, step=RuleStep.REPORT_WRITER),
+        generic_rules=render_generic_rules(
+            RuleStep.REPORT_REVIEW_GROUNDED, source_kinds=source_kinds, glossary=glossary
+        ),
         no_calculations_rule=NO_CALCULATIONS_WRITER_RULE,
+        client_rules=render_client_rules(client_rules, step=RuleStep.REPORT_REVIEW_GROUNDED),
+        client_writer_rules=render_client_writer_rules_context(client_rules),
         data_sources=data_sources,
     )
