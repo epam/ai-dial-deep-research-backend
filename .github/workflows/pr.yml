@@ -16,6 +16,8 @@ jobs:
   run_tests:
     uses: epam/ai-dial-ci/.github/workflows/python_docker_pr.yml@4.11.0
     with:
+      trivy-severity: "CRITICAL,HIGH,MEDIUM,LOW"
+      trivy-severity-for-sarif: "CRITICAL,HIGH,MEDIUM,LOW"
       python-version: "3.13"
       poetry-version: "2.3.2"
     secrets: inherit
