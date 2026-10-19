@@ -121,22 +121,6 @@ all-down: ## Stop infra + the app container
 all-logs: ## Tail logs from the infra + the app container
 	docker compose $(APP_COMPOSE) logs -f
 
-## -------- next-generation chat (opt-in) -------- ##
-
-# Infra plus a next-generation chat UI beside the base one, and the inline-citations demo
-# registered in core. See docker-compose.chat-nextgen.yml for what it adds and what .env
-# must carry.
-CHAT_NG_COMPOSE = -f docker-compose.yml -f docker-compose.chat-nextgen.yml
-
-chat-ng-up: ## Start infra with both chat generations and the inline-citations demo
-	docker compose $(CHAT_NG_COMPOSE) up -d
-
-chat-ng-down: ## Stop the infra + both chat generations
-	docker compose $(CHAT_NG_COMPOSE) down
-
-chat-ng-logs: ## Tail logs from the infra + both chat generations
-	docker compose $(CHAT_NG_COMPOSE) logs -f
-
 ## -------- opik -------- ##
 
 # Clones the pinned tag on first use, and moves an existing clone to it when OPIK_VERSION

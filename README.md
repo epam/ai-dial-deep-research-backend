@@ -107,7 +107,7 @@ The `core` service reads its config as a **list of files** from `dial_conf/core/
 | `generated/models.json` | ignored | model deployments pulled from a remote DIAL by `make infra-config`, plus the local `dial_api_key` and default-role limits from the committed `models-template.json`. Embeds the remote key — keep it local. |
 | `generated/application-schemas.json` | ignored | the Deep Research application-type registration, rendered by `make infra-config` from the committed `application-schemas-template.json` with your `APP_PORT` baked into the endpoints. Core fetches the property schema live from the app's schema endpoint. |
 | `applications.json` | ignored | your application instances ("channels"), seeded from the committed `applications-template.json`. |
-| `annotations-demo-applications.json` | committed | the inline-citations demo's application entry, added to the list only by the annotations overlay (see [Inline citations demo](#inline-citations-demo)). Its endpoint names port 5010, so it works only while the app binds that port; edit that line to match your `APP_PORT` otherwise. |
+| `annotations-demo-applications.json` | committed | the inline-citations demo's application entry, which the app serves only with `ENABLE_ANNOTATIONS_DEMO` set (see [Inline citations demo](#inline-citations-demo)). Its endpoint names port 5010, so it works only while the app binds that port; edit that line to match your `APP_PORT` otherwise. |
 
 Build all three local files with:
 
@@ -244,14 +244,20 @@ Infra runs in Docker; the **app runs on your host** via uvicorn. DIAL core reach
 
 ```sh
 cp .env.example .env
-# fill .env with secrets
+# fill .env with secrets, including the identity-provider values the chat UI logs in with
 make install          # runtime + dev deps; use `make install-all` if you want Opik tracing
 make infra-config     # build the local DIAL core config (see "DIAL core configuration")
 make infra-up
 make app
 ```
 
-Then open DIAL Chat UI at [http://localhost:3010](http://localhost:3010), select the **Deep Research** application, and send your query.
+Then open DIAL Chat UI at [http://localhost:4207](http://localhost:4207), log in, select the **Deep Research** application, and send your query.
+
+The chat has no mode without authentication: it logs you in through the identity provider whose
+values are in `.env` (see `.env.example`), and that provider must accept `http://localhost:4207` as
+a redirect URI. Without those values the rest of the stack still runs, and
+[`scripts/send_conversation.py`](#driving-the-app-from-the-cli) drives the app through DIAL core
+with no chat at all.
 
 Tear down:
 
@@ -322,22 +328,14 @@ attached behind it, which is the case where no URL resolves and the marker text 
 An attachment already lives in your own storage, so the annotations point straight at it and the
 demo copies nothing anywhere.
 
-**Only the next-generation chat UI draws inline citation pills**, and no released version carries
-the marker-tag rendering this feature emits yet. The overlay below adds such a chat beside the
-base one so the same reply can be opened in both.
-
-Bring it up:
+DIAL core always lists the demo, and the app serves it only when the demo's flag is set:
 
 ```sh
-# 1. Add the identity-provider values the next-generation chat needs to .env (see .env.example),
-#    then start infra with both chat generations and the demo registered in core.
-make chat-ng-up
-
-# 2. Run the app with the demo deployment enabled.
+make infra-up
 ENABLE_ANNOTATIONS_DEMO=true make app
 ```
 
-Then open the next-generation chat at <http://localhost:4207>, log in as a real user, and start a
+Then open the chat at <http://localhost:4207>, log in, and start a
 conversation with **Deep Research - Inline Citations Demo** (deployment id
 `deep-research-annotations-demo`). Attach two PDFs of at least three pages each and send any
 message. Attach anything else — one file, a shallower PDF, nothing at all — and the demo says
@@ -355,9 +353,6 @@ What to look for in that reply:
   page, whole on the pill as on the popup card;
 - clicking a pill opens the attached PDF at the cited page;
 - no raw `<cit …>` tag and no placeholder text anywhere in the text.
-
-Opening the same reply in the base chat at <http://localhost:3010> shows what a client that does
-not understand the marker tags does with it.
 
 ## Driving the app from the CLI
 
