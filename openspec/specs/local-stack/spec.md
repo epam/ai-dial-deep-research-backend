@@ -7,11 +7,11 @@ The local DIAL stack: four infrastructure services (DIAL core, chat UI, themes, 
 ## Requirements
 
 ### Requirement: Docker Compose stack brings up the DIAL infrastructure
-The repository SHALL provide a `docker-compose.yml` defining the four DIAL infrastructure services — DIAL core, DIAL chat UI, a themes server, and a redis for DIAL core — started and stopped by `make infra-up` / `make infra-down`. The app itself SHALL run on the host via `make app` (not in a container); DIAL core reaches the host-running app at `http://host.docker.internal:5000`. The `core` service SHALL mount `dial_conf/core/` as a directory and load its config as a file list via `aidial.config.files`: the generated `generated/models.json`, the rendered `generated/application-schemas.json`, and the local `applications.json` — the legacy single hand-written `dial_conf/core/config.json` SHALL NOT be read. This trade favours iteration speed and trivial IDE debugging over prod-parity; a future change can add an app Dockerfile + compose overlay when deployment becomes real.
+The repository SHALL provide a `docker-compose.yml` defining the four DIAL infrastructure services — DIAL core, DIAL chat UI, a themes server, and a redis for DIAL core — started and stopped by `make infra-up` / `make infra-down`. The app itself SHALL run on the host via `make app` (not in a container); DIAL core reaches the host-running app at `http://host.docker.internal:5000`. The `core` service SHALL mount `dial_conf/core/` as a directory and load its config as a file list via `aidial.config.files`: the generated `generated/models.json`, the rendered `generated/application-schemas.json`, the local `applications.json`, and the committed `annotations-demo-applications.json` — the legacy single hand-written `dial_conf/core/config.json` SHALL NOT be read. This trade favours iteration speed and trivial IDE debugging over prod-parity; a future change can add an app Dockerfile + compose overlay when deployment becomes real.
 
 #### Scenario: Infrastructure cold start
-- **WHEN** a contributor runs `make infra-config` (with remote DIAL credentials in `.env`) followed by `make infra-up` on a freshly cloned repo with Docker running
-- **THEN** the four infrastructure services (core, chat, themes, redis) SHALL reach a running state and the chat UI SHALL be reachable at `http://localhost:3000`
+- **WHEN** a contributor runs `make infra-config` (with remote DIAL credentials and the identity-provider values in `.env`) followed by `make infra-up` on a freshly cloned repo with Docker running
+- **THEN** the four infrastructure services (core, chat, themes, redis) SHALL reach a running state and the chat UI SHALL be reachable at `http://localhost:4207`
 
 #### Scenario: App start on the host
 - **WHEN** a contributor runs `make app` after `make infra-up`
@@ -22,7 +22,7 @@ The repository SHALL provide a `docker-compose.yml` defining the four DIAL infra
 - **THEN** it SHALL still start successfully and the `deep-research` deployment SHALL be reachable through the chat UI; if the configured MCP server itself is unreachable, agent requests SHALL surface the friendly error string but the stack SHALL still come up
 
 ### Requirement: DIAL adapter routes LLM calls to the upstream provider
-The compose stack SHALL run an `ai-dial-adapter-dial` service (image `epam/ai-dial-adapter-dial:0.16.0`) that exposes the OpenAI-compatible chat-completion endpoint at `http://ai-dial-adapter-dial:5000/openai/deployments/<model>/chat/completions` on the docker network and forwards each call to the configured upstream LLM provider declared in `dial_conf/core/config.json`'s `models.<model>.upstreams` block. The adapter SHALL connect back to DIAL core via `DIAL_URL=http://core:8080` so it can resolve per-request configuration.
+The compose stack SHALL run an `ai-dial-adapter-dial` service (image `epam/ai-dial-adapter-dial:0.20.0`) that exposes the OpenAI-compatible chat-completion endpoint at `http://ai-dial-adapter-dial:5000/openai/deployments/<model>/chat/completions` on the docker network and forwards each call to the configured upstream LLM provider declared in `dial_conf/core/config.json`'s `models.<model>.upstreams` block. The adapter SHALL connect back to DIAL core via `DIAL_URL=http://core:8080` so it can resolve per-request configuration.
 
 #### Scenario: Model endpoint resolves on the docker network
 - **WHEN** DIAL core proxies a chat-completion request whose target model declares an `endpoint` of `http://ai-dial-adapter-dial:5000/openai/deployments/<model>/chat/completions`
@@ -30,7 +30,7 @@ The compose stack SHALL run an `ai-dial-adapter-dial` service (image `epam/ai-di
 
 #### Scenario: Adapter not exposed on host
 - **WHEN** the stack is up
-- **THEN** the adapter SHALL be reachable only on the docker network (no host port mapping); host code (the dial-deep-research app) MUST go through DIAL core at `http://localhost:8080` rather than the adapter directly
+- **THEN** the adapter SHALL be reachable only on the docker network (no host port mapping); host code (the dial-deep-research app) MUST go through DIAL core at `http://localhost:8081` rather than the adapter directly
 
 ### Requirement: Deep Research app registered as a DIAL application
 The DIAL core configuration SHALL register Deep Research as a schema-rich application **type** plus at least one application **instance**, and SHALL ship a single API key (name: `dial_api_key`, role: `default`) under which the chat UI can invoke it:
@@ -185,9 +185,7 @@ The repository SHALL keep application instances (client configs) in a gitignored
   `applications-template.json` and `application-schemas-template.json` remain tracked
 
 ### Requirement: Pinned infrastructure images
-The compose file SHALL pin concrete image tags (not `latest`) for the upstream DIAL core, chat UI, themes, redis, and DIAL adapter services: `epam/ai-dial-core:0.47.1`, `epam/ai-dial-chat:0.47.2`, `epam/ai-dial-chat-themes:0.17.0`, `redis:7.2.4-alpine3.19`, `epam/ai-dial-adapter-dial:0.16.0`.
-
-The opt-in overlay that adds the next-generation chat (see the two-generations requirement) SHALL pin its themes service the same way, to the `epam/ai-dial-chat-themes` tag that chat line expects, and SHALL run its chat service on the moving `development` tag of `epam/ai-dial-chat`. That tag SHALL be the only image in the repository not pinned to a version, and the reason SHALL be recorded where it is set: no released chat renders marker-tag annotations, because that rendering reached the chat's development branch after its newest release was built. The overlay SHALL move to a `1.0.x` tag once one carries the rendering. The reproducibility this requirement otherwise guarantees therefore covers the base stack, which the scenario below exercises, and deliberately not the overlay's chat.
+The compose file SHALL pin concrete image tags (not `latest`) for the upstream DIAL core, chat UI, themes, redis, and DIAL adapter services: `epam/ai-dial-core:0.49.2`, `epam/ai-dial-chat:1.2.4`, `epam/ai-dial-chat-themes:0.21.0`, `redis:7.2.4-alpine3.19`, `epam/ai-dial-adapter-dial:0.20.0`. The themes tag SHALL be one built for the pinned chat's line, because a themes configuration built for another chat line loads without an error and applies almost nothing.
 
 #### Scenario: Reproducible stack
 - **WHEN** two contributors run `make infra-up` on different machines at different times without pulling new tags
@@ -196,9 +194,15 @@ The opt-in overlay that adds the next-generation chat (see the two-generations r
 ### Requirement: Environment configuration via .env
 The stack SHALL read environment configuration from a `.env` file at the repo root, and the repository SHALL ship an `.env.example` documenting the supported variables. At minimum the `.env` file SHALL expose the DIAL API key used by the chat UI to call DIAL core. `.env.example` SHALL additionally document the optional `REMOTE_DIAL_URL` and `REMOTE_DIAL_API_KEY` variables consumed only by the config generator (`make infra-config`); the app itself SHALL NOT require them.
 
+The chat UI has no mode without authentication, so it logs users in through an identity provider. Its identity-provider credentials SHALL come from `.env` and SHALL NOT appear in any committed file, and `.env.example` SHALL document the variables they need. The chat SHALL be served on a host port that the identity provider's OIDC client accepts as a redirect URI, because a port the client does not know fails the login with an invalid-redirect error; that port is **4207**. The app SHALL NOT need the identity-provider values: they are read only by the chat service.
+
 #### Scenario: Default bring-up
-- **WHEN** a contributor copies `.env.example` to `.env` without modifications, generates the core config, and runs `make infra-up` followed by `make app`
-- **THEN** the stack SHALL start on the default ports (chat UI at 3000, DIAL core at 8080, themes at 3001, app at 5000 on the host)
+- **WHEN** a contributor copies `.env.example` to `.env`, fills in the identity-provider values, generates the core config, and runs `make infra-up` followed by `make app`
+- **THEN** the stack SHALL start on the default ports (chat UI at 4207, DIAL core at 8081, themes at 3011, app at 5000 on the host), and the contributor SHALL be able to log into the chat UI
+
+#### Scenario: Identity-provider values missing
+- **WHEN** a contributor runs `make infra-up` with no identity-provider values in `.env`
+- **THEN** DIAL core, redis, themes and the DIAL adapter SHALL still start, so the app can be driven through DIAL core without the chat UI, for example with `scripts/send_conversation.py`; only the chat UI SHALL be unusable
 
 #### Scenario: App runs without remote DIAL credentials
 - **WHEN** the app starts with `REMOTE_DIAL_URL` and `REMOTE_DIAL_API_KEY` unset
@@ -257,74 +261,15 @@ The repository SHALL NOT ship a `.env.example` (or equivalent) that pre-enables 
 - **WHEN** the deep-research app is started with `OPIK_TRACING_ENABLED=true` but the Opik stack has not been started (`make opik-up` was not run, or it was torn down via `make opik-down`)
 - **THEN** the app SHALL still start and accept chat completion requests, and request handling SHALL still produce successful DIAL responses (consistent with the deep-research app's tracing-failure-does-not-break-the-turn requirement); only the trace will be missing from Opik
 
-### Requirement: Both chat generations run side by side, opt-in
-
-The repository SHALL provide an opt-in Compose overlay that **adds** a next-generation chat UI and a
-themes service of its own to the stack, leaving the base `chat` and `themes` services running. Plain
-`make infra-up` SHALL be unaffected: it starts the base stack alone, with no next-generation service
-and no additional configuration required of a contributor who does not want one.
-
-Adding rather than replacing is the point. The two generations render an assistant message
-differently — only the newer one draws inline citation pills — so a report has to be openable in both
-to see what each does with it, which a swap-style overlay cannot show without a restart.
-
-The overlay SHALL satisfy the following:
-
-- **Both chats reachable at once**, on distinct host ports. The next-generation chat SHALL be served
-  on a host port that its OIDC client accepts as a redirect URI; a port the client does not know
-  fails the login with an invalid-redirect error, so this is a constraint rather than a preference.
-  With the base chat holding 3000 and the app's default holding 5000, the port that satisfies it is
-  **4207** (see the overlay decision in the design for the registered set). If the app is moved off
-  its default port, the overlay's note about that clash SHALL be revisited in the same edit rather
-  than left describing the old layout.
-- **Its own themes service, with its own pinned image.** A themes configuration built for one
-  generation loads without error in the other and applies almost nothing, so the two cannot share
-  one service.
-- **OIDC credentials from `.env` only.** The next-generation chat has no equivalent of the base
-  chat's `AUTH_DISABLED`, so it requires a real identity provider. Its credentials SHALL come from
-  `.env` and SHALL NOT appear in any committed file, and `.env.example` SHALL document the variables
-  it needs. Because a contributor without those values cannot start it, it SHALL remain opt-in —
-  this is why the services are not in the base compose file.
-- **Its own Makefile targets**, alongside the existing infra ones, to bring the combined stack up,
-  take it down, and tail its logs.
-
-The two chats authenticate as different identities — the base one under the development key, the
-next-generation one as a real user — so they resolve to different DIAL storage buckets and share no
-conversations. That is a property to rely on rather than work around: neither generation can read or
-overwrite the other's conversation records, and comparing how the two render one reply needs no
-shared conversation, because the demo completion's reply is the same every time.
-
-#### Scenario: The base stack is unchanged
-
-- **WHEN** a contributor runs `make infra-up` with no next-generation values in `.env`
-- **THEN** the base services SHALL start as before, no next-generation chat or themes service SHALL
-  be created, and nothing SHALL fail for the missing configuration
-
-#### Scenario: Both generations up together
-
-- **WHEN** a contributor runs the overlay's up target with the required `.env` values present
-- **THEN** the base chat and the next-generation chat SHALL both be reachable, each on its own host
-  port, against the same DIAL core
-
-#### Scenario: A report is compared across generations
-
-- **WHEN** the same reply carrying citation marker tags is requested from each chat
-- **THEN** the next-generation chat SHALL render inline citation pills for it, and the base chat
-  SHALL show what a client that does not understand those tags shows — which is the point of running
-  both, and the only way to observe it
-
-### Requirement: The annotations demo deployment is registered opt-in
+### Requirement: The annotations demo deployment is registered in the base stack
 
 The demo completion (see the **report-citations** capability) SHALL be reachable from the local stack
-without being present in a default one. Two switches, both off by default and both flipped by
-bringing up the next-generation chat overlay:
+through DIAL core. Its application entry SHALL live in a committed configuration file of its own,
+which the base `core` service always loads through `aidial.config.files`.
 
-- **In the app**, its registration SHALL be gated by its own environment flag, as the playground
-  channel's is.
-- **In DIAL core**, its application entry SHALL live in a committed configuration file of its own,
-  appended to core's `aidial.config.files` list by the same overlay that adds the next-generation
-  chat — never by the base stack. A default stack therefore SHALL NOT show an application whose
-  deployment nothing is serving.
+The app SHALL serve the demo only when its own environment flag is set, as the playground channel's
+registration is gated. A default stack therefore lists the demo application, and the demo answers
+only while the app runs with that flag.
 
 The demo SHALL ship no PDFs of its own, so the repository carries no sample binaries and no
 environment needs files placed on it. It SHALL cite what the caller attached, and SHALL state
@@ -334,17 +279,16 @@ Reaching the demo through core is what the registration is for: the attachments 
 per-request key, which only a call routed through core carries. Inspecting the payload without core
 is the unit tests' job, over the shared citation code, not a direct call's.
 
-#### Scenario: A default stack shows no demo application
+#### Scenario: The base stack registers the demo
 
-- **WHEN** a contributor generates the core config and runs `make infra-up` without the
-  next-generation chat overlay
-- **THEN** core SHALL NOT load the demo's application entry, and the chat UI SHALL NOT list it
+- **WHEN** a contributor generates the core config and runs `make infra-up`
+- **THEN** core SHALL load the demo's application entry, and the chat UI SHALL list it
 
-#### Scenario: The overlay registers it and the app serves it
+#### Scenario: The app serves the demo only behind its flag
 
-- **WHEN** a contributor brings up the overlay and runs the app with the demo's flag set
-- **THEN** the demo deployment SHALL be callable from the next-generation chat, and its reply SHALL
-  carry the citation marker tags and annotations
+- **WHEN** a contributor runs the app with the demo's flag set and calls the demo from the chat UI
+- **THEN** the demo deployment SHALL answer, and its reply SHALL carry the citation marker tags and
+  annotations; without the flag the app SHALL NOT serve that deployment
 
 #### Scenario: Attachments that cannot carry the report are reported, not ignored
 

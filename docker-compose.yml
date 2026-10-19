@@ -1,25 +1,47 @@
 services:
 
   themes:
-    image: epam/ai-dial-chat-themes:0.17.0
+    # Built for the 1.x chat line: a themes configuration built for another line loads without an
+    # error and applies almost nothing.
+    image: epam/ai-dial-chat-themes:0.21.0
     ports:
       - "3011:8080"
     restart: unless-stopped
 
   chat:
-    image: epam/ai-dial-chat:0.47.2
+    image: epam/ai-dial-chat:1.2.4
     ports:
-      - "3010:3000"
+      # Host port 4207, and not a preference: this chat logs users in through an identity provider
+      # that must accept http://localhost:4207 as a redirect URI, and an OIDC client that does not
+      # know the port fails the login with "Invalid parameter: redirect_uri". Change the port only
+      # together with the redirect URIs your provider registers. The backend-for-frontend listens
+      # on container port 5000; publishing it on 4207 leaves host 5000 to the app.
+      - "4207:5000"
     depends_on:
       - themes
       - core
+    env_file:
+      # The identity-provider credentials — the AUTH_KEYCLOAK_* values — come from .env, and none
+      # of them appears in this committed file. This chat has no mode without authentication, so
+      # it needs those values to log anyone in. See .env.example.
+      - .env
     environment:
-      NEXTAUTH_SECRET: "secret"
-      THEMES_CONFIG_HOST: "http://themes:8080"
-      DIAL_API_HOST: "http://core:8080"
+      # env_file brings the whole .env in, including app variables the chat also reads under the
+      # same name but validates differently: it accepts only debug/log/warn/error for LOG_LEVEL,
+      # so the app's LOG_LEVEL=INFO makes it exit at startup. `environment` wins over `env_file`.
+      LOG_LEVEL: "log"
+      PORT: "5000"
+      API_PREFIX: "api"
+      CORS_ORIGIN: "http://localhost:4207"
+      DIAL_CORE_URL: "http://core:8080"
       DIAL_API_KEY: ${DIAL_API_KEY:-dial_api_key}
-      AUTH_DISABLED: "true"
-      ENABLED_FEATURES: "conversations-section,prompts-section,top-settings,top-clear-conversation,top-chat-info,top-chat-model-settings,empty-chat-settings,header,footer,request-api-key,report-an-issue,likes,conversations-sharing,prompts-sharing,input-files,attachments-manager,conversations-publishing,prompts-publishing,input-links,custom-applications,message-templates,marketplace,quick-apps"
+      THEMES_CONFIG_URL: "http://themes:8080"
+      AUTH_SESSION_SECRET: ${AUTH_SESSION_SECRET:-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef}
+      AUTH_CALLBACK_BASE_URL: "http://localhost:4207"
+      AUTH_POST_LOGOUT_REDIRECT_URI: "http://localhost:4207"
+      # Sanctioned by the upstream .env.template for local HTTP; also disables HSTS and the
+      # CSP upgrade-insecure-requests directive.
+      AUTH_COOKIE_SECURE: "false"
     restart: unless-stopped
 
   redis:
@@ -31,7 +53,7 @@ services:
     restart: unless-stopped
 
   core:
-    image: epam/ai-dial-core:0.47.1
+    image: epam/ai-dial-core:0.49.2
     ports:
       - "8081:8080"
     depends_on:
@@ -39,10 +61,11 @@ services:
     environment:
       AIDIAL_SETTINGS: "/opt/settings/settings.json"
       JAVA_OPTS: "-Dgflog.config=/opt/settings/gflog.xml"
-      # Split config, merged by core in list order. All three are produced/kept local
-      # by `make infra-config`: generated models, the app-type registration rendered
-      # with APP_PORT, and the seeded applications. See README "DIAL core configuration".
-      aidial.config.files: '["/opt/config/generated/models.json", "/opt/config/generated/application-schemas.json", "/opt/config/applications.json"]'
+      # Split config, merged by core in list order. The first three are produced/kept local by
+      # `make infra-config`: generated models, the app-type registration rendered with APP_PORT,
+      # and the seeded applications. The last is the committed inline-citations demo entry, which
+      # the app serves only with ENABLE_ANNOTATIONS_DEMO set. See README "DIAL core configuration".
+      aidial.config.files: '["/opt/config/generated/models.json", "/opt/config/generated/application-schemas.json", "/opt/config/applications.json", "/opt/config/annotations-demo-applications.json"]'
       aidial.redis.singleServerConfig.address: "redis://redis:6379"
     volumes:
       - ./dial_conf/settings:/opt/settings:ro
@@ -52,7 +75,7 @@ services:
     restart: unless-stopped
 
   ai-dial-adapter-dial:
-    image: epam/ai-dial-adapter-dial:0.16.0
+    image: epam/ai-dial-adapter-dial:0.20.0
     environment:
       DIAL_URL: "http://core:8080"
       LOG_LEVEL: "INFO"
