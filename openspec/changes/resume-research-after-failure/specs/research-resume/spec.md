@@ -8,11 +8,14 @@ instead of starting it again.
 
 ### Requirement: A research failure saves a snapshot of the research progress
 
-When an exception ends a research run after `start_research` passed its gate, in the graph or in
-the tool setup before it, the turn SHALL save a snapshot of the progress with its single state
-write, then deliver the original error (**dial-agent-with-mcp**). Any kind counts (a quota error, an
-upstream outage, a timeout, a bug), except a failure a resume would repeat (next requirement) and a
-refusal of the snapshot being resumed.
+When an exception ends a research run after `start_research` passed its gate, and the research
+graph has streamed at least one state, the turn SHALL save a snapshot of the progress with its
+single state write, then deliver the original error (**dial-agent-with-mcp**). Any kind counts (a
+quota error, an upstream outage, a timeout, a bug), and so does a failure a resume would repeat,
+whose snapshot is marked not resumable (**Failures a resume would repeat save a snapshot that is
+never resumed**). No snapshot is saved when the run fails before its graph streamed any state, or
+when the snapshot being resumed is refused. Once the report loop has settled a draft, the run does
+not fail at all (**A turn never fails once its report is written**).
 
 #### Scenario: A quota error inside research-agent
 
@@ -26,16 +29,16 @@ refusal of the snapshot being resumed.
 - **WHEN** the research-review model call fails with an HTTP 502 from DIAL Core
 - **THEN** the turn SHALL persist a snapshot and deliver the error, exactly as for a quota error
 
-#### Scenario: A failure in preparation saves nothing
+#### Scenario: A failure in preparation saves no snapshot
 
 - **WHEN** the preparation agent's model call raises a quota error, before `start_research` passed
-- **THEN** the turn SHALL persist no state, because there is no research progress to save
+- **THEN** the turn SHALL save no snapshot, because there is no research progress to save, and
+  SHALL persist only its failure record (**Every failed turn records that it failed**)
 
-#### Scenario: A failure in the delivery step saves nothing
+#### Scenario: The research tools cannot be loaded
 
-- **WHEN** the research graph finished and an exception escapes the delivery step that runs the
-  citation step and appends the report
-- **THEN** the turn SHALL persist no state and SHALL deliver the error
+- **WHEN** an MCP server cannot be reached while the research tools load, before the graph starts
+- **THEN** the turn SHALL save no snapshot and SHALL persist only its failure record
 
 #### Scenario: A failed tool call does not end research
 
@@ -47,7 +50,7 @@ refusal of the snapshot being resumed.
 
 - **WHEN** the research run ends because the user pressed Stop, the client disconnected, DIAL
   Core's idle timeout closed the connection, or the pod was killed
-- **THEN** no snapshot SHALL be saved, and research on a later turn SHALL start from zero
+- **THEN** no state SHALL be saved, and research on a later turn SHALL start from zero
 - **AND** this SHALL stand as an accepted limitation: the connection is gone by the time the turn
   ends, and the DIAL SDK allows one state write per turn, so the progress cannot be sent while
   research runs
@@ -55,29 +58,110 @@ refusal of the snapshot being resumed.
 #### Scenario: A non-streaming request carries no snapshot
 
 - **WHEN** a research run fails on a non-streaming request
-- **THEN** the client SHALL receive the error alone and no snapshot, because the DIAL SDK raises on
+- **THEN** the client SHALL receive the error alone and no state, because the DIAL SDK raises on
   the error chunk and drops the merged response, state included; a resume therefore needs a
   streaming client, which DIAL Chat and StatGPT both are
 
-### Requirement: Failures a resume would repeat save no snapshot
+### Requirement: Every failed turn records that it failed
 
-Two failure classes SHALL save no snapshot: a model call that rejected its input, and an exhausted
-research step budget. A resume would replay the run's input and state and likely fail the same way.
-The turn SHALL persist an empty `messages` and its `PrepState` with approval, research-started and
-plan id cleared, so no earlier snapshot can match. These classes are excluded on purpose; any later
-retry or resume mechanism SHALL exclude them too, unless it changes what is re-sent.
+A turn that fails and is delivered as a protocol error SHALL persist a state that carries a failure
+flag, under a key of its own and never inside `PrepState`, which every turn carries forward. A turn
+whose research run saved a snapshot persists the parts that **A failed research turn persists the
+snapshot beside a reset PrepState** lists, the flag among them. Any other failed turn SHALL persist
+an empty `messages`, the `PrepState` the request's history held when the turn started, and the
+flag. That `PrepState` is read again from the request, so a failure during preparation never
+changes the recorded query, plan or plan id. These cases persist nothing: a failure before the
+conversation's state is loaded and checked, such as a failure while the application properties
+are fetched or validated; a cancellation; a non-streaming request; and the refusal of a
+conversation whose report was delivered.
+
+#### Scenario: A failure while the properties are fetched persists nothing
+
+- **WHEN** fetching the application properties fails on a conversation that has a recorded plan
+- **THEN** the turn SHALL persist no state, and the next turn SHALL read the latest earlier state,
+  so the recorded query, plan and plan id stay as they were
+
+#### Scenario: A preparation failure keeps the turn's starting state
+
+- **WHEN** the user approves the plan and the approval check then fails with a quota error
+- **THEN** the persisted `PrepState` SHALL equal the one the turn started from, and the state SHALL
+  carry the failure flag
+
+#### Scenario: The flag is not carried forward
+
+- **WHEN** a turn completes after a failed turn
+- **THEN** its state SHALL carry no failure flag
+
+#### Scenario: Saving the failure record never hides the failure
+
+- **WHEN** persisting the failure record itself raises
+- **THEN** the turn SHALL persist no state, SHALL record the save failure once
+  (**logging-policy**), and SHALL deliver the original error
+
+### Requirement: A turn never fails once its report is written
+
+A report costs a whole research run, so once the report loop has settled a draft the turn SHALL
+complete without a protocol error, whatever fails after that point. A cancellation is the one
+exception, because the connection is gone. Every later step SHALL absorb its own failure, keep what
+it already did, and record the failure once (**logging-policy**): the citation step, appending the
+report, sending its annotations, recording the citation outcome, and saving the turn's state.
+Through StatGPT this decides whether the user gets the report at all, because StatGPT shows a
+report only when Deep Research's answer ends without an error and its state says research started.
+
+The final save SHALL still close the conversation. When an image cannot be uploaded for any reason,
+the files bucket that cannot be resolved included, the image SHALL be replaced by the upload-failure
+placeholder (**dial-agent-with-mcp**), and the state SHALL be saved with the research-started flag
+set, like that of any turn whose report was delivered. When building or writing the state itself
+fails, the turn SHALL still complete without an error, and it SHALL persist no state.
+
+Two outcomes of a failed step are accepted, because only a bug or a failed state write causes them.
+When appending the report itself fails, the report does not reach the user, yet the saved state
+closes the conversation. When the state cannot be written, the answer carries no state: through
+DIAL Chat the conversation stays open, and through StatGPT the report is not shown as a report,
+because StatGPT then reads the answer as a clarification.
+
+#### Scenario: The files bucket cannot be resolved at the final save
+
+- **WHEN** research delivered its report and resolving the DIAL files bucket for the transcript's
+  images then raises
+- **THEN** the turn SHALL end without a protocol error, and its state SHALL be saved with each image
+  replaced by its placeholder and the research-started flag set
+
+#### Scenario: An unexpected failure in the citation step
+
+- **WHEN** the report loop settled a draft and the citation step raises outside its own passes
+- **THEN** the turn SHALL deliver the draft as the review settled it, and SHALL end without a
+  protocol error
+
+#### Scenario: A delivered report through StatGPT
+
+- **WHEN** a turn called through StatGPT delivers its report, and the citation step or the image
+  upload of the final save then fails
+- **THEN** Deep Research's answer SHALL end without an error and carry a state whose research-started
+  flag is set, so StatGPT shows the report to the user
+
+### Requirement: Failures a resume would repeat save a snapshot that is never resumed
+
+Two failure classes SHALL save their snapshot marked not resumable: a model call that rejected its
+input, and an exhausted research step budget. A resume would replay the run's input and state and
+likely fail the same way. The snapshot is kept so that a developer can see what happened during the
+run when the client hides Deep Research's stages. It SHALL never be resumed, and research on a later
+turn SHALL start from the beginning. The classes are this list, not the protocol error's retryable
+classification: an authentication failure or a bug is not retryable, yet a resume succeeds once it
+is fixed. These classes are excluded from resuming on purpose; any later retry or resume mechanism
+SHALL exclude them too, unless it changes what is re-sent.
 
 #### Scenario: The context outgrew the model
 
 - **WHEN** a research model call is rejected with the error code `context_length_exceeded` or
   `truncate_prompt_error`
-- **THEN** the turn SHALL save no snapshot and SHALL deliver the error as today, because the
-  research transcript only grows and a resumed call would send at least the same messages again
+- **THEN** the turn SHALL save a snapshot marked not resumable and SHALL deliver the error, because
+  the research transcript only grows and a resumed call would send at least the same messages again
 
 #### Scenario: A content filter rejected the call
 
 - **WHEN** a research model call is rejected with the error code `content_filter`
-- **THEN** the turn SHALL save no snapshot and SHALL deliver the error as today
+- **THEN** the turn SHALL save a snapshot marked not resumable and SHALL deliver the error
 - **AND** this SHALL hold even when the filter judged the model's output, which a new attempt might
   pass: the code does not say which side the filter judged, and that resume is knowingly given up
 
@@ -85,13 +169,13 @@ retry or resume mechanism SHALL exclude them too, unless it changes what is re-s
 
 - **WHEN** a research model call fails with HTTP 400, 413 or 422, for example because a tool result
   carries an image the model cannot accept
-- **THEN** the turn SHALL save no snapshot and SHALL deliver the error as today
+- **THEN** the turn SHALL save a snapshot marked not resumable and SHALL deliver the error
 
 #### Scenario: The step budget ran out
 
 - **WHEN** a research-agent iteration exhausts the research step budget
-- **THEN** the turn SHALL save no snapshot and SHALL deliver the step-budget error, whose advice to
-  narrow the request and start a new conversation stays true
+- **THEN** the turn SHALL save a snapshot marked not resumable and SHALL deliver the step-budget
+  error
 - **AND** no later turn SHALL re-enter that iteration, which would hand an agent that did not finish
   its whole transcript and a fresh step budget
 
@@ -99,36 +183,29 @@ retry or resume mechanism SHALL exclude them too, unless it changes what is re-s
 
 - **WHEN** a context-length rejection reaches the turn wrapped in a concurrency runtime's container
 - **THEN** it SHALL be classified as the rejection it holds, as the error resolution unwraps it, and
-  the turn SHALL save no snapshot
+  the turn's snapshot SHALL be marked not resumable
 
-#### Scenario: Failures a resume can get past still save a snapshot
+#### Scenario: Failures a resume can get past save a resumable snapshot
 
 - **WHEN** a research model call fails with a quota 429, an HTTP 502 or 503, or a timeout
-- **THEN** the turn SHALL save a snapshot, because the same call can succeed once the quota resets
-  or the upstream recovers
+- **THEN** the turn SHALL save a resumable snapshot, because the same call can succeed once the
+  quota resets or the upstream recovers
 
 #### Scenario: A resumed run that hits such a failure does not replay the earlier snapshot
 
 - **WHEN** a run failed with a quota error and saved a snapshot, a later turn resumed from it and
   failed with `context_length_exceeded`, and the user then asks to continue
-- **THEN** the failed resumed turn SHALL have persisted the reset `PrepState` with its plan id
-  cleared, so the earlier snapshot no longer matches; research SHALL start from zero with a fresh
-  plan id, and the turn SHALL show the "[DEBUG] existing snapshot discarded" stage
-- **AND** on that turn the earlier failed turn SHALL be followed by the not-resumable note, since its
-  snapshot no longer belongs to the current plan
-
-#### Scenario: The failed turn reads as a failed answer
-
-- **WHEN** a turn follows a turn that failed with one of these classes
-- **THEN** the preparation agent's history SHALL hold that turn's visible answer text, as for a
-  failed turn before this capability, because its persisted `messages` is empty
+- **THEN** the failed resumed turn SHALL have saved a snapshot marked not resumable, which is now the
+  latest snapshot in the history; research SHALL start from zero, and the turn SHALL show the
+  "[DEBUG] existing snapshot discarded" stage with the reason that the snapshot is not resumable
 
 ### Requirement: A failed research turn persists the snapshot beside a reset PrepState
 
-The state a failed research turn writes when it saves a snapshot SHALL carry three parts. Under `messages` it holds only
-the turn's preparation messages. Under `preparation` it holds the turn's `PrepState`, with the
-plan-approved and research-started flags reset and the query, the plan and the plan id kept. Under
-a key of its own it holds the snapshot. The research transcript SHALL be stored only in the
+The state a failed research turn writes when it saves a snapshot SHALL carry four parts. Under
+`messages` it holds only the turn's preparation messages. Under `preparation` it holds the turn's
+`PrepState`, with the plan-approved and research-started flags reset and the query, the plan and the
+plan id kept. Under a key of its own it holds the snapshot. It also carries the failure flag
+(**Every failed turn records that it failed**). The research transcript SHALL be stored only in the
 snapshot.
 
 #### Scenario: The next turn is not refused
@@ -147,15 +224,17 @@ snapshot.
 #### Scenario: A successful turn carries no snapshot
 
 - **WHEN** a turn completes, with or without research
-- **THEN** its state SHALL carry no snapshot, and no earlier snapshot SHALL be copied into it
+- **THEN** its state SHALL carry no snapshot and no failure flag, and no earlier snapshot SHALL be
+  copied into it
 
 ### Requirement: The snapshot holds what a resumed run needs
 
 A snapshot SHALL hold: its format version; the plan id that was current when research started;
-the resume point; the research transcript; the research graph's channels; and the turn's
-data-query records. The resume point is named in the app's own terms (research, research review,
-report, report review), not by graph node. The channels are the query, the plans, the iteration
-count, the latest draft and its number, the revision instruction and the revision-failed flag.
+whether it may be resumed; the resume point; the research transcript; the research graph's
+channels; and the turn's data-query records. The resume point is named in the app's own terms
+(research, research review, report, report review), not by graph node. The channels are the query,
+the plans, the iteration count, the latest draft and its number, the revision instruction and the
+revision-failed flag.
 
 #### Scenario: Images are stored as file URLs
 
@@ -204,10 +283,7 @@ that round.
 ### Requirement: The resume point is the node that was running
 
 The snapshot's resume point SHALL name the node that was running when the failure happened. Its
-channels SHALL be the research graph's state as that node received it. When the run fails before
-the graph produced any state, the snapshot SHALL be built from the state the run started from. On
-a fresh run that is the initial state. On a resumed run it is the snapshot the run started from,
-saved unchanged, unless the failure is a refusal of that snapshot.
+channels SHALL be the research graph's state as that node received it.
 
 #### Scenario: research-review fails
 
@@ -219,82 +295,55 @@ saved unchanged, unless the failure is a refusal of that snapshot.
 - **WHEN** the report node fails while it writes draft 1
 - **THEN** the snapshot's resume point SHALL be report, and it SHALL hold no draft and draft number 0
 
-#### Scenario: The research tools cannot be loaded on a fresh run
-
-- **WHEN** an MCP server cannot be reached while the research tools load, before the graph starts
-- **THEN** the snapshot SHALL hold the initial state: resume point research, and a transcript of the
-  first iteration's instruction alone
-
-#### Scenario: A resumed run fails before its graph starts
-
-- **WHEN** a resumed run fails before its graph produced any state, for example because a snapshot
-  image still could not be downloaded after three attempts
-- **THEN** the turn SHALL save the snapshot it started from, unchanged
-
 ### Requirement: A snapshot that cannot be built does not hide the failure
 
-When building or saving the snapshot raises, the turn SHALL persist no state and SHALL deliver the
-original error, not the snapshot's. The snapshot's failure SHALL be recorded once
-(**logging-policy**) and SHALL cost only the resume.
+When building or saving the snapshot raises, its image upload included, the turn SHALL drop the
+snapshot, persist only its failure record (**Every failed turn records that it failed**), and
+deliver the original error, not the snapshot's. The snapshot's failure SHALL be recorded once
+(**logging-policy**) and SHALL cost only the resume. A snapshot too large for DIAL Core is not
+caught this way: saving it does not raise, and DIAL Core rejects a later request that carries it.
+The app has no size check for it.
 
 #### Scenario: The upload bucket cannot be resolved
 
 - **WHEN** research-agent fails with a quota error and resolving the DIAL files bucket for the
   snapshot's images then raises
-- **THEN** the turn SHALL persist no state and SHALL deliver the quota error, not the bucket error
+- **THEN** the turn SHALL persist its failure record without a snapshot and SHALL deliver the quota
+  error, not the bucket error
 
-### Requirement: A failed-turn note follows every failed research turn
+### Requirement: A failed-turn note follows every failed turn
 
-The preparation agent's history SHALL contain a fixed note, as a system message, directly after
-every assistant message carrying a snapshot. A snapshot whose plan id equals that of the turn's
-loaded `PrepState` gets the resumable note; a snapshot of another plan gets the not-resumable note;
-a snapshot whose plan id cannot be read gets none. The clarity and approval checks SHALL receive the
-same note as a `System note:` line at that position.
+The preparation agent's history SHALL contain one fixed note, as a system message, directly after
+every assistant message whose state carries the failure flag. The clarity and approval checks SHALL
+receive the same note as a `System note:` line at that position.
 
-#### Scenario: What the resumable note says
+#### Scenario: What the note says
 
-- **WHEN** the resumable note is rendered
-- **THEN** it SHALL say four things: the research run that the previous user message started failed
-  before it finished; nothing of that run was delivered to the user; its progress was saved, so
-  research on the same query and plan can continue; and the plan's approval was reset, so continuing
-  means calling `approve_plan`, then `start_research`
-- **AND** it SHALL NOT carry the error text, the error reference or any other internal detail
-
-#### Scenario: What the not-resumable note says
-
-- **WHEN** the not-resumable note is rendered
-- **THEN** it SHALL say that the research run the previous user message started failed before it
-  finished, that nothing of it was delivered to the user, that its progress cannot be continued,
-  and that research on the current query and plan starts from the beginning once the user approves
-  the plan, by calling `approve_plan`, then `start_research`
-- **AND** it SHALL NOT carry the error text, the error reference or the reason the progress cannot
-  be continued
+- **WHEN** the note is rendered
+- **THEN** it SHALL say two things: the previous user message failed with an error before its answer
+  finished; and if the user asks to continue a research whose plan they had approved, the agent
+  calls `approve_plan`, then `start_research`, and otherwise handles the user's request as usual
+- **AND** it SHALL NOT say whether research progress was saved, and SHALL NOT carry the error text,
+  the error reference or any other internal detail
 
 #### Scenario: The user asks what happened
 
-- **WHEN** the user's message after a failed research turn asks what happened to the request
-- **THEN** the preparation agent SHALL be able to answer from the note that the research run failed
-  before a report and can continue, research SHALL NOT start, and a later request to continue SHALL
-  still resume
+- **WHEN** the user's message after a failed turn asks what happened to the request
+- **THEN** the preparation agent SHALL be able to answer from the note that the request failed with
+  an error, research SHALL NOT start, and a later request to continue SHALL still resume when the
+  latest snapshot is a resumable snapshot of the current plan
 
 #### Scenario: The note keeps its position
 
-- **WHEN** several turns follow a failed research turn, with the plan unchanged
+- **WHEN** several turns follow a failed turn
 - **THEN** on each of them the note SHALL appear directly after the failed turn's messages, so the
   history before it stays the same from turn to turn
 
-#### Scenario: A snapshot of an earlier plan gets the not-resumable note
+#### Scenario: A failure in preparation gets the note
 
-- **WHEN** after a failed research run the user changed the plan, or a later failure a resume would
-  repeat cleared the plan id
-- **THEN** the failed turn's messages SHALL be followed by the not-resumable note, so the agent
-  neither reads the turn's `start_research` hand-off as research still running nor is promised
-  progress that can no longer be resumed
-
-#### Scenario: A snapshot whose plan id cannot be read gets no note
-
-- **WHEN** a failed turn's snapshot carries no readable plan id
-- **THEN** history reconstruction SHALL add no note for it and SHALL NOT fail
+- **WHEN** the approval check fails with a quota error, and the user then writes "continue"
+- **THEN** the preparation agent's history SHALL hold the failed turn's visible answer text, then the
+  note, then the user's message
 
 ### Requirement: A request to continue resumes research in the same turn
 
@@ -310,12 +359,13 @@ the failure (**clarification-and-plan-alignment**).
 - **THEN** in that turn `approve_plan` SHALL approve the recorded plan, `start_research` SHALL pass
   its gate, and research SHALL resume from the snapshot, with no plan presented in between
 
-### Requirement: Research resumes only from the latest snapshot of the current plan
+### Requirement: Research resumes only from the latest resumable snapshot of the current plan
 
 When research starts in a turn, the app SHALL take the latest assistant message in the history that
 carries a snapshot. It SHALL resume from that snapshot only when the snapshot's plan id equals the
-current plan id; otherwise research SHALL start fresh. Turns between the failure and the resume
-SHALL NOT hide the snapshot.
+current plan id and the snapshot is not marked not resumable; otherwise research SHALL start fresh.
+Turns between the failure and the resume, failed turns that saved no snapshot among them, SHALL NOT
+hide the snapshot.
 
 #### Scenario: A question between the failure and the resume
 
@@ -325,7 +375,7 @@ SHALL NOT hide the snapshot.
 #### Scenario: "continue" while the quota is still exhausted
 
 - **WHEN** the user asks to continue while the quota is still exhausted, so the preparation turn
-  fails and saves nothing, and later asks to continue again
+  fails and saves only its failure record, and later asks to continue again
 - **THEN** the later turn SHALL resume from the snapshot of the original failed turn
 
 #### Scenario: A changed query or plan starts fresh
@@ -334,11 +384,24 @@ SHALL NOT hide the snapshot.
   `update_plan` runs, and then approves the new plan
 - **THEN** research SHALL start from zero, and the old snapshot SHALL be discarded
 
+#### Scenario: A snapshot that is not resumable starts fresh
+
+- **WHEN** research starts and the latest snapshot in the history is marked not resumable
+- **THEN** research SHALL start from zero, even though the snapshot's plan id equals the current one
+
 #### Scenario: A second failure during a resumed run
 
-- **WHEN** a resumed run fails again, with a failure a resume can get past
+- **WHEN** a resumed run fails again, after its graph streamed state, with a failure a resume can
+  get past
 - **THEN** the turn SHALL save a new snapshot, and the next request to continue SHALL resume from
   the new one
+
+#### Scenario: A resumed run that fails before its graph starts keeps the earlier snapshot
+
+- **WHEN** a resumed run fails before its graph streamed any state, for example because an MCP
+  server cannot be reached while the research tools load
+- **THEN** the turn SHALL save no snapshot, its failure record SHALL keep the plan id, and the next
+  request to continue SHALL resume from the snapshot the failed turn started from
 
 #### Scenario: No snapshot in the history
 
@@ -348,8 +411,8 @@ SHALL NOT hide the snapshot.
 ### Requirement: A plan recorded without a plan id gets one when research starts
 
 When research starts on a plan that carries no plan id, the app SHALL give it a fresh plan id
-before research runs. A plan has none when it was recorded before plan ids existed, or when a
-failure a resume would repeat cleared its id. A failure of that new research can then be resumed.
+before research runs. A plan has none when it was recorded before plan ids existed. A failure of
+that new research can then be resumed.
 
 #### Scenario: A plan recorded before the upgrade
 
@@ -357,11 +420,6 @@ failure a resume would repeat cleared its id. A failure of that new research can
   fails
 - **THEN** the persisted `PrepState` and the snapshot SHALL carry the same fresh plan id, and a
   request to continue SHALL resume from the snapshot
-
-#### Scenario: A plan whose id a carved-out failure cleared
-
-- **WHEN** research starts on a plan whose id was cleared by a turn that exhausted the step budget
-- **THEN** the plan SHALL get a fresh plan id, which no snapshot in the history carries
 
 ### Requirement: A resumed run re-enters the graph at the node that failed
 
@@ -409,7 +467,7 @@ can tell a resumed run from a fresh one.
 - **WHEN** a resumed run delivers its report
 - **THEN** the turn's state SHALL carry the whole research transcript, the snapshot's and this
   turn's, with the report, and a `PrepState` whose research-started flag is set; it SHALL carry no
-  snapshot
+  snapshot and no failure flag
 
 ### Requirement: A snapshot's images are downloaded before the resumed run starts
 
@@ -427,20 +485,23 @@ reconstruction puts in place of an image it cannot download is not used for a sn
 
 - **WHEN** a snapshot image's download answers 404
 - **THEN** it SHALL NOT be retried, and the turn SHALL be refused as for a snapshot that cannot be
-  read: the "an error on our side prevents resuming" message, and no state persisted
+  read: the "an error on our side prevents resuming" message, and only the failure record persisted
 
 #### Scenario: A download keeps failing
 
 - **WHEN** a snapshot image cannot be downloaded in three attempts, for a reason other than a 404
 - **THEN** the turn SHALL fail with the retryable message that the saved research progress could not
-  be loaded (**dial-agent-with-mcp**), and SHALL save the snapshot it started from, unchanged
+  be loaded (**dial-agent-with-mcp**), SHALL save no new snapshot, and the snapshot it started from
+  SHALL stay the latest one, so a later request to continue can try again
 
 ### Requirement: The snapshot format is versioned and read tolerantly
 
 A snapshot SHALL carry a format version. Its reader SHALL ignore fields it does not know. Where a
 field is absent and has a default, the reader SHALL use the default, so a change that only adds
 such fields keeps the version. A change that a reader of the current version could not read SHALL
-bump the version.
+bump the version. The plan id, the resumable mark and the version form a header that every format
+version SHALL keep, so that any release can tell whether a snapshot is to be resumed before it reads
+the rest.
 
 #### Scenario: A field added by a later release
 
@@ -449,46 +510,49 @@ bump the version.
 
 ### Requirement: A matching snapshot that cannot be read fails the turn
 
-The app SHALL compare plan ids before it reads the rest of the snapshot. A matching snapshot whose
-version this code does not read SHALL fail the turn with a non-retryable error: the research was
-saved by a different version and cannot be resumed. A matching snapshot that cannot be read for any
-other reason SHALL fail the turn with a non-retryable error: an error on our side prevents resuming
-it. Neither refusal persists state.
+The app SHALL compare plan ids, then read the resumable mark, before it reads the rest of the
+snapshot. A matching resumable snapshot whose version this code does not read SHALL fail the turn
+with a non-retryable error: the research was saved by a different version and cannot be resumed. A
+matching resumable snapshot that cannot be read for any other reason SHALL fail the turn with a
+non-retryable error: an error on our side prevents resuming it. Neither refusal saves a snapshot:
+the turn persists only its failure record, which keeps the plan id.
 
 #### Scenario: A snapshot saved by a different version
 
-- **WHEN** research starts with a matching snapshot whose format version this code does not read,
-  for example after a release changed the format, or after a rollback
+- **WHEN** research starts with a matching resumable snapshot whose format version this code does
+  not read, for example after a release changed the format, or after a rollback
 - **THEN** the turn SHALL fail with the "saved by a different version and cannot be resumed"
   message, which tells the user to start a new conversation (**dial-agent-with-mcp**)
 
 #### Scenario: A snapshot that fails to read
 
-- **WHEN** research starts with a matching snapshot of a known version that fails validation or
-  whose transcript cannot be decoded, or with a snapshot whose plan id cannot be read
+- **WHEN** research starts with a matching resumable snapshot of a known version that fails
+  validation or whose transcript cannot be decoded, or with a snapshot whose plan id cannot be read
+  or whose resumable mark is not a boolean
 - **THEN** the turn SHALL fail with the "an error on our side prevents resuming" message, which
   tells the user to start a new conversation, and the turn's error record SHALL carry the stack
   trace
 
-#### Scenario: A stale snapshot that cannot be read is discarded, not refused
+#### Scenario: A snapshot that will not be resumed is discarded, not refused
 
-- **WHEN** research starts with a snapshot whose plan id differs from the current one, whatever its
-  version or contents
+- **WHEN** research starts with a snapshot whose plan id differs from the current one, or which is
+  marked not resumable, whatever its version or contents
 - **THEN** research SHALL start fresh, and the snapshot SHALL be discarded without being read further
 
 #### Scenario: The refusal repeats
 
 - **WHEN** a turn was refused for a snapshot that cannot be read, and the user asks to continue
   again
-- **THEN** the turn SHALL be refused again in the same way, because the refusal persisted nothing
+- **THEN** the turn SHALL be refused again in the same way, because the refusal saved no snapshot
+  and kept the plan id, so the same snapshot is still the latest one and still matches
 
 ### Requirement: The turn shows whether it reused a snapshot
 
 When research starts and the history holds a snapshot, the turn SHALL show one stage. It is
 "[DEBUG] reusing snapshot" when the run resumes from the snapshot, and "[DEBUG] existing snapshot
-discarded" when the plan ids differ. Both stages SHALL carry only ids, names and counts. They SHALL
-always be emitted, because "[DEBUG]" is only part of the title. No such stage SHALL be shown when no
-snapshot is found.
+discarded" when the plan ids differ or the snapshot is marked not resumable. Both stages SHALL carry
+only ids, names and counts. They SHALL always be emitted, because "[DEBUG]" is only part of the
+title. No such stage SHALL be shown when no snapshot is found.
 
 #### Scenario: A reused snapshot
 
@@ -500,6 +564,8 @@ snapshot is found.
 
 #### Scenario: A discarded snapshot
 
-- **WHEN** research starts and the latest snapshot's plan id differs from the current one
+- **WHEN** research starts and the latest snapshot will not be resumed
 - **THEN** the "[DEBUG] existing snapshot discarded" stage SHALL carry the snapshot's plan id, the
-  current plan id and the resume point the snapshot names
+  current plan id, and the reason: the plan changed, or the snapshot is not resumable
+- **AND** it SHALL carry the resume point the snapshot names only when that reads as a known resume
+  point, because a discarded snapshot is not read past its header

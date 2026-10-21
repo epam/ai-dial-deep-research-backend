@@ -26,12 +26,12 @@ the intermediate tool-call messages — because the native `assistant.content` f
 is a display-only concatenation of streamed text and carries no boundaries from
 which the original message structure could be recovered.
 
-A research turn that **fails** writes its research slice elsewhere. Its `messages`
-field SHALL carry only the turn's preparation messages, and the research slice SHALL
-be written into the turn's snapshot instead, with its images uploaded the same way
-(**research-resume**). A failure a resume would repeat persists no messages and no
-snapshot, only the reset `PrepState` with its plan id cleared. History reconstruction never reads the snapshot, so a failed
-run's research transcript never reaches a later turn's preparation agent.
+A research turn that **fails** after its graph streamed state writes its research
+slice elsewhere. Its `messages` field SHALL carry only the turn's preparation
+messages, and the research slice SHALL be written into the turn's snapshot instead,
+with its images uploaded the same way (**research-resume**). Any other failed turn
+persists an empty `messages`. History reconstruction never reads the snapshot, so a
+failed run's research transcript never reaches a later turn's preparation agent.
 
 #### Scenario: Research turn slice is fully persisted
 
@@ -59,7 +59,7 @@ This asymmetry — user turns read from native `content`, assistant turns read f
 
 The system message provided by the DIAL request SHALL continue to be ignored on reconstruction; the app's own system prompt is supplied to `create_agent` directly.
 
-An assistant message whose `custom_content.state` also carries a snapshot — one written by a failed research turn — SHALL be reconstructed from its `messages` like any other. It SHALL be followed in the history by a fixed failed-turn note as a `SystemMessage` (**research-resume**): the resumable note when the snapshot's plan id equals the plan id of the turn's loaded `PrepState`, the not-resumable note for a snapshot of another plan, and no note when the snapshot's plan id cannot be read, which SHALL NOT fail the reconstruction. These notes are the only system messages the reconstructed history contains. Reconstruction SHALL read nothing of the snapshot but its plan id: its research transcript and images never enter the history, and an image of it that cannot be downloaded never costs the preparation agent anything.
+An assistant message whose `custom_content.state` carries the failure flag — one written by a failed turn — SHALL be reconstructed like any other: from its `messages` when they are non-empty, otherwise from its native `content`. It SHALL be followed in the history by one fixed failed-turn note as a `SystemMessage` (**research-resume**). These notes are the only system messages the reconstructed history contains. Reconstruction SHALL read nothing of a snapshot: its research transcript and images never enter the history, and an image of it that cannot be downloaded never costs the preparation agent anything.
 
 #### Scenario: Assistant turn with state replays the full slice
 - **WHEN** a request includes an assistant message whose `custom_content.state["messages"]` carries the encoded sequence `[ai(tool_calls=[X]), tool(X_result), ai(content="final")]`
@@ -82,8 +82,12 @@ An assistant message whose `custom_content.state` also carries a snapshot — on
 - **THEN** the reconstructed `ToolMessage` SHALL have the offending image block replaced by a `TextContentBlock` placeholder describing the loss, the failure SHALL be logged server-side, and the turn SHALL proceed normally rather than being delivered as a turn-aborting protocol error
 
 #### Scenario: A failed research turn is followed by the failed-turn note
-- **WHEN** a request includes an assistant message whose state carries preparation messages and a snapshot whose plan id equals that of the turn's loaded `PrepState`, followed by a user message
+- **WHEN** a request includes an assistant message whose state carries preparation messages, a snapshot and the failure flag, followed by a user message
 - **THEN** the reconstructed history at that position SHALL contain the decoded preparation messages, then the failed-turn note as a `SystemMessage`, then the user's `HumanMessage`, and SHALL contain nothing of the snapshot's transcript
+
+#### Scenario: A failed turn without a snapshot is followed by the failed-turn note
+- **WHEN** a request includes an assistant message whose state carries the failure flag and an empty `messages`, followed by a user message
+- **THEN** the reconstructed history at that position SHALL contain a single `AIMessage` with the message's native `content`, then the failed-turn note as a `SystemMessage`, then the user's `HumanMessage`
 
 ### Requirement: Tool-message image content uploaded to DIAL files before persistence
 
@@ -108,6 +112,10 @@ Before calling `choice.set_state(...)` at the end of each turn, the app SHALL up
 #### Scenario: Upload failure is fail-closed
 - **WHEN** the DIAL files upload for an image block raises an exception (network error, DIAL Core 5xx, auth failure, etc.)
 - **THEN** the offending block SHALL be removed from the buffered message and replaced in place with a `TextContentBlock` whose text describes the loss (e.g. `"[image upload failed: image/png, ~340 KB]"`), the exception SHALL be logged server-side, and `set_state` SHALL proceed with the rewritten slice — never with inline `base64` left in place
+
+#### Scenario: A files bucket that cannot be resolved is handled like a failed upload
+- **WHEN** resolving the DIAL files bucket raises while a turn's `messages` are about to be persisted
+- **THEN** every image block in them SHALL be replaced by the same placeholder a failed upload gets, the failure SHALL be logged server-side, and `set_state` SHALL proceed; a failed research turn's snapshot is handled by **research-resume** instead, which drops it
 
 #### Scenario: Persisted state stays below the DIAL request-body limit on multimodal turns
 - **WHEN** a turn produces one or more tool messages carrying image content totalling several MB of base64 in aggregate
@@ -150,7 +158,7 @@ user-facing message by a fixed precedence, most-specific first:
 
 Each resolution SHALL be classified retryable or not; the app SHALL append a single "try again
 later" sentence only to retryable resolutions, and SHALL NOT append it to a `display_message`
-resolution or to any non-retryable resolution (which carries its own advice). User-facing text
+resolution or to any non-retryable resolution. User-facing text
 SHALL contain only the upstream `display_message` (user-safe by DIAL contract) or curated wording
 — never a raw stack trace, endpoint, header, or the internal error message.
 
@@ -168,11 +176,13 @@ after the choice opens). Any content already appended to the choice SHALL remain
 error rendered beneath it — preparation text, which streams. A report cannot contribute partial
 content: its call is not streamed, and a completed draft reaches the choice only once the review
 loop settles. The app SHALL NOT append the
-error as ordinary assistant `content`, and SHALL NOT persist state on a turn that aborts, with one
-exception. A turn whose research run failed SHALL persist its snapshot state, and only then raise
-the error. A failure a resume would repeat persists no snapshot, only the reset `PrepState` with
-its plan id cleared (**research-resume**). On a streaming request the SDK sends a state set before
-the raise ahead of the error chunk, so the client keeps it with the failed answer. On a
+error as ordinary assistant `content`. A turn that aborts SHALL persist a state that records the
+failure, and only then raise the error (**research-resume**): with its snapshot when its research
+run saved one, otherwise only the failure flag and the `PrepState` the turn started from. A
+failure while the application properties are fetched or validated, and the refusal of a
+conversation whose report was delivered, SHALL persist no state. A turn does not abort at all once
+its report is written (**research-resume**). On a streaming request the SDK sends a state set
+before the raise ahead of the error chunk, so the client keeps it with the failed answer. On a
 non-streaming request the SDK raises on the error chunk and drops the merged response, state
 included, so such a turn carries no state at all. The state never carries the error text.
 
@@ -193,25 +203,26 @@ to **fetch** the properties from DIAL Core (as opposed to validate them) SHALL p
 top-level handler and resolve through the status/type map to a service message, rather than being
 reported as "not configured".
 
-Three more turn-aborting app conditions stop a resume (**research-resume**). A snapshot whose plan
-id matches but whose format version this code does not read SHALL resolve to a non-retryable
-message saying the research was saved by a different version of Deep Research and cannot be
-resumed, so the user should start a new conversation (outgoing 409). A snapshot whose plan id
-matches but which cannot be read for any other reason SHALL resolve to a non-retryable message
-saying an error on our side prevents resuming the research, so the user should start a new
-conversation (outgoing 500); a snapshot image whose download answers 404 counts as such a
-snapshot. A snapshot image that still cannot be downloaded after its attempts, for another reason,
-SHALL resolve to a retryable message saying the saved research progress could not be loaded
-(outgoing 500, "try again later" appended).
+Three more turn-aborting app conditions stop a resume (**research-resume**). A resumable snapshot
+whose plan id matches but whose format version this code does not read SHALL resolve to a
+non-retryable message saying the research was saved by a different version of Deep Research and
+cannot be resumed, so the user should start a new conversation (outgoing 409). A resumable snapshot
+whose plan id matches but which cannot be read for any other reason SHALL resolve to a
+non-retryable message saying an error on our side prevents resuming the research, so the user
+should start a new conversation (outgoing 500); a snapshot image whose download answers 404
+counts as such a snapshot. A snapshot image that still cannot be downloaded after its attempts,
+for another reason, SHALL resolve to a retryable message saying the saved research progress could
+not be loaded (outgoing 500, "try again later" appended).
 
 **Absorbed failures are unaffected.** Failures that are deliberately swallowed and never abort the
 turn SHALL NOT trigger this path: a failing tool call, which the **tool-call-fault-tolerance**
 capability retries where that helps and otherwise delivers to the agent as an error result
 (surfaced as a stage marked ❌), a failed report-review call and a failed report revision once a
 draft exists (both absorbed by the report loop, which delivers a draft instead), Opik-tracing
-failures, and image-rehydration failures during history reconstruction. These continue to let the
-turn complete normally. A snapshot image that cannot be downloaded for a resumed run is not one of
-them: it fails the turn (**research-resume**).
+failures, image-rehydration failures during history reconstruction, and every failure after the
+report loop has settled a draft (**research-resume**). These continue to let the turn complete
+normally. A snapshot image that cannot be downloaded for a resumed run is not one of them: it fails
+the turn (**research-resume**).
 
 #### Scenario: Upstream failure carrying a display message
 - **WHEN** an LLM call fails with an error whose DIAL body carries a `display_message`
@@ -241,11 +252,24 @@ them: it fails the turn (**research-resume**).
   retryable service internal-error message), and SHALL NOT resolve it to the generic non-retryable
   fallback on the grounds that the wrapper matches no supported exception shape
 
-#### Scenario: Context-length and content-filter causes get actionable text
+#### Scenario: Context-length and content-filter causes say what happened
 - **WHEN** the model rejects the request with `code: "context_length_exceeded"` or
   `code: "content_filter"`
-- **THEN** the code map SHALL resolve it to the actionable message (shorten the messages / rephrase
-  the message) ahead of the status ladder, classified non-retryable
+- **THEN** the code map SHALL resolve it, ahead of the status ladder and classified non-retryable,
+  to a message that states what happened (the AI model's context window was exceeded / the content
+  policy blocked the request) and that holds whether the call came from preparation or from
+  research, so it SHALL NOT tell the user to shorten their own messages
+
+#### Scenario: A rejected request and an exhausted step budget say what happened
+- **WHEN** the model rejects a call with HTTP 400, 413 or 422, or research exhausts its step budget
+- **THEN** the message SHALL state what happened and SHALL hold whether the call came from
+  preparation or from research
+- **AND** it SHALL drop the advice that does not fit a research call: "reduce the size of your
+  message or attachments" for a 413, "contact your administrator" for a 400 or 422, and "start a
+  new conversation" for the step budget, because a request to continue in the same conversation
+  starts the research again from the beginning (**research-resume**)
+- **AND** the code-map messages SHALL likewise drop "shorten your messages" for a context overflow
+  and "rephrase your message" for a content filter
 
 #### Scenario: MCP server unreachable
 - **WHEN** the MCP server cannot be reached at the configured endpoint during a turn
@@ -270,12 +294,12 @@ them: it fails the turn (**research-resume**).
 - **THEN** the app SHALL NOT write the error text into assistant `content` or into any persisted
   state, so a subsequent turn (e.g. after DIAL Chat regenerates) does not replay the error text to
   the model
-- **AND** a turn that failed outside its research run, in the delivery step after its research
-  graph finished, or with a refusal of the snapshot it resumes from (a snapshot image whose file is
-  gone included), SHALL persist no state; a turn whose research run failed with a failure a resume
-  would repeat SHALL persist only its reset `PrepState`, with the plan id cleared; any other turn
-  whose research run failed SHALL persist only its preparation messages, its reset `PrepState` and
-  its snapshot, and a later turn learns of that failure from the fixed failed-turn note alone
+- **AND** a turn whose research run saved a snapshot SHALL persist only its preparation messages,
+  its reset `PrepState`, its snapshot and the failure flag; a failure while the application
+  properties are fetched or validated, and the refusal of a conversation whose report was
+  delivered, SHALL persist no state; any other failed turn SHALL persist only an empty `messages`,
+  the `PrepState` it started from and the failure flag; and a later turn learns of the failure from
+  the fixed failed-turn note alone
 
 #### Scenario: A failed research turn persists its state ahead of the error
 - **WHEN** research-agent fails with a quota error on a streaming request
@@ -283,23 +307,25 @@ them: it fails the turn (**research-resume**).
   `{"error": ...}` chunk with DIAL Core's `display_message` and the error reference
 
 #### Scenario: A snapshot saved by a different version is refused
-- **WHEN** research starts with a matching snapshot whose format version this code does not read
+- **WHEN** research starts with a matching resumable snapshot whose format version this code does not read
 - **THEN** the app SHALL deliver a non-retryable protocol error (outgoing HTTP 409) whose text says
   the research was saved by a different version and cannot be resumed and asks the user to start a
-  new conversation, plus an error reference, and SHALL persist no state for the turn
+  new conversation, plus an error reference, and SHALL persist only the turn's failure record, with
+  no snapshot
 
 #### Scenario: A snapshot image that cannot be downloaded right now
 - **WHEN** a resumed run cannot download a snapshot image in three attempts, and no attempt answered 404
 - **THEN** the app SHALL deliver a retryable protocol error (outgoing HTTP 500) whose text says the
   saved research progress could not be loaded, followed by the "try again later" sentence and an
-  error reference, and SHALL persist the snapshot the turn started from, unchanged
+  error reference, and SHALL persist only the turn's failure record, so the snapshot the turn
+  started from stays the latest one
 
 #### Scenario: A snapshot that cannot be read is refused as our error
-- **WHEN** research starts with a matching snapshot of a known version that fails to read
+- **WHEN** research starts with a matching resumable snapshot of a known version that fails to read
 - **THEN** the app SHALL deliver a non-retryable protocol error (outgoing HTTP 500) whose text says
   an error on our side prevents resuming the research and asks the user to start a new
   conversation, plus an error reference, SHALL write the stack trace to the turn's error record,
-  and SHALL persist no state for the turn
+  and SHALL persist only the turn's failure record, with no snapshot
 
 #### Scenario: Unconfigured application delivered as a protocol error
 - **WHEN** a request's DIAL application properties cannot be validated
@@ -320,4 +346,3 @@ them: it fails the turn (**research-resume**).
 - **THEN** the failure SHALL propagate to the top-level handler and resolve through the status/type
   map to a service message with the appropriate retryability, rather than being reported as "not
   configured"
-

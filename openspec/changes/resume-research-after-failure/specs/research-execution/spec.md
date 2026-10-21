@@ -48,7 +48,7 @@ SHALL stop at the preparation stage as before.
 
 #### Scenario: A resumed run enters at the node that failed
 
-- **WHEN** research starts in a turn and the history holds a snapshot of the current plan whose resume point is report review
+- **WHEN** research starts in a turn and the latest snapshot in the history is a resumable snapshot of the current plan whose resume point is report review
 - **THEN** the graph SHALL go from `START` straight to report-review, seeded with the snapshot's channels, and no research-agent, research-review or report call SHALL run before it
 
 #### Scenario: Research does not run without approval
@@ -81,9 +81,9 @@ research-review and the report nodes see all accumulated tool results).
 
 A run that an exception ends is the one case that continues in a later turn: its snapshot lets a
 later turn, started by the user's request to continue, resume it (**research-resume**). A failure
-a resume would repeat leaves no snapshot, and research on a later turn starts fresh. The resumed
-run is again autonomous within its own turn, and its accumulated message context is the
-snapshot's transcript followed by what the resumed run adds, still without summarization.
+a resume would repeat leaves a snapshot that is never resumed, and research on a later turn starts
+fresh. The resumed run is again autonomous within its own turn, and its accumulated message context
+is the snapshot's transcript followed by what the resumed run adds, still without summarization.
 
 #### Scenario: Whole loop runs in one turn
 

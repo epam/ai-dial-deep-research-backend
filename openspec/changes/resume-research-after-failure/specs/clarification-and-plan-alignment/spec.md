@@ -11,15 +11,15 @@ SHALL be set only by `approve_plan`, and the research-started flag only by
 `start_research`. The plan id identifies the recorded query and plan, which a
 snapshot of failed research belongs to (**research-resume**). Only three tools
 write it: `update_plan` sets a fresh one, `update_query` clears it together with
-the plan, and `start_research` gives one to a plan that has none: a plan recorded
-before plan ids existed, or one whose id a research failure a resume would repeat
-cleared.
+the plan, and `start_research` gives one to a plan recorded before plan ids
+existed.
 
-The one write outside the tools is the state a failed research turn persists: a
-copy of `PrepState` with the plan-approved and research-started flags reset
-(**research-resume**). After a failure a resume would repeat, that copy also has
-the plan id cleared, so no earlier snapshot of the plan can match. It changes
-nothing the agent could have written.
+The one write outside the tools is the state a failed research turn persists when
+it saves a snapshot: a copy of `PrepState` with the plan-approved and
+research-started flags reset (**research-resume**). It changes nothing the agent
+could have written. Any other failed turn persists the `PrepState` the request's
+history held when the turn started, unchanged, so a failed turn without a snapshot
+never keeps what its own tool calls wrote.
 
 #### Scenario: The agent cannot self-approve a plan
 - **WHEN** the agent emits assistant text asserting the plan is approved without `approve_plan` having set the approval flag
@@ -29,9 +29,9 @@ nothing the agent could have written.
 - **WHEN** research fails with a quota error in the turn whose `start_research` set the research-started flag
 - **THEN** the persisted `PrepState` SHALL carry the same query, plan and plan id, with the plan-approved and research-started flags false
 
-#### Scenario: A failure a resume would repeat clears the plan id
-- **WHEN** research fails with `context_length_exceeded` in the turn whose `start_research` set the research-started flag
-- **THEN** the persisted `PrepState` SHALL carry the same query and plan, no plan id, and the plan-approved and research-started flags false
+#### Scenario: A failed preparation turn keeps the state it started from
+- **WHEN** `update_plan` records a new plan in a turn whose next model call then fails with a quota error
+- **THEN** the persisted `PrepState` SHALL equal the one the turn started from, without the new plan
 
 ### Requirement: update_query sets the working query and runs an independent clarity check
 
@@ -150,11 +150,11 @@ refuse and indicate that the latest plan must be recorded via `update_plan` firs
 There SHALL be no sentinel approval string. The tool SHALL fail when there is no
 recorded plan or the clarifications are unresolved.
 
-After a failed research run, the conversation carries the failed-turn note
-(**research-resume**), and the failure reset the approval. In that conversation, a
-user's request to continue or retry the research SHALL count as approval of the
-recorded plan, provided the user approved that same plan before the failure. The
-recorded-plan check applies as always. The note by itself approves nothing.
+After a failed turn, the conversation carries the failed-turn note
+(**research-resume**). In that conversation, a user's request to continue or retry
+the research SHALL count as approval of the recorded plan, provided the user
+approved that same plan before the failure. The recorded-plan check applies as
+always. The note by itself approves nothing.
 
 #### Scenario: Approval granted when the user approves the recorded plan
 - **WHEN** the recorded plan matches the plan discussed and the user's latest message approves it
@@ -185,12 +185,14 @@ message's `custom_content.state` — the `preparation` field of the unified
 `DialState` (a fresh `PrepState` when none is present). At the end of a turn it
 SHALL persist both the message slice and the resulting `PrepState` into
 `custom_content.state` as that unified `DialState` (under `messages` and
-`preparation` respectively) via `choice.set_state`. A turn whose research run
-failed persists as well: its preparation messages, its `PrepState` with the
-plan-approved and research-started flags reset, and its snapshot
-(**research-resume**). A turn that fails before its research starts, in the
-delivery step, or with a refusal of the snapshot it resumes from persists nothing. A research failure a resume would repeat persists an empty `messages`
-and the reset `PrepState` with its plan id cleared, and no snapshot. The app SHALL NOT keep server-side session state across requests.
+`preparation` respectively) via `choice.set_state`. A failed turn persists as well,
+with a failure flag (**research-resume**). A turn whose research run saved a
+snapshot persists its preparation messages, its `PrepState` with the plan-approved
+and research-started flags reset, and the snapshot. Any other failed turn persists
+an empty `messages` and the `PrepState` the request's history held when the turn
+started. A failure while the application properties are fetched or validated
+persists nothing, and a turn never fails once its report is written. The app SHALL
+NOT keep server-side session state across requests.
 
 #### Scenario: Turn persists transcript and PrepState
 - **WHEN** a turn completes
@@ -201,7 +203,7 @@ and the reset `PrepState` with its plan id cleared, and no snapshot. The app SHA
 - **THEN** the preparation agent for the new turn SHALL run with that `PrepState` restored, so the gates reflect the prior turn's progress without re-deriving it from the messages
 
 #### Scenario: The turn after a failed research run restores the plan without approval
-- **WHEN** a follow-up request's latest stateful assistant message was written by a failed research turn
+- **WHEN** a follow-up request's latest stateful assistant message was written by a failed research turn that saved a snapshot
 - **THEN** the preparation agent SHALL run with that turn's query, plan and plan id restored, and with the plan-approved and research-started flags false
 
 ### Requirement: Refuse input after research has started
@@ -239,9 +241,8 @@ updating this requirement.
 - Messages: the **full** conversation history reconstructed from the DIAL request — every user
   message as text, and for every prior assistant turn the persisted message slice (its
   `AIMessage`s and `ToolMessage`s) with image blocks rehydrated to base64, and directly after
-  every prior assistant turn whose state carries a snapshot a fixed failed-turn note as a system
-  message, resumable or not-resumable depending on whether the snapshot belongs to the current plan
-  (**research-resume**) — followed by the current turn's accumulated messages. A
+  every prior assistant turn whose state carries the failure flag one fixed failed-turn note as a
+  system message (**research-resume**) — followed by the current turn's accumulated messages. A
   snapshot's research transcript is never part of it. There SHALL be no truncation, windowing, or
   summarization; a turn that outgrows the model's context SHALL fail rather than silently drop
   history.
@@ -280,8 +281,8 @@ updating this requirement.
 
 #### Scenario: All three calls see the failed-turn note in place
 
-- **WHEN** a preparation turn runs on a conversation that holds a failed research turn followed by
-  the user's request to continue
+- **WHEN** a preparation turn runs on a conversation that holds a failed turn followed by the
+  user's request to continue
 - **THEN** the preparation agent's model call SHALL receive the failed-turn note as a system
   message between the failed turn's messages and the user's request, and the clarity check and the
   approval check SHALL each receive it as a `System note:` line at the same position in their

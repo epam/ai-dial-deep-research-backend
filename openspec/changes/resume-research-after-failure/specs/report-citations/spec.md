@@ -205,4 +205,3 @@ parts are in hand.
 - **WHEN** research starts fresh after the user changed the plan, and the history holds a snapshot
   with data-query records for the old plan
 - **THEN** the run SHALL start with no records, and a query id from the old run SHALL NOT resolve
-
