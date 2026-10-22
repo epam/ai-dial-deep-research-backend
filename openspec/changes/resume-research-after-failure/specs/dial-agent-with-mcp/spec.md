@@ -252,7 +252,7 @@ the turn (**research-resume**).
   retryable service internal-error message), and SHALL NOT resolve it to the generic non-retryable
   fallback on the grounds that the wrapper matches no supported exception shape
 
-#### Scenario: Context-length and content-filter causes say what happened
+#### Scenario: Context-length and content-filter causes get actionable text
 - **WHEN** the model rejects the request with `code: "context_length_exceeded"` or
   `code: "content_filter"`
 - **THEN** the code map SHALL resolve it, ahead of the status ladder and classified non-retryable,
