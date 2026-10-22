@@ -87,7 +87,6 @@ request only as this query restates it (see **faithful-relay**).
 - **WHEN** `update_query` is called after a plan was recorded (and possibly approved)
 - **THEN** the recorded plan and its plan id SHALL be cleared and the plan-approved flag SHALL be reset to false
 
-
 #### Scenario: A rounding request survives the restatement
 
 - **WHEN** the user asks for GDP growth by region "rounded to one decimal"

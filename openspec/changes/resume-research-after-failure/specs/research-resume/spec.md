@@ -137,8 +137,8 @@ because StatGPT then reads the answer as a clarification.
 
 - **WHEN** a turn called through StatGPT delivers its report, and the citation step or the image
   upload of the final save then fails
-- **THEN** Deep Research's answer SHALL end without an error and carry a state whose research-started
-  flag is set, so StatGPT shows the report to the user
+- **THEN** Deep Research's answer SHALL end without an error and carry a state whose
+  research-started flag is set, so StatGPT shows the report to the user
 
 ### Requirement: Failures a resume would repeat save a snapshot that is never resumed
 
@@ -195,8 +195,8 @@ SHALL exclude them too, unless it changes what is re-sent.
 
 - **WHEN** a run failed with a quota error and saved a snapshot, a later turn resumed from it and
   failed with `context_length_exceeded`, and the user then asks to continue
-- **THEN** the failed resumed turn SHALL have saved a snapshot marked not resumable, which is now the
-  latest snapshot in the history; research SHALL start from zero, and the turn SHALL show the
+- **THEN** the failed resumed turn SHALL have saved a snapshot marked not resumable, which is now
+  the latest snapshot in the history; research SHALL start from zero, and the turn SHALL show the
   "[DEBUG] existing snapshot discarded" stage with the reason that the snapshot is not resumable
 
 ### Requirement: A failed research turn persists the snapshot beside a reset PrepState
@@ -293,7 +293,8 @@ channels SHALL be the research graph's state as that node received it.
 #### Scenario: The report node fails on the first draft
 
 - **WHEN** the report node fails while it writes draft 1
-- **THEN** the snapshot's resume point SHALL be report, and it SHALL hold no draft and draft number 0
+- **THEN** the snapshot's resume point SHALL be report, and it SHALL hold no draft and
+  draft number 0
 
 ### Requirement: A snapshot that cannot be built does not hide the failure
 
@@ -342,8 +343,8 @@ receive the same note as a `System note:` line at that position.
 #### Scenario: A failure in preparation gets the note
 
 - **WHEN** the approval check fails with a quota error, and the user then writes "continue"
-- **THEN** the preparation agent's history SHALL hold the failed turn's visible answer text, then the
-  note, then the user's message
+- **THEN** the preparation agent's history SHALL hold the failed turn's visible answer text, then
+  the note, then the user's message
 
 ### Requirement: A request to continue resumes research in the same turn
 
@@ -448,7 +449,8 @@ can tell a resumed run from a fresh one.
 #### Scenario: Resuming at report-review
 
 - **WHEN** the snapshot's resume point is report review and it holds draft N
-- **THEN** report-review round N SHALL run over draft N, and drafts 1 to N SHALL NOT be written again
+- **THEN** report-review round N SHALL run over draft N, and drafts 1 to N SHALL NOT be
+  written again
 
 #### Scenario: The caps count the work done before the failure
 
@@ -537,7 +539,8 @@ the turn persists only its failure record, which keeps the plan id.
 
 - **WHEN** research starts with a snapshot whose plan id differs from the current one, or which is
   marked not resumable, whatever its version or contents
-- **THEN** research SHALL start fresh, and the snapshot SHALL be discarded without being read further
+- **THEN** research SHALL start fresh, and the snapshot SHALL be discarded without being
+  read further
 
 #### Scenario: The refusal repeats
 
@@ -557,8 +560,8 @@ title. No such stage SHALL be shown when no snapshot is found.
 #### Scenario: A reused snapshot
 
 - **WHEN** research resumes from a snapshot
-- **THEN** the "[DEBUG] reusing snapshot" stage SHALL carry the snapshot's plan id, its resume point,
-  its iteration count, the number of transcript messages, and the latest draft number
+- **THEN** the "[DEBUG] reusing snapshot" stage SHALL carry the snapshot's plan id, its resume
+  point, its iteration count, the number of transcript messages, and the latest draft number
 - **AND** for resume point research it SHALL also carry the number of agent turns the iteration had
   completed, and for resume point report review the report-review round
 

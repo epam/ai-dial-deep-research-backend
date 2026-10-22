@@ -353,8 +353,8 @@ Alternatives:
 
 ### D12. Data-query records as one JSON-encoded string
 
-`data_queries` is `json.dumps({query_id: record.model_dump(mode="json", by_alias=True)})`. It is read
-back with `json.loads` and `DataQueryRecord.model_validate`.
+`data_queries` is `json.dumps({query_id: record.model_dump(mode="json", by_alias=True)})`. It is
+read back with `json.loads` and `DataQueryRecord.model_validate`.
 
 The DIAL SDK's chunk merge re-slots every list of dicts whose elements carry an integer `index`,
 at any depth, and then deletes the key (`aidial_sdk/utils/merge_chunks.py`, verified on the
@@ -822,8 +822,8 @@ Alternatives:
 - **Verification during implementation.** Two unit tests use a real compiled research graph with
   a fake model:
   - **Capture.** The fake model raises on its third call. The test asserts the captured resume point
-    and transcript, which checks D3 against LangGraph's real event order: clearing on research-agent's
-    start, the namespace match, dropping the trailing model message.
+    and transcript, which checks D3 against LangGraph's real event order: clearing on
+    research-agent's start, the namespace match, dropping the trailing model message.
   - **Resume.** It resumes from that snapshot and asserts that only the failed model call runs again
     and that `research_iteration` comes out right.
 
