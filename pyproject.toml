@@ -43,7 +43,7 @@ Repository = "https://github.com/epam/ai-dial-deep-research-backend"
 tracing = ["opik>=2.0.0,<3.0.0"]
 
 [tool.poetry.group.dev.dependencies]
-black = ">=24.10.0"
+black = ">=26.10.1"
 isort = ">=5.13.2"
 ruff = ">=0.15.5"
 mypy = ">=1.13.0"
