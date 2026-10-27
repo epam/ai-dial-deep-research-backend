@@ -286,7 +286,7 @@ Decision numbers (D1–D22) refer to this change's `design.md`.
 - [x] 12.2 Run `openspec validate resume-research-after-failure --strict`; it reports no errors.
   The six "Requirement text is very long" warnings in `specs/research-resume/spec.md` are
   accepted.
-- [ ] 12.3 On the local stack, make a research-agent model call fail with a quota error, then write
+- [x] 12.3 On the local stack, make a research-agent model call fail with a quota error, then write
   "continue" through DIAL Chat once the failure is removed (design, Migration Plan). Check that the
   failed answer carries the snapshot; that "continue" goes through `approve_plan` and
   `start_research` in one turn without showing the plan; that the "[DEBUG] reusing snapshot" stage
@@ -294,7 +294,7 @@ Decision numbers (D1–D22) refer to this change's `design.md`.
   failure and "continue", and with a changed query, whose snapshot is discarded. This also checks
   the note's conditional wording and the `PLAN_REVIEW_SYSTEM` paragraph (design, Open Questions).
   Keep conversation artifacts and notes in `$TMPDIR`, outside the checkout.
-- [ ] 12.4 Check the whole change against `no_sensitive_info.md`: tests, fixtures, docstrings and
+- [x] 12.4 Check the whole change against `no_sensitive_info.md`: tests, fixtures, docstrings and
   docs use placeholders such as `ACME` and `IMF:WEO`, and nothing from the live runs of 12.3
   reaches the repository.
 
