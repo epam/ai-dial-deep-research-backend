@@ -161,3 +161,58 @@ async def test_the_playground_runs_its_own_fetch(monkeypatch: pytest.MonkeyPatch
 
     assert fetched == [properties]
     assert built["data_sources"] == _FETCHED.text
+
+
+def test_a_conversation_whose_research_failed_fetches_the_data_sources(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    fetches: list[ApplicationProperties],
+) -> None:
+    """A failed research turn persists research-started reset, so the conversation stays open."""
+
+    class _Prep:
+        appended_content = False
+
+        def __init__(self, choice: Any) -> None:
+            pass
+
+        async def run(self, **_: Any) -> list:
+            return []
+
+    async def no_persist(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    failed_research_state = {
+        "messages": [],
+        "preparation": PrepState(
+            current_query="How did inflation change in 2024?",
+            plan_id="0123abcd0123abcd0123abcd0123abcd",
+        ).model_dump(mode="json"),
+        "research_snapshot": {"plan_id": "0123abcd0123abcd0123abcd0123abcd", "resumable": True},
+        "turn_failed": True,
+    }
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _Prep)
+    monkeypatch.setattr(completion_module.DeepResearchCompletion, "_persist", no_persist)
+
+    response = client.post(
+        COMPLETIONS_URL,
+        json={
+            "messages": [
+                {"role": "user", "content": "yes, go"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "custom_content": {"state": failed_research_state},
+                },
+                {"role": "user", "content": "what happened?"},
+            ],
+            "stream": False,
+        },
+        headers={
+            "Api-Key": "test-key",
+            "X-DIAL-APPLICATION-PROPERTIES": json.dumps(_PROPERTIES),
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(fetches) == 1

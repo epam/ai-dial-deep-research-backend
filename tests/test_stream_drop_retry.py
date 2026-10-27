@@ -27,7 +27,7 @@ from tests.mcp_fakes import BOTH_SOURCE_KINDS
 
 @pytest.fixture(autouse=True)
 def _fast_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(llm_module, "_STREAM_DROP_INITIAL_DELAY", 0.01)
+    monkeypatch.setattr(llm_module, "STREAM_DROP_INITIAL_DELAY", 0.01)
 
 
 # --- with_stream_drop_retry ---------------------------------------------------------------------

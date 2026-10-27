@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+from aidial_client import ResourceNotFoundError
 from langchain_core.messages import (
     AIMessage,
     ToolMessage,
@@ -21,7 +22,13 @@ from langchain_core.messages import (
     messages_to_dict,
 )
 
+from dial_deep_research.app.error_resolution import (
+    SnapshotImageUnavailableError,
+    SnapshotUnreadableError,
+)
+from dial_deep_research.utils import image_attachments
 from dial_deep_research.utils.image_attachments import (
+    download_snapshot_images,
     rehydrate_image_blocks,
     upload_image_blocks,
 )
@@ -313,3 +320,132 @@ async def test_ai_message_image_block_is_uploaded_by_same_walker() -> None:
 
     assert "base64" not in ai_msg.content[0]
     assert ai_msg.content[0]["url"].endswith("dial-deep-research/lc_abc-0.png")
+
+
+# --------------------------------------------------------------------- a failed bucket lookup
+
+
+class _FailingBucket:
+    async def get_raw(self) -> _BucketResp:
+        raise RuntimeError("bucket lookup failed")
+
+
+def _three_images() -> list[ToolMessage]:
+    return [
+        ToolMessage(
+            content=[{"type": "image", "base64": _PNG_B64, "mime_type": "image/png"}],
+            tool_call_id=f"call_{n}",
+        )
+        for n in range(3)
+    ]
+
+
+async def test_a_failed_bucket_lookup_gives_every_image_a_placeholder_logged_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    messages = _three_images()
+    dial = _FakeDial(bucket=_FailingBucket(), files=_FakeFiles())  # type: ignore[arg-type]
+    caplog.set_level(logging.WARNING, logger=image_attachments.__name__)
+
+    await upload_image_blocks(messages, dial)  # type: ignore[arg-type]
+
+    for message in messages:
+        [block] = message.content
+        assert block["type"] == "text"  # type: ignore[index]
+        assert "upload failed" in block["text"]  # type: ignore[index]
+    [record] = caplog.records
+    assert "error=RuntimeError" in record.getMessage()
+    assert dial.files.uploads == []
+
+
+async def test_a_failed_bucket_lookup_is_re_raised_for_a_snapshot() -> None:
+    messages = _three_images()
+    dial = _FakeDial(bucket=_FailingBucket(), files=_FakeFiles())  # type: ignore[arg-type]
+
+    with pytest.raises(RuntimeError, match="bucket lookup failed"):
+        await upload_image_blocks(
+            messages, dial, reraise_bucket_failure=True  # type: ignore[arg-type]
+        )
+
+
+# --------------------------------------------------------------------- snapshot image download
+
+_SNAPSHOT_IMAGE_URL = "files/ub/dial-deep-research/call_9-0.png?sig=secret#frag"
+
+
+class _ScriptedFiles:
+    """Answers each download with the next scripted outcome: an exception or bytes."""
+
+    def __init__(self, outcomes: list[Exception | bytes]) -> None:
+        self._outcomes = outcomes
+        self.requests = 0
+
+    async def download(self, url: str) -> _DownloadResult:
+        self.requests += 1
+        outcome = self._outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return _DownloadResult(payload=outcome)
+
+
+def _snapshot_messages() -> list[ToolMessage]:
+    return [
+        ToolMessage(
+            content=[{"type": "image", "url": _SNAPSHOT_IMAGE_URL, "mime_type": "image/png"}],
+            tool_call_id="call_9",
+        )
+    ]
+
+
+@pytest.fixture
+def _no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(image_attachments, "STREAM_DROP_INITIAL_DELAY", 0)
+
+
+@pytest.mark.usefixtures("_no_backoff")
+async def test_a_snapshot_image_download_that_fails_once_is_retried(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    messages = _snapshot_messages()
+    files = _ScriptedFiles([ConnectionError("reset"), _PNG])
+    caplog.set_level(logging.WARNING, logger=image_attachments.__name__)
+
+    await download_snapshot_images(messages, _FakeDial(bucket=None, files=files))  # type: ignore[arg-type]
+
+    [block] = messages[0].content
+    assert block == {"type": "image", "base64": _PNG_B64, "mime_type": "image/png"}
+    [record] = caplog.records
+    text = record.getMessage()
+    assert "attempt=1" in text
+    assert "error=ConnectionError" in text
+    assert "sig=secret" not in text
+    assert "frag" not in text
+
+
+@pytest.mark.usefixtures("_no_backoff")
+async def test_a_snapshot_image_that_no_longer_exists_is_not_retried() -> None:
+    files = _ScriptedFiles([ResourceNotFoundError(message="gone")])
+
+    with pytest.raises(SnapshotUnreadableError) as raised:
+        await download_snapshot_images(
+            _snapshot_messages(), _FakeDial(bucket=None, files=files)  # type: ignore[arg-type]
+        )
+
+    assert files.requests == 1
+    assert isinstance(raised.value.__cause__, ResourceNotFoundError)
+
+
+@pytest.mark.usefixtures("_no_backoff")
+async def test_a_snapshot_image_that_keeps_failing_cannot_be_loaded(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    files = _ScriptedFiles([ConnectionError("reset")] * 3)
+    caplog.set_level(logging.WARNING, logger=image_attachments.__name__)
+
+    with pytest.raises(SnapshotImageUnavailableError):
+        await download_snapshot_images(
+            _snapshot_messages(), _FakeDial(bucket=None, files=files)  # type: ignore[arg-type]
+        )
+
+    assert files.requests == 3
+    assert [r.levelno for r in caplog.records] == [logging.WARNING, logging.WARNING]

@@ -18,6 +18,8 @@ annotations claiming those tags are emitted once the text is appended (see `cita
 
 Persistence is the caller's job — `run` returns the research message slice (the transcript plus
 the delivered report as an `AIMessage`) for the coordinator to persist with the preparation slice.
+When `run` raises instead, the coordinator asks `captured_progress` what the run had done, and
+saves it as the snapshot a later turn resumes from.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from aidial_client import AsyncDial
 from aidial_sdk.chat_completion import Choice, Stage, Status
 from langchain_core.messages import (
     AIMessage,
@@ -60,6 +63,7 @@ from dial_deep_research.utils.dial_stages import (
     PendingToolCall,
     log_tool_call_completed,
 )
+from dial_deep_research.utils.image_attachments import download_snapshot_images
 
 from .citation_lookups import CitationLookups
 from .citations import (
@@ -103,7 +107,8 @@ from .references import (
     glossary_rows,
 )
 from .report_length import LENGTH_EXEMPTIONS
-from .state import build_initial_state
+from .snapshot import RESUME_POINT_NODES, CapturedProgress, ResumableSnapshot, ResumePoint
+from .state import build_initial_state, build_resumed_state
 from .tools import (
     FINISH_TOOL_NAME,
     UPDATE_STATUS_TOOL_NAME,
@@ -123,6 +128,13 @@ _FINISH_TOOL = FINISH_TOOL_NAME
 # research-agent's `update_status` calls or from a node announcing itself on entry.
 _INITIAL_ACTIVITY = "Starting research"
 
+# `tasks` is there only to learn which root node is running when the graph fails (see
+# `_handle_part`).
+_STREAM_MODES = ["updates", "values", "tasks"]
+
+_RESEARCH_AGENT_NODE = RESUME_POINT_NODES[ResumePoint.RESEARCH]
+_RESUME_POINT_OF_NODE = {node: point for point, node in RESUME_POINT_NODES.items()}
+
 # The activity stage of the citation step, opened only once that step has work: the file-sharing
 # call copies a document per cited id, and the catalogue read carries a channel's whole dataset
 # list, which together take long enough that the turn would otherwise look finished while they
@@ -139,6 +151,8 @@ _KIND_CONVERSION_FAILED = "conversion_failed"
 _KIND_REFERENCES_BUILD_FAILED = "references_build_failed"
 _KIND_GLOSSARY_TABLE_FAILED = "glossary_table_failed"
 _KIND_EMISSION_FAILED = "emission_failed"
+# A failure of the citation step outside its own passes, which delivers the draft as settled.
+_KIND_CITATION_STEP_FAILED = "citation_step_failed"
 # The dataset tool gets a kind of its own rather than sharing the one above, so a warning says
 # which resolution was misconfigured; the rest of its kinds are named in `dataset_metadata.py`.
 _KIND_DATASET_TOOL_NOT_ADVERTISED = "dataset_tool_not_advertised"
@@ -281,6 +295,29 @@ def _read_structured(
         return []
 
 
+def _warn_delivery_failure(*, step: str, error: Exception) -> None:
+    """One WARNING for a delivery step that failed after the report was written; no ERROR,
+    because the turn still completes."""
+    logger.warning(
+        "Report delivery step failed after the report was written: step=%s error=%s",
+        step,
+        type(error).__name__,
+    )
+
+
+def _without_unanswered_tool_calls(messages: Sequence[BaseMessage]) -> list[BaseMessage]:
+    """`messages` without the last model message that requested tool calls if any of them has no
+    result yet, and without whatever followed that message."""
+    answered = {m.tool_call_id for m in messages if isinstance(m, ToolMessage)}
+    for position in range(len(messages) - 1, -1, -1):
+        message = messages[position]
+        if isinstance(message, AIMessage) and message.tool_calls:
+            if all(call["id"] in answered for call in message.tool_calls):
+                break
+            return list(messages[:position])
+    return list(messages)
+
+
 def _count_markers(text: str, *, glossary: bool) -> int:
     """How many citation markers the text still carries, for the step's own log event.
 
@@ -310,6 +347,13 @@ class ResearchRunner:
         # Only separate the report from preparation text that actually reached the choice. With
         # the silent hand-off there usually is none, and then the report starts the message.
         self._content_already_streamed = content_already_streamed
+        # What `captured_progress` builds a failed run's snapshot from. The root state is the
+        # latest root `values` part, `None` until the graph streams one; the agent messages are
+        # research-agent's own latest `values` part within its current iteration.
+        self._root_state: dict[str, Any] | None = None
+        self._agent_messages: list[BaseMessage] | None = None
+        self._running_node = _RESEARCH_AGENT_NODE
+        self._data_queries: DataQueryStore | None = None
 
     async def run(
         self,
@@ -318,13 +362,31 @@ class ResearchRunner:
         data_sources: DataSources,
         opik_tracer: OpikTracer | None = None,
         bearer_token: str | None = None,
+        resumed: ResumableSnapshot | None = None,
+        dial: AsyncDial | None = None,
     ) -> list[BaseMessage]:
         """Run the research graph and deliver its report.
 
         `data_sources` is the turn's data-sources fetch, made before preparation: its string
         reaches every node, and its catalogue is the one the citations resolve against.
+
+        With `resumed`, the run continues a failed one instead of starting from `prep_state`:
+        before the graph starts, the snapshot's images are downloaded with `dial` and its
+        data-query records restored, and the graph enters at the snapshot's resume point with
+        every channel filled from it. Its messages count as already seen, so a tool call the
+        failed run made gets no stage again when research-agent's iteration re-emits them.
         """
         loaded = await load_mcp_tools(mcp_servers=properties.mcp_servers, bearer_token=bearer_token)
+        self._data_queries = loaded.data_queries
+        if resumed is not None:
+            if dial is None:
+                raise ValueError("Resuming research needs a DIAL client to download its images")
+            # Restored before the graph runs, so the capture adds and replaces records by id
+            # as for any repeated query.
+            loaded.data_queries.records.update(resumed.data_queries)
+            await download_snapshot_images(resumed.messages, dial)
+            self._seen_ids.update(message.id for message in resumed.messages if message.id)
+        entry = resumed.snapshot.resume_at if resumed is not None else ResumePoint.RESEARCH
         # One set of lookups per request, shared by the report review's identifier checks and the
         # citation step, so neither asks a server again about what the other already learned.
         lookups = CitationLookups(
@@ -373,6 +435,7 @@ class ResearchRunner:
             emit_report_revision_failed=self._emit_report_revision_failed_stage,
             emit_report_budget_exhausted=self._emit_report_budget_exhausted_stage,
             emit_activity=self._set_activity,
+            entry=entry,
         )
         # LangGraph applies this to each graph run separately, so the same value bounds the
         # research graph and every research-agent-subgraph run (see the property's description).
@@ -385,15 +448,11 @@ class ResearchRunner:
         # — the graph raising, the delivery raising, the delivery finishing — closes the open
         # one: an unclosed stage reaches the client with no status and spins there for good.
         self._set_activity(_INITIAL_ACTIVITY)
+        state = (
+            build_resumed_state(resumed) if resumed is not None else build_initial_state(prep_state)
+        )
         try:
-            async for part in graph.astream(
-                build_initial_state(prep_state),
-                stream_mode=["updates", "values"],
-                subgraphs=True,
-                version="v2",
-                config=config,
-            ):
-                self._handle_part(part)
+            await self._stream_graph(graph, state, config=config, entry=entry)
         except BaseException:
             self._close_activity(Status.FAILED)
             raise
@@ -414,6 +473,42 @@ class ResearchRunner:
             data_sources=data_sources,
         )
         return self._messages
+
+    async def _stream_graph(
+        self, graph: Any, state: Mapping[str, Any], *, config: dict[str, Any], entry: ResumePoint
+    ) -> None:
+        """Run the compiled graph from `state`, routing every stream part; it enters at `entry`."""
+        self._running_node = RESUME_POINT_NODES[entry]
+        async for part in graph.astream(
+            state, stream_mode=_STREAM_MODES, subgraphs=True, version="v2", config=config
+        ):
+            self._handle_part(part)
+
+    def captured_progress(self) -> CapturedProgress | None:
+        """What a run that raised had done, for its snapshot; `None` when the graph streamed no
+        state, because the run failed before its graph started.
+
+        The resume point is the root node that was running. The channels are the latest root
+        state, which is the state that node received. The transcript is research-agent's own
+        latest message list when research-agent was running and has sent one in this iteration,
+        so the progress inside an iteration is kept; otherwise the root transcript. A trailing
+        model message whose tool calls have no results yet is left out, so the resumed run makes
+        that call again.
+        """
+        if self._root_state is None:
+            return None
+        resume_at = _RESUME_POINT_OF_NODE.get(self._running_node)
+        if resume_at is None:
+            raise ValueError(f"No resume point for the research graph node {self._running_node!r}")
+        agent_messages = self._agent_messages if resume_at is ResumePoint.RESEARCH else None
+        messages = agent_messages if agent_messages is not None else self._root_state["messages"]
+        records = self._data_queries.records if self._data_queries is not None else {}
+        return CapturedProgress(
+            resume_at=resume_at,
+            messages=_without_unanswered_tool_calls(messages),
+            channels=dict(self._root_state),
+            data_queries=dict(records),
+        )
 
     async def _deliver_report(
         self,
@@ -440,6 +535,10 @@ class ResearchRunner:
         persisted message carries, so a later turn reads back what the user saw. The
         annotations follow the content: the client reads them off a finished message, and a
         marker tag no annotation claims is shown to the reader as text.
+
+        Once the draft is settled nothing here fails the turn, because a report costs a whole
+        research run: every step absorbs its own failure, keeps what it already did and logs one
+        WARNING. Only a cancellation propagates.
         """
         if not self._report:
             self._close_activity(Status.COMPLETED)
@@ -461,32 +560,47 @@ class ResearchRunner:
                 glossary=glossary,
                 data_sources=data_sources,
             )
+        except Exception as error:
+            # The step catches the failures of its own passes, so this is a failure outside
+            # them; the draft goes out as the review settled it.
+            self._warn_citation_failure(kind=_KIND_CITATION_STEP_FAILED, error=error)
+            delivery = _ReportDelivery(
+                text=self._report,
+                markers_left=_count_markers(self._report, glossary=glossary is not None),
+            )
         except BaseException:
-            # The step catches its own failures, so only something outside them reaches here —
-            # a cancelled turn, say. The stage closes as failed, as the graph's does.
+            # A cancelled turn. The stage closes as failed, as the graph's does.
             self._close_activity(Status.FAILED)
             raise
         # Closed before the content, so the report never arrives under an open stage.
         self._close_activity(Status.COMPLETED)
 
         text = delivery.text
-        self._choice.append_content(f"\n\n{text}" if self._content_already_streamed else text)
+        try:
+            self._choice.append_content(f"\n\n{text}" if self._content_already_streamed else text)
+        except Exception as error:
+            # Only a closed choice or a bug makes this raise. The state saved next still closes
+            # the conversation, which the research run has finished.
+            _warn_delivery_failure(step="append_report", error=error)
         self._messages = [*self._messages, AIMessage(content=text)]
         self._send_annotations(delivery.annotations)
-        log_citations_resolved(
-            logger,
-            documents_requested=delivery.documents_requested,
-            documents_resolved=delivery.documents_resolved,
-            documents_titled=delivery.documents_titled,
-            datasets_requested=delivery.datasets_requested,
-            datasets_resolved=delivery.datasets_resolved,
-            data_queries_requested=delivery.data_queries_requested,
-            data_queries_resolved=delivery.data_queries_resolved,
-            annotations=delivery.citations_annotated,
-            markers_left=delivery.markers_left,
-            hyperlinks_removed=delivery.hyperlinks_removed,
-            duration_seconds=time.monotonic() - started_at,
-        )
+        try:
+            log_citations_resolved(
+                logger,
+                documents_requested=delivery.documents_requested,
+                documents_resolved=delivery.documents_resolved,
+                documents_titled=delivery.documents_titled,
+                datasets_requested=delivery.datasets_requested,
+                datasets_resolved=delivery.datasets_resolved,
+                data_queries_requested=delivery.data_queries_requested,
+                data_queries_resolved=delivery.data_queries_resolved,
+                annotations=delivery.citations_annotated,
+                markers_left=delivery.markers_left,
+                hyperlinks_removed=delivery.hyperlinks_removed,
+                duration_seconds=time.monotonic() - started_at,
+            )
+        except Exception as error:
+            _warn_delivery_failure(step="citation_log_record", error=error)
 
     async def _run_citation_step(
         self,
@@ -898,13 +1012,33 @@ class ResearchRunner:
         turn's final transcript. Taking it wholesale is what lets an in-place edit reach the
         persisted slice: the image-budget middleware substitutes a tool result under its
         original id, and collecting `updates` instead would only ever see the superseded
-        original. `ns` must be empty — a subgraph's state has no research-review or report messages.
+        original. For the transcript `ns` must be empty — a subgraph's state has no
+        research-review or report messages. research-agent's own `values` parts (namespace
+        `research-agent:<task id>`) are kept apart, for a failed run's snapshot only: the first
+        arrives as soon as an iteration starts, holding its input, and each later one follows a
+        model call or a tools round.
+
+        `tasks` reports each node starting and finishing; a root-namespace event without `result`
+        or `error` is a node starting. The runner keeps the running root node for a failed run's
+        resume point, and clears research-agent's messages when an iteration starts, so a failure
+        in one iteration never resumes from the previous one's messages.
         """
         if part["type"] == "updates":
             self._handle_updates(part["data"])
         elif part["type"] == "values" and not part["ns"]:
+            self._root_state = part["data"]
             self._messages = part["data"]["messages"]
             self._report = part["data"].get("report")
+        elif part["type"] == "values":
+            ns = part["ns"]
+            if len(ns) == 1 and ns[0].startswith(f"{_RESEARCH_AGENT_NODE}:"):
+                self._agent_messages = part["data"]["messages"]
+        elif part["type"] == "tasks" and not part["ns"]:
+            task = part["data"]
+            if "result" not in task and "error" not in task:
+                self._running_node = task["name"]
+                if task["name"] == _RESEARCH_AGENT_NODE:
+                    self._agent_messages = None
 
     def _handle_updates(self, data: dict[str, Any]) -> None:
         for node_update in data.values():

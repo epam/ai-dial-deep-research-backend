@@ -2,8 +2,8 @@
 
 Holds the system prompts for the preparation agent and its two independent checks,
 the Pydantic response schemas those checks return (`QueryReviewResponse`,
-`PlanReviewResponse`), and the result and gate-error messages the tools
-return to the agent.
+`PlanReviewResponse`), the result and gate-error messages the tools
+return to the agent, and the note that follows a failed turn in the history.
 """
 
 from __future__ import annotations
@@ -263,6 +263,12 @@ Work through two checks, in order:
 2. Has the user actually approved the plan — not merely discussed it, asked a
    question, or requested changes?
 
+The conversation may hold a "System note:" line saying that the previous user message
+failed with an error before its answer finished. After such a note, a user's request to
+continue or retry the research approves the recorded plan, but only when the user approved
+that same plan before the failure. Check 1 applies as always. The note by itself approves
+nothing.
+
 In `failure_reason`, give a short, user-facing summary of what blocks approval:
 if the recorded plan is stale, say the latest plan must be recorded first; if the
 user wants changes, summarize them. Leave `failure_reason` empty when the plan is approved.
@@ -335,3 +341,14 @@ RESEARCH_READY = """\
 Research has started. It runs now, and its report is the answer the user sees.
 Your turn is over: write nothing further — no acknowledgement, no summary,
 no "research is starting" message."""
+
+# --- The failed-turn note ---------------------------------------------------
+#
+# History reconstruction puts this note, as a system message, after every
+# assistant answer whose turn failed; the two checks see it as a "System note:"
+# line. It says nothing about whether research progress was saved: whether a
+# resume happens is decided once research starts.
+FAILED_TURN_NOTE = """\
+The previous user message failed with an error before its answer finished. If the user asks to
+continue a research whose plan they had approved, call approve_plan, then start_research.
+Otherwise handle the user's request as usual."""

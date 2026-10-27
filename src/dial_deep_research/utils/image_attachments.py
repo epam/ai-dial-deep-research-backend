@@ -1,17 +1,22 @@
 """Upload-and-rehydrate helpers for image content blocks in tool/AI messages.
 
 The MCP→LangChain adapter emits image content as LangChain v1
-`{type: "image", base64, mime_type}` blocks. Persisting those blocks inline in
-`assistant.custom_content.state["messages"]` blows past DIAL Chat's 1 MB request
-body limit on multimodal turns, so we upload each image to the DIAL files API
-before serialisation and swap the `base64` field for a `url` reference. On the
-next turn the same blocks are rehydrated by downloading the file and putting
-`base64` back, so the in-flight contract from `multimodal-tool-output` (LLM
-endpoints receive base64 image blocks, not DIAL-internal URLs) is preserved.
+`{type: "image", base64, mime_type}` blocks. Every later request carries the
+states of all earlier turns, and DIAL Core rejects a request above its size
+limit (64 MiB by default) with 413, so image bytes kept in a state would bring
+the conversation closer to a request that can no longer be sent. We therefore
+upload each image to the DIAL files API before serialisation and swap the
+`base64` field for a `url` reference. On the next turn the same blocks are
+rehydrated by downloading the file and putting `base64` back, so the in-flight
+contract from `multimodal-tool-output` (LLM endpoints receive base64 image
+blocks, not DIAL-internal URLs) is preserved.
 
 Fail-closed on upload error: we replace the failing block with a
-`TextContentBlock` placeholder (rather than keeping the inline base64) so
-`set_state` never re-encounters the size limit.
+`TextContentBlock` placeholder (rather than keeping the inline base64) so a
+state never carries image bytes. A research snapshot is the exception on both
+sides: its upload re-raises a failed bucket lookup, and its download retries and
+raises, because a snapshot with placeholders would resume research without the
+images research-agent saw.
 """
 
 import asyncio
@@ -23,10 +28,15 @@ from collections.abc import Iterator
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-from aidial_client import AsyncDial
+from aidial_client import AsyncDial, ResourceNotFoundError
 from langchain_core.messages import BaseMessage, ToolMessage
 
+from dial_deep_research.app.error_resolution import (
+    SnapshotImageUnavailableError,
+    SnapshotUnreadableError,
+)
 from dial_deep_research.utils.content import is_image_block
+from dial_deep_research.utils.llm import STREAM_DROP_INITIAL_DELAY, STREAM_DROP_MAX_ATTEMPTS
 
 logger = logging.getLogger(__name__)
 
@@ -99,13 +109,17 @@ def _message_owner_id(msg: BaseMessage) -> str:
     return getattr(msg, "id", None) or f"msg-{uuid.uuid4()}"
 
 
-async def upload_image_blocks(messages: list[BaseMessage], dial: AsyncDial) -> None:
+async def upload_image_blocks(
+    messages: list[BaseMessage], dial: AsyncDial, *, reraise_bucket_failure: bool = False
+) -> None:
     """Upload every image block carrying `base64` and rewrite it to carry `url`.
 
     Bucket resolution: prefer `appdata`, fall back to `bucket`.
     On failure the offending block is replaced by a text
     placeholder so the resulting message slice is always safe to serialise into
-    `custom_content.state["messages"]`.
+    `custom_content.state["messages"]`. A bucket lookup that fails gives every
+    image the placeholder, logged once, unless `reraise_bucket_failure` is set:
+    a research snapshot's caller sets it, so the snapshot is dropped instead.
     """
     candidates = [
         (msg, content_idx, block)
@@ -115,7 +129,23 @@ async def upload_image_blocks(messages: list[BaseMessage], dial: AsyncDial) -> N
     if not candidates:
         return
 
-    bucket_resp = await dial.bucket.get_raw()
+    try:
+        bucket_resp = await dial.bucket.get_raw()
+    except Exception as lookup_error:
+        if reraise_bucket_failure:
+            raise
+        logger.warning(
+            "Files bucket lookup failed at the state save; every image gets a placeholder: "
+            "error=%s images=%d",
+            type(lookup_error).__name__,
+            len(candidates),
+        )
+        reason = str(lookup_error)
+        for msg, content_idx, block in candidates:
+            num_bytes = _approx_decoded_size_bytes(block.get("base64", ""))
+            placeholder = _make_placeholder(block.get("mime_type"), num_bytes, "upload", reason)
+            _replace_block(msg, content_idx, placeholder)
+        return
     bucket = bucket_resp.appdata or bucket_resp.bucket
 
     results = await asyncio.gather(
@@ -200,4 +230,46 @@ async def _download_one(dial: AsyncDial, block: dict[str, Any]) -> Exception | N
         block["base64"] = base64.b64encode(raw).decode()
     except Exception as exc:  # noqa: BLE001
         return exc
+    return None
+
+
+async def download_snapshot_images(messages: list[BaseMessage], dial: AsyncDial) -> None:
+    """Download every image block carrying only `url` back to `base64`, or raise.
+
+    Unlike `rehydrate_image_blocks`, a failed download never becomes a placeholder: a resumed
+    research run would otherwise go on without an image research-agent already saw. Each image
+    gets up to `STREAM_DROP_MAX_ATTEMPTS` tries with exponential backoff. A 404 is not retried,
+    since the file is gone for good, and makes the snapshot unreadable
+    (`SnapshotUnreadableError`, which wins when both kinds occur); an image still failing after
+    its last attempt raises `SnapshotImageUnavailableError`, which a later request may get past.
+    """
+    blocks = [
+        block
+        for _, _, block in _iter_image_blocks(messages)
+        if "url" in block and "base64" not in block
+    ]
+    results = await asyncio.gather(*(_download_with_retries(dial, block) for block in blocks))
+    failures = [failure for failure in results if failure is not None]
+    for failure in failures:
+        if isinstance(failure, ResourceNotFoundError):
+            raise SnapshotUnreadableError() from failure
+    if failures:
+        raise SnapshotImageUnavailableError() from failures[0]
+
+
+async def _download_with_retries(dial: AsyncDial, block: dict[str, Any]) -> Exception | None:
+    """Download one snapshot image; the failure of its last attempt, or `None` on success."""
+    for attempt in range(1, STREAM_DROP_MAX_ATTEMPTS + 1):
+        failure = await _download_one(dial, block)
+        if failure is None or isinstance(failure, ResourceNotFoundError):
+            return failure
+        if attempt == STREAM_DROP_MAX_ATTEMPTS:
+            return failure
+        logger.warning(
+            "Snapshot image download failed; retrying: attempt=%d error=%s url=%s",
+            attempt,
+            type(failure).__name__,
+            _strip_url_query(block.get("url", "")),
+        )
+        await asyncio.sleep(STREAM_DROP_INITIAL_DELAY * 2 ** (attempt - 1))
     return None

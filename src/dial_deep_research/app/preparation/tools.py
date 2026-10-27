@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from typing import Any
 
 from langchain.tools import ToolRuntime
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool, ToolException, tool
 
-from dial_deep_research.app.history import Clarification, Plan, PrepState
+from dial_deep_research.app.history import Clarification, Plan, PrepState, is_failed_turn_note
 from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.llm import (
     LLMModelConfig,
@@ -40,11 +41,15 @@ def _format_conversation(messages: list[BaseMessage]) -> str:
     """Render the user/assistant turns for the clarity and approval checks.
 
     Only natural-language user and assistant text is kept (the questions/plan the
-    user saw and their replies); tool calls, tool results, and system messages are
-    dropped as noise.
+    user saw and their replies), plus the failed-turn note as a `System note:` line
+    at its position, so both checks know which request failed; tool calls, tool
+    results, and every other system message are dropped as noise.
     """
     lines: list[str] = []
     for message in messages:
+        if is_failed_turn_note(message):
+            lines.append(f"System note: {extract_text_from_content(message.content)}")
+            continue
         if message.type not in ("human", "ai"):
             continue
         text = extract_text_from_content(message.content)
@@ -53,6 +58,10 @@ def _format_conversation(messages: list[BaseMessage]) -> str:
         role = "User" if message.type == "human" else "Assistant"
         lines.append(f"{role}: {text}")
     return "\n\n".join(lines)
+
+
+def _new_plan_id() -> str:
+    return uuid.uuid4().hex
 
 
 def _query_failure_reason(state: PrepState) -> str:
@@ -139,6 +148,7 @@ class PrepTools:
             self.state.current_query = query
             self.state.clarification = Clarification(questions=check.questions)
             self.state.plan = None
+            self.state.plan_id = None
             self.state.plan_approved = False
             if check.questions:
                 return prompts.QUERY_CLARIFICATION_NEEDED.format(
@@ -161,6 +171,9 @@ class PrepTools:
             if reason := _query_failure_reason(self.state):
                 raise ToolException(prompts.UPDATE_PLAN_BLOCKED.format(reason=reason))
             self.state.plan = Plan(steps=steps)
+            # Renewed even when the steps equal the recorded ones, so a snapshot saved for an
+            # earlier recording never matches a plan recorded after it.
+            self.state.plan_id = _new_plan_id()
             self.state.plan_approved = False
             return prompts.PLAN_RECORDED.format(
                 query=self.state.current_query, plan=_numbered(self.state.plan.steps)
@@ -233,6 +246,10 @@ class PrepTools:
             if not state.plan_approved:
                 raise ToolException(prompts.START_NOT_APPROVED)
 
+            # A plan an earlier release recorded has no id; giving it one here lets a failure
+            # of this research be resumed.
+            if state.plan_id is None:
+                state.plan_id = _new_plan_id()
             state.research_started = True
 
             # NOTE: StopAfterResearchStartMiddleware agent middleware stops agent execution

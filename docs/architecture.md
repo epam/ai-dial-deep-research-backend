@@ -1,7 +1,8 @@
 # How Deep Research works
 
 Diagrams of the current runtime flow: the preparation flow, which spans several turns, and the
-research graph, which runs autonomously inside one turn. **Turn** here means a DIAL turn between
+research graph, which runs autonomously inside one turn, though a run that fails can be resumed in
+a later one. **Turn** here means a DIAL turn between
 the user and the assistant: one chat completion request carrying the user's new message, and the
 assistant reply streamed back for it. The app keeps nothing between turns, rebuilding each one from
 the request it arrives in.
@@ -12,6 +13,7 @@ when a spec changes the diagram points at the new wording instead of restating s
 
 - [Data-sources fetch](#data-sources-fetch)
 - [Preparation flow](#preparation-flow)
+- [When a turn fails](#when-a-turn-fails)
 - [Research graph](#research-graph)
 
 ## Data-sources fetch
@@ -155,9 +157,11 @@ sequenceDiagram
 
 The final turn is where preparation hands off: `start_research` fires and research runs in the
 **same** turn, so preparation and research are persisted together, once, at the end of it
-(`app/completion.py`). A later message on the same conversation is refused — see the
-research-already-handed-off scenario in
-[dial-agent-with-mcp](../openspec/specs/dial-agent-with-mcp/spec.md).
+(`app/completion.py`). Once the report is delivered, a later message on the same conversation is
+refused — see the research-already-handed-off scenario in
+[dial-agent-with-mcp](../openspec/specs/dial-agent-with-mcp/spec.md). A turn whose research
+failed persists `research_started` reset, so its conversation stays open (see
+[When a turn fails](#when-a-turn-fails)).
 
 The hand-off is silent, and by control flow rather than by prompt wording: a `before_model`
 middleware ends the preparation agent's loop as soon as `PrepState` says research has started, so
@@ -165,6 +169,94 @@ no model call follows the gate and nothing announces that research is starting. 
 outside that guarantee, knowingly: text the model wrote on the same assistant message that carries
 the `start_research` call was already streamed before the tool ran, and DIAL content cannot be
 retracted, so such a sentence can still appear ahead of the report.
+
+## When a turn fails
+
+Specs: [research-resume](../openspec/specs/research-resume/spec.md),
+[dial-agent-with-mcp](../openspec/specs/dial-agent-with-mcp/spec.md) (error delivery).
+Code: `app/completion.py`, `app/research/snapshot.py`, `app/history.py`.
+
+A failed turn is delivered as a DIAL protocol error, as any turn-aborting failure is. Before the
+error goes out, the turn persists a state with its one state write, and the client sends that state
+back with the failed answer on the next message. What the state holds depends on how far the turn
+got:
+
+```mermaid
+flowchart TD
+    fail["The turn raises, after its<br/>conversation's state was loaded<br/>and checked"] --> refusal{"a snapshot that<br/>cannot be read<br/>was refused?"}
+    refusal -->|yes| record
+    refusal -->|no| started{"did research<br/>start?"}
+    started -->|"no — preparation failed"| record
+    started -->|yes| streamed{"did the research graph<br/>stream any state?"}
+    streamed -->|"no — e.g. the research<br/>tools did not load"| record
+    streamed -->|yes| snapshot["The snapshot, beside the preparation<br/>messages and the PrepState with approval<br/>and research-started reset; marked not<br/>resumable when a resume would repeat<br/>the failure"]
+    snapshot -->|"building or saving<br/>the snapshot raised"| record["The failure record: an empty<br/>messages and the PrepState the<br/>turn started from"]
+    snapshot --> flag(["The state carries the failure flag;<br/>then the error is delivered"])
+    record --> flag
+```
+
+- **The failure flag puts a note into every later history.** History reconstruction adds one fixed
+  failed-turn note, as a system message, after every answer whose state carries the flag. The
+  preparation agent and both checks learn of the failure from that note alone; it says nothing
+  about whether progress was saved.
+- **Some failures persist nothing**: a failure while the application properties are fetched or
+  validated, which comes before the conversation's state is loaded; a cancellation; a
+  non-streaming request, whose state the SDK drops; and the refusal of a conversation whose report
+  was delivered.
+- **A turn never fails once its report is written.** Every step after the report loop settled a
+  draft absorbs its own failure and logs one WARNING: the citation step, appending the report, the
+  annotations, the citation log record and the final save, which saves an image it cannot upload
+  as a placeholder.
+
+### Resuming a failed research run
+
+A resume goes through the normal preparation turn. The user asks to continue, the failed-turn note
+tells the preparation agent to call `approve_plan`, then `start_research`, and the approval
+reviewer accepts the request as approval of the plan the user approved before the failure. Once
+research starts, the coordinator (`app/completion.py`) decides whether the run resumes:
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant C as DIAL Core
+    participant A as Preparation agent
+    participant T as Preparation tools
+    participant K as Coordinator
+    participant G as Research graph
+
+    Note over C: the history holds the failed answer,<br/>with its snapshot and the failure flag
+    U->>C: "continue"
+    C->>A: turn — history with the failed-turn note
+    A->>T: approve_plan
+    Note over T: the reviewer reads a request to continue<br/>as approval of the plan approved before the failure
+    A->>T: start_research
+    T-->>K: research started — same turn
+    K->>K: take the latest snapshot in the history
+    alt its plan id is the current one and it is resumable
+        K-->>C: closed stage "[DEBUG] reusing snapshot"
+        K->>G: enter at the snapshot's resume point,<br/>every channel from the snapshot
+    else the plan changed, or it is not resumable
+        K-->>C: closed stage "[DEBUG] existing snapshot discarded"
+        K->>G: start fresh from the approved plan
+    end
+    G-->>C: report appended once + state (research_started)
+```
+
+- **Only the latest snapshot counts**, and turns in between do not hide it, failed turns that
+  saved no snapshot included. A snapshot marked not resumable shadows older ones on purpose.
+- **The plan id ties a snapshot to one query and plan.** `update_plan` sets a fresh id on every
+  call, `update_query` clears it with the plan, and `start_research` gives one to a plan an earlier
+  release recorded without it. So any change to the query or the plan starts research fresh.
+- **A matching snapshot that cannot be read is refused**, with a non-retryable error that tells
+  the user to start a new conversation. Its images are downloaded before the graph starts, with up
+  to three attempts each; one that still fails fails the turn with a retryable error, and the
+  snapshot stays the latest one.
+- **A resumed run behaves like any run.** The graph enters at the snapshot's resume point (see
+  [Research graph](#research-graph)), the data-query records the failed run captured are
+  restored, and its tool calls get no stage again.
+
+See [research-resume](../openspec/specs/research-resume/spec.md), "Research resumes only from the
+latest resumable snapshot of the current plan".
 
 ## Research graph
 
@@ -180,16 +272,26 @@ Code: `app/research/`.
 A deterministic LangGraph with four nodes, where every phase transition is Python over the state,
 never a model decision:
 
-> `START → research-agent → (research-review when another iteration may still run, else report —
-> the last permitted iteration's findings are not reviewed) → (research-agent when
-> research-review returns a non-empty next plan, else report) → (END when this call was a
-> revision whose own model call failed, or when the draft is the last version the budget
-> permits — it is delivered without review — else report-review) → (report when the draft's
-> measured word count exceeds the ceiling or report-review asks for a revision, else END)`
+> `START → (research-agent on a fresh run; on a resumed run, the node the snapshot's resume point
+> names — research-agent, research-review, report or report-review) →` and from research-agent
+> on: `research-agent → (research-review when another iteration may still run, else report —
+> the last permitted iteration's findings go to the report without a review call) →
+> (research-agent when research-review returns a non-empty next plan, else report) → (END when
+> this call was a revision whose own model call failed, or when the draft is the last version the
+> budget permits — it is delivered without review — else report-review) → (report when the
+> draft's measured word count exceeds the ceiling or report-review asks for a revision, else
+> END)`
 
 ```mermaid
 flowchart TD
-    seed["Seed state from PrepState:<br/>query + approved plan as the<br/>first iteration's instruction"] --> model
+    start(["START"]) --> entry{"fresh run, or resumed<br/>from a failed run's snapshot?"}
+    entry -->|"fresh"| seed["Seed state from PrepState:<br/>query + approved plan as the<br/>first iteration's instruction"]
+    seed --> model
+    entry -->|"resumed: every channel<br/>seeded from the snapshot"| resume_point{"the snapshot's<br/>resume point"}
+    resume_point -->|"research"| model
+    resume_point -->|"research review"| research_review
+    resume_point -->|"report"| report
+    resume_point -->|"report review"| report_review
 
     subgraph research_agent_sub["research-agent node — one iteration, a create_agent loop"]
         model["Model call<br/>tool_choice = any → it must call a tool"]
@@ -234,6 +336,15 @@ The spec sentence that owns the rule:
 > A research-agent iteration SHALL therefore end **only** when research-agent calls
 > `finish_iteration`. That tool SHALL be declared `return_direct=True`, so the agent loop returns
 > as soon as it executes, with no further model round-trip.
+
+**A resumed run enters where the failed run stopped.** The entry from `START` is a conditional
+edge whose router is fixed when the graph is built (`route_from_start` in
+`app/research/graph.py`): research-agent on a fresh run, the snapshot's resume point on a resumed
+one. The nodes themselves cannot tell the two apart, because every node reads its inputs from the
+state and the snapshot fills every channel. Inside research-agent, a resumed iteration continues
+after its last completed agent turn. See
+[research-resume](../openspec/specs/research-resume/spec.md), "A resumed run re-enters the graph
+at the node that failed".
 
 The rest of the loop, in brief — each item is specified in the linked specs:
 

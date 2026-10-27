@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import dial_deep_research.app.completion as completion_module
+from dial_deep_research.app.error_resolution import SnapshotVersionUnsupportedError
 from dial_deep_research.app.history import PrepState
 
 COMPLETIONS_URL = "/openai/deployments/deep-research/chat/completions"
@@ -120,6 +121,19 @@ def test_upstream_rate_limit_downgraded_to_500_but_keeps_true_code(
     # Never emit a balancer-retriable status; the true cause survives in `code`.
     assert response.status_code == 500
     assert _error(response)["code"] == "429"
+
+
+def test_a_snapshot_of_another_version_is_delivered_as_409(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        completion_module, "PrepAgentRunner", _runner_raising(SnapshotVersionUnsupportedError())
+    )
+    response = _post(client)
+    assert response.status_code == 409
+    error = _error(response)
+    assert "different version" in error["display_message"]
+    assert "error reference:" in error["display_message"]
 
 
 def test_research_already_handed_off_delivered_as_409(

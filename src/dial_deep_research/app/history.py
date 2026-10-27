@@ -21,11 +21,13 @@ from langchain_core.messages import (
     AIMessage,
     BaseMessage,
     HumanMessage,
+    SystemMessage,
     messages_from_dict,
     messages_to_dict,
 )
 from pydantic import BaseModel, Field, ValidationError
 
+from dial_deep_research.app.preparation.prompts import FAILED_TURN_NOTE
 from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.image_attachments import (
     rehydrate_image_blocks,
@@ -59,14 +61,28 @@ class PrepState(BaseModel):
     """Working state of the preparation flow.
 
     Mutated only by the preparation tools. `plan_approved` is set only by
-    `approve_plan`; `research_started` only by `start_research`.
+    `approve_plan`; `research_started` only by `start_research`. `plan_id` names the
+    recorded query and plan, so a snapshot of failed research is resumed only for them:
+    `update_plan` sets a fresh one on every call, `update_query` clears it with the plan,
+    and `start_research` gives one to a plan an earlier release recorded without it.
     """
 
     current_query: str | None = None
     clarification: Clarification | None = None  # None until the clarity check runs
     plan: Plan | None = None
+    plan_id: str | None = None
     plan_approved: bool = False
     research_started: bool = False
+
+
+# Two more top-level keys of the state, both written only by a failed turn. Neither is a
+# `DialState` field: a snapshot this code cannot read must never make the turn's `PrepState`
+# unreadable, and the flag must not ride in `PrepState`, which every turn carries forward.
+SNAPSHOT_STATE_KEY = "research_snapshot"
+"""The failed research run's snapshot, read only by the snapshot reader."""
+
+FAILURE_STATE_KEY = "turn_failed"
+"""`True` on the state of a turn that failed and was delivered as a protocol error."""
 
 
 class DialState(BaseModel):
@@ -99,6 +115,12 @@ async def reconstruct_history(request: Request, dial: AsyncDial) -> list[BaseMes
     - ASSISTANT without state -> a single `AIMessage(content=…)` fallback
       (legacy turns produced before the persistence change).
 
+    An assistant message whose state carries the failure flag is followed by the
+    fixed failed-turn note as a `SystemMessage`, so the agent and both checks
+    learn the turn failed. The note sits at the failed turn's position, so the
+    history before it stays the same from turn to turn. A snapshot is never read
+    here: its research transcript and images never reach preparation.
+
     The system role is intentionally skipped — `create_agent` receives the
     app's system prompt via `system_prompt=` directly.
     """
@@ -119,7 +141,21 @@ async def reconstruct_history(request: Request, dial: AsyncDial) -> list[BaseMes
             else:
                 # state not available. fallback to using DIAL Chat content as is (single AI message)
                 history.append(AIMessage(content=extract_text_from_content(message.content)))
+            if (raw := raw_dial_state(message)) is not None and raw.get(FAILURE_STATE_KEY) is True:
+                history.append(SystemMessage(content=FAILED_TURN_NOTE))
     return history
+
+
+def is_failed_turn_note(message: BaseMessage) -> bool:
+    """Whether `message` is the failed-turn note `reconstruct_history` inserts."""
+    return message.type == "system" and message.content == FAILED_TURN_NOTE
+
+
+def raw_dial_state(message: Message) -> dict | None:
+    """The message's `custom_content.state` as a dict, unparsed; `None` when it has none."""
+    if (cc := message.custom_content) is None or not isinstance(cc.state, dict):
+        return None
+    return cc.state
 
 
 async def create_dial_state(

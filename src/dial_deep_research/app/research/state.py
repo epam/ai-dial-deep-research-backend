@@ -17,6 +17,7 @@ from langgraph.graph.message import add_messages
 from dial_deep_research.app.history import PrepState
 
 from .prompts import render_first_instruction
+from .snapshot import ResumableSnapshot
 
 
 class ResearchState(TypedDict):
@@ -73,4 +74,19 @@ def build_initial_state(prep_state: PrepState) -> ResearchState:
         report_revision_instruction=None,
         report_version=0,
         report_revision_failed=False,
+    )
+
+
+def build_resumed_state(resumed: ResumableSnapshot) -> ResearchState:
+    """Seed the graph state from the snapshot a failed run saved, every channel as it was."""
+    snapshot = resumed.snapshot
+    return ResearchState(
+        messages=resumed.messages,
+        original_query=snapshot.original_query,
+        plans=snapshot.plans,
+        research_iteration=snapshot.research_iteration,
+        report=snapshot.report,
+        report_revision_instruction=snapshot.report_revision_instruction,
+        report_version=snapshot.report_version,
+        report_revision_failed=snapshot.report_revision_failed,
     )

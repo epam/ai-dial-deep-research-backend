@@ -20,6 +20,7 @@ from dial_deep_research.app.research import graph as graph_module
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.graph import build_research_graph
 from dial_deep_research.app.research.prompts import GROUNDED_REVIEW_SYSTEM_MESSAGE, ReportReview
+from dial_deep_research.app.research.snapshot import RESUME_POINT_NODES, ResumePoint
 from dial_deep_research.app.research.state import build_initial_state
 from dial_deep_research.app_properties import QualityRule, ReportSection
 from tests.citation_fakes import no_lookups
@@ -329,3 +330,31 @@ async def test_failed_first_draft_fails_the_turn(monkeypatch: pytest.MonkeyPatch
     compiled, _, _ = _build(monkeypatch, drafts=[RuntimeError("upstream is down")], reviews=[])
     with pytest.raises(RuntimeError, match="upstream is down"):
         await _run(compiled)
+
+
+# --- The entry from START -------------------------------------------------------------------------
+
+
+async def test_start_can_lead_to_each_resume_point_node() -> None:
+    """A resumed run enters at the node its snapshot names, so `START` reaches all four."""
+    drawn = _compile().get_graph()
+
+    from_start = {edge.target for edge in drawn.edges if edge.source == "__start__"}
+
+    assert from_start == {"research-agent", "research-review", "report", "report-review"}
+
+
+async def test_every_resume_point_names_a_node_of_the_graph() -> None:
+    nodes_of_graph = set(_compile().get_graph().nodes)
+    assert set(RESUME_POINT_NODES.values()) <= nodes_of_graph
+    assert set(RESUME_POINT_NODES) == set(ResumePoint)
+
+
+async def test_a_fresh_run_enters_at_research_agent(monkeypatch: pytest.MonkeyPatch) -> None:
+    compiled, llm, _ = _build(monkeypatch, drafts=[_draft("One.")], reviews=[])
+    entered: list[str] = []
+
+    async for update in compiled.astream(_initial_state(), stream_mode="updates"):
+        entered.extend(update)
+
+    assert entered[0] == "research-agent"

@@ -21,7 +21,16 @@ from langchain_core.messages import (
     messages_to_dict,
 )
 
-from dial_deep_research.app.history import reconstruct_history
+from dial_deep_research.app.history import (
+    FAILURE_STATE_KEY,
+    SNAPSHOT_STATE_KEY,
+    DialState,
+    Plan,
+    PrepState,
+    load_last_prep_state,
+    reconstruct_history,
+)
+from dial_deep_research.app.preparation.prompts import FAILED_TURN_NOTE
 
 
 def _build_request(messages: list[Message]) -> Request:
@@ -181,6 +190,184 @@ async def test_system_role_messages_are_skipped() -> None:
     assert len(history) == 1
     assert isinstance(history[0], HumanMessage)
     assert history[0].content == "hi"
+
+
+# --- The plan id ---------------------------------------------------------------------------------
+
+
+def test_a_preparation_state_without_a_plan_id_still_reads() -> None:
+    """A state an earlier release persisted carries no `plan_id`."""
+    state = DialState.from_dict(
+        {"messages": [], "preparation": {"current_query": "q", "plan": {"steps": ["one"]}}}
+    )
+    assert state.preparation.plan_id is None
+    assert state.preparation.plan == Plan(steps=["one"])
+
+
+def test_the_plan_id_round_trips_through_the_persisted_state() -> None:
+    prep = PrepState(current_query="q", plan=Plan(steps=["one"]), plan_id="0123abcd")
+    restored = DialState.from_dict(DialState(messages=[], preparation=prep).to_dict())
+    assert restored.preparation.plan_id == "0123abcd"
+
+
+# --- A failed turn: the failure flag and the failed-turn note -----------------------------------
+
+
+class _NoDownloadDial:
+    """Fails the test on any file download: reconstruction must never read a snapshot."""
+
+    class _Files:
+        async def download(self, url: str) -> None:
+            raise AssertionError(f"unexpected download of {url}")
+
+    files = _Files()
+
+
+def _snapshot_with_an_image() -> dict:
+    """A snapshot-shaped value whose transcript references an uploaded image."""
+    tool_message = ToolMessage(
+        content=[{"type": "image", "url": "files/bucket/dial-deep-research/c9-0.png"}],
+        tool_call_id="c9",
+    )
+    return {"plan_id": "0123abcd", "messages": messages_to_dict([tool_message])}
+
+
+def _failed_research_state() -> dict:
+    preparation_messages = messages_to_dict(
+        [
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"id": "s1", "name": "start_research", "args": {}, "type": "tool_call"}
+                ],
+            ),
+            ToolMessage(content="Research has started.", tool_call_id="s1"),
+        ]
+    )
+    return {
+        "messages": preparation_messages,
+        "preparation": PrepState(current_query="q", plan_id="0123abcd").model_dump(mode="json"),
+        SNAPSHOT_STATE_KEY: _snapshot_with_an_image(),
+        FAILURE_STATE_KEY: True,
+    }
+
+
+def test_the_preparation_state_reads_beside_a_snapshot_and_the_flag() -> None:
+    request = _build_request(
+        messages=[
+            Message(
+                role=Role.ASSISTANT,
+                content="",
+                custom_content=CustomContent(state=_failed_research_state()),
+            )
+        ]
+    )
+    assert load_last_prep_state(request).plan_id == "0123abcd"
+
+
+def test_a_snapshot_that_is_not_a_snapshot_never_hides_the_preparation_state() -> None:
+    state = {
+        "messages": [],
+        "preparation": PrepState(current_query="q", plan_id="0123abcd").model_dump(mode="json"),
+        SNAPSHOT_STATE_KEY: "not a snapshot",
+        FAILURE_STATE_KEY: True,
+    }
+    request = _build_request(
+        messages=[
+            Message(role=Role.ASSISTANT, content="", custom_content=CustomContent(state=state))
+        ]
+    )
+    assert load_last_prep_state(request).plan_id == "0123abcd"
+
+
+async def test_a_failed_research_turn_is_followed_by_the_note_and_nothing_of_its_snapshot() -> None:
+    request = _build_request(
+        messages=[
+            Message(role=Role.USER, content="yes, go"),
+            Message(
+                role=Role.ASSISTANT,
+                content="",
+                custom_content=CustomContent(state=_failed_research_state()),
+            ),
+            Message(role=Role.USER, content="continue"),
+        ]
+    )
+
+    history = await reconstruct_history(request, _NoDownloadDial())  # type: ignore[arg-type]
+
+    assert [m.type for m in history] == ["human", "ai", "tool", "system", "human"]
+    assert history[3].content == FAILED_TURN_NOTE
+    assert history[4].content == "continue"
+    # The snapshot's tool message ("c9") never enters the history.
+    assert not any(getattr(m, "tool_call_id", None) == "c9" for m in history)
+
+
+async def test_a_failed_turn_without_a_snapshot_is_followed_by_the_note() -> None:
+    state = {
+        "messages": [],
+        "preparation": PrepState().model_dump(mode="json"),
+        FAILURE_STATE_KEY: True,
+    }
+    request = _build_request(
+        messages=[
+            Message(role=Role.USER, content="approve"),
+            Message(
+                role=Role.ASSISTANT,
+                content="Let me check",
+                custom_content=CustomContent(state=state),
+            ),
+            Message(role=Role.USER, content="continue"),
+        ]
+    )
+
+    history = await reconstruct_history(request, _NoOpDial())  # type: ignore[arg-type]
+
+    assert [m.type for m in history] == ["human", "ai", "system", "human"]
+    assert history[1].content == "Let me check"
+    assert history[2].content == FAILED_TURN_NOTE
+
+
+async def test_a_turn_without_the_flag_gets_no_note() -> None:
+    request = _build_request(
+        messages=[
+            Message(
+                role=Role.ASSISTANT,
+                content="final answer",
+                custom_content=CustomContent(state={"messages": _encoded_assistant_slice()}),
+            )
+        ]
+    )
+
+    history = await reconstruct_history(request, _NoOpDial())  # type: ignore[arg-type]
+
+    assert all(m.type != "system" for m in history)
+
+
+async def test_the_note_stays_after_the_failed_turn_as_turns_follow() -> None:
+    request = _build_request(
+        messages=[
+            Message(role=Role.USER, content="go"),
+            Message(
+                role=Role.ASSISTANT,
+                content="",
+                custom_content=CustomContent(state=_failed_research_state()),
+            ),
+            Message(role=Role.USER, content="what happened?"),
+            Message(
+                role=Role.ASSISTANT,
+                content="The request failed.",
+                custom_content=CustomContent(
+                    state={"messages": messages_to_dict([AIMessage(content="The request failed.")])}
+                ),
+            ),
+            Message(role=Role.USER, content="continue"),
+        ]
+    )
+
+    history = await reconstruct_history(request, _NoDownloadDial())  # type: ignore[arg-type]
+
+    assert [m.type for m in history] == ["human", "ai", "tool", "system", "human", "ai", "human"]
+    assert history[3].content == FAILED_TURN_NOTE
 
 
 # --- Log records for state parsing (logging-policy: rebalance + content rule) --------------------
