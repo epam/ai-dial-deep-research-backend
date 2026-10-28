@@ -115,6 +115,7 @@ class PrepTools:
                     prompts.QUERY_REVIEW_SYSTEM.format(
                         today_date=self._today,
                         data_sources=self._data_sources,
+                        **prompts.year_span_examples(self._today),
                     ),
                 ),
                 (

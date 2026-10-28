@@ -17,7 +17,7 @@ from dial_deep_research.utils.llm import (
 )
 
 from .middleware import StopAfterResearchStartMiddleware
-from .prompts import DATASET_LIST_FAILED_INSTRUCTION, PREP_AGENT_SYSTEM
+from .prompts import DATASET_LIST_FAILED_INSTRUCTION, PREP_AGENT_SYSTEM, year_span_examples
 from .tools import PrepTools
 
 
@@ -31,6 +31,7 @@ def render_prep_agent_system(*, agent_name: str, today_date: str, data_sources: 
         dataset_list_failed_instruction=(
             DATASET_LIST_FAILED_INSTRUCTION if data_sources.dataset_list_failed else ""
         ),
+        **year_span_examples(today_date),
     )
 
 

@@ -110,7 +110,9 @@ def test_no_preparation_prompt_tells_the_model_to_call_a_dataset_tool() -> None:
         agent_name="ACME", today_date="2026-09-27", data_sources=_sources(list_failed=True)
     )
     clarity_prompt = prep_prompts.QUERY_REVIEW_SYSTEM.format(
-        today_date="2026-09-27", data_sources=_TEXT
+        today_date="2026-09-27",
+        data_sources=_TEXT,
+        **prep_prompts.year_span_examples("2026-09-27"),
     )
     for prompt in (agent_prompt, clarity_prompt):
         assert _LIST_TOOL not in prompt
