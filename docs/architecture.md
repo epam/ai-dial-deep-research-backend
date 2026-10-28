@@ -178,19 +178,25 @@ Code: `app/completion.py`, `app/research/snapshot.py`, `app/history.py`.
 
 A failed turn is delivered as a DIAL protocol error, as any turn-aborting failure is. Before the
 error goes out, the turn persists a state with its one state write, and the client sends that state
-back with the failed answer on the next message. What the state holds depends on how far the turn
-got:
+back with the failed answer on the next message.
+
+Every turn that persists a state saves one of four, chosen by how the turn ended. Each candidate
+is encoded as JSON first, so one that cannot be built or encoded leaves the write free and falls
+back to the next; a closed choice takes no state at all. The research-resume requirement "A turn's
+one state write falls back in a fixed order" owns the four states and the order:
 
 ```mermaid
 flowchart TD
-    fail["The turn raises, after its<br/>conversation's state was loaded<br/>and checked"] --> refusal{"a snapshot that<br/>cannot be read<br/>was refused?"}
-    refusal -->|yes| record
-    refusal -->|no| started{"did research<br/>start?"}
-    started -->|"no — preparation failed"| record
-    started -->|yes| streamed{"did the research graph<br/>stream any state?"}
-    streamed -->|"no — e.g. the research<br/>tools did not load"| record
-    streamed -->|yes| snapshot["The snapshot, beside the preparation<br/>messages and the PrepState with approval<br/>and research-started reset; marked not<br/>resumable when a resume would repeat<br/>the failure"]
-    snapshot -->|"building or saving<br/>the snapshot raised"| record["The failure record: an empty<br/>messages and the PrepState the<br/>turn started from"]
+    ended{"How did the turn end?"}
+    ended -->|"its report was written"| full["The full state: the whole<br/>transcript and the PrepState"]
+    full -->|"cannot be built<br/>or encoded"| closing["The closing state: an empty<br/>messages, the PrepState with<br/>research started, no failure flag"]
+    full --> closed(["The conversation is closed:<br/>the next request is refused"])
+    closing --> closed
+    ended -->|"it completed<br/>without research"| prep_full["The full state"]
+    prep_full -->|"cannot be built or<br/>encoded: the turn fails"| record
+    ended -->|"its research failed after<br/>the graph streamed state"| snapshot["The snapshot state: the preparation<br/>messages, the PrepState with approval<br/>and research-started reset, and the<br/>snapshot, marked not resumable when<br/>a resume would repeat the failure"]
+    snapshot -->|"cannot be built<br/>or encoded"| record["The failure record: an empty<br/>messages and the PrepState the<br/>turn started from"]
+    ended -->|"it failed in any other way:<br/>in preparation, before the graph<br/>streamed state, or on a refused snapshot"| record
     snapshot --> flag(["The state carries the failure flag;<br/>then the error is delivered"])
     record --> flag
 ```
@@ -206,7 +212,7 @@ flowchart TD
 - **A turn never fails once its report is written.** Every step after the report loop settled a
   draft absorbs its own failure and logs one WARNING: the citation step, appending the report, the
   annotations, the citation log record and the final save, which saves an image it cannot upload
-  as a placeholder.
+  as a placeholder, and the closing state when the full state cannot be saved.
 
 ### Resuming a failed research run
 

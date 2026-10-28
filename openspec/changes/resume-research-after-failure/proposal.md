@@ -22,12 +22,18 @@ conversation and have research pick up where it stopped.
   again from the request. A failure while the application properties are fetched or validated
   persists nothing, as today. If the snapshot cannot be built or saved, the turn drops it and
   persists the failure record instead; the original error is always the one delivered.
+- **Every state is checked before the turn's one write.** The SDK allows one state write per turn,
+  and a state it cannot serialize uses that write up. So every state is encoded first, and a state
+  that cannot be built or encoded falls back to a smaller one: a snapshot state to the failure
+  record, and a delivered report's full state to a closing state.
 - **A turn never fails once its report is written.** A report costs a whole research run. Once the
   report loop has settled a draft, every later step absorbs its own failure: the citation step,
   the annotations, the citation log record and the final save. A final save whose images cannot be
-  uploaded saves placeholders instead, and the state still closes the conversation. Through
-  StatGPT this decides whether the user gets the report at all, because StatGPT shows a report only
-  when Deep Research's answer ends without an error.
+  uploaded saves placeholders instead, and the state still closes the conversation. A final save
+  that cannot be built or encoded saves the closing state instead: an empty `messages` and the
+  `PrepState` with research started, without a failure flag, so the same research can never run
+  again in that conversation. Through StatGPT this decides whether the user gets the report at all,
+  because StatGPT shows a report only when Deep Research's answer ends without an error.
 - **Failures a resume would repeat save a snapshot that is never resumed.** A resume re-sends the
   failed run's input, so two classes would fail again on every "continue". The first is the model
   rejecting the input: the context exceeded, a content filter, or a model 400, 413 or 422. The
@@ -99,8 +105,9 @@ quota errors included, and deliver the latest draft.
   record every failed turn persists, the failures a resume would repeat and whose snapshot is
   therefore never resumed, the failed-turn note, the history search and the plan-id match, where
   the resumed run re-enters, the image downloads, the errors for a snapshot that cannot be read,
-  the stages that show whether a snapshot was reused, and the rule that a turn never fails once
-  its report is written.
+  the stages that show whether a snapshot was reused, the rule that a turn never fails once its
+  report is written, and the four states a turn's one state write can save, with the order in
+  which they fall back.
 
 ### Modified Capabilities
 
@@ -116,7 +123,9 @@ quota errors included, and deliver the latest draft.
 - `clarification-and-plan-alignment`: `PrepState` carries a `plan_id`; `update_plan` renews it;
   `approve_plan` accepts a request to continue after a failed run; a failed research turn persists
   `PrepState` with approval and research-started reset, and any other failed turn the `PrepState`
-  it started from; the refusal after research applies once the report was delivered; the
+  it started from; a delivered
+  report whose full state cannot be saved persists a closing state without the transcript; the
+  refusal after research applies once the report was delivered; the
   preparation agent and both checks receive the failed-turn note.
 - `data-sources-discovery`: a conversation counts as handed off, and makes no data-sources call,
   only once its report was delivered.
@@ -124,7 +133,8 @@ quota errors included, and deliver the latest draft.
   citation of a query from before the failure still resolves.
 - `logging-policy`: the INFO records for a saved, reused and discarded snapshot and for a failure
   record without a snapshot, the WARNING for a snapshot or failure record that could not be saved,
-  and the WARNING for a step that fails after the report is written.
+  and the WARNING for a step that fails after the report is written, which for the final save says
+  what was saved instead.
 
 ## Impact
 
@@ -133,8 +143,10 @@ Code:
 - `src/dial_deep_research/app/completion.py`: catch any failure of the turn after the 409 check;
   persist the snapshot with the reset `PrepState`, the preparation messages and the failure flag,
   or else the failure record (an empty `messages`, the `PrepState` read from the request, and the
-  flag), each save inside its own `try`; then re-raise. The `try` starts after the 409 check. Once
-  the report is written, a failed final save is logged and the turn completes.
+  flag), each save inside its own `try`; then re-raise. The `try` starts after the 409 check. Every state is encoded before the
+  turn's one `set_state`, and a state that cannot be built or encoded falls back to the next one.
+  Once the report is written, a failed final save is logged, the closing state is saved instead,
+  and the turn completes.
   Look up the snapshot when research starts, show the stage and log the record.
 - `src/dial_deep_research/app/research/snapshot.py` (new): the snapshot model with its stable
   header (plan id, resumable mark, format version), the history search, the tolerant read and the

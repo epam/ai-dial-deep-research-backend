@@ -1,6 +1,6 @@
 # Tasks
 
-Decision numbers (D1–D22) refer to this change's `design.md`.
+Decision numbers (D1–D23) refer to this change's `design.md`.
 
 ## 1. Error resolution: snapshot conditions, the resume-repeat predicate, reworded texts
 
@@ -210,7 +210,7 @@ Decision numbers (D1–D22) refer to this change's `design.md`.
   turn level: a raising `get_raw()` after a delivered report ends the turn with
   `outcome=completed`, one WARNING, no ERROR, and a state whose images are placeholders and whose
   `research_started` is set; a raising `set_state` ends the turn with `outcome=completed` and no
-  state.
+  state. Revised by 13.2: a failed build or encoding saves the closing state.
 
 ## 10. Coordinator: persisting a failed turn
 
@@ -236,7 +236,8 @@ Decision numbers (D1–D22) refer to this change's `design.md`.
   error chunk carrying DIAL Core's `display_message`; a `context_length_exceeded` rejection saves a
   snapshot marked not resumable; a raising `get_raw()` persists the failure record and delivers
   the quota error, not the bucket error; a raising failure-record save persists nothing and
-  delivers the original error.
+  delivers the original error. Revised by 13.3: a snapshot state that cannot be encoded falls
+  back to the failure record too.
 - [x] 10.3 Write the INFO records "Snapshot saved" and "Failure recorded" with the fields of the
   **logging-policy** delta (D18): for a saved snapshot the plan id, resumable, resume point,
   iteration count, transcript messages, draft number, data-query records, the snapshot's and the
@@ -297,6 +298,43 @@ Decision numbers (D1–D22) refer to this change's `design.md`.
 - [x] 12.4 Check the whole change against `no_sensitive_info.md`: tests, fixtures, docstrings and
   docs use placeholders such as `ACME` and `IMF:WEO`, and nothing from the live runs of 12.3
   reaches the repository.
+
+## 13. State-write fallbacks
+
+- [x] 13.1 In `app/completion.py`, route every state write through one helper (D23): it encodes the
+  candidate state as Starlette's `JSONResponse` renders it (`ensure_ascii=False`,
+  `allow_nan=False`, then UTF-8), and calls `_TurnProgress.save_state`
+  only when the encoding succeeded, so a state that cannot be encoded leaves the turn's one write
+  unused. It returns the encoded text, for the state size of the "Snapshot saved" record. Verify
+  in a unit test that a state holding a value `json.dumps` cannot encode, and a state holding
+  `float("nan")`, each raise before `set_state` is called and leave `state_saved` false.
+- [x] 13.2 In `_persist`, when the report was written and the full state cannot be built or
+  encoded, save the closing state (D22, D23): an empty `messages`, the turn's `PrepState` with
+  `research_started` set, and no failure flag. Write the one WARNING after the closing state's
+  write, naming the save and the exception class, with `saved=closing_state` when that write
+  succeeded and `saved=nothing` when it raised. Verify at the turn level: a raising
+  `create_dial_state` and an unencodable state after a delivered report each end the turn with
+  `outcome=completed`, no ERROR, one WARNING and the closing state; the next request on that
+  conversation is refused with 409 and runs no research; a raising `set_state` persists nothing
+  and logs one WARNING with `saved=nothing`.
+- [x] 13.3 In `_persist_failure`, write the snapshot state and the failure record through the
+  helper of 13.1 (D21, D23): a snapshot state that cannot be built or encoded falls back to the
+  failure record, and a failure record that cannot be built or encoded persists nothing. Each
+  state that could not be saved logs one WARNING with the exception class. Verify at the turn
+  level: an unencodable snapshot state persists the failure record with one WARNING; an
+  unencodable failure record persists nothing; the original error is delivered in every case.
+- [x] 13.4 Take the "Snapshot saved" state size from the encoding of 13.1, and the snapshot size
+  from its own encoding (**logging-policy** delta, D18). Update the log assertions of the existing
+  tests, and add one for a preparation-only turn whose own save fails: one "Failure recorded"
+  record with `reason=preparation_failed`, followed by exactly one ERROR.
+- [x] 13.5 Update `DeepResearchCompletion`'s docstrings and the failed-turn section of
+  `docs/architecture.md`: replace the failed-turn diagram with one that shows the four states and
+  the fallback order for each kind of turn, the report-written turn included, and link the
+  research-resume requirement "A turn's one state write falls back in a fixed order" as the owner
+  of the rule. Verify that the diagram renders and that the prose
+  links the **research-resume** spec instead of restating its rules.
+- [x] 13.6 Run `make format`, `make lint` and `make test`, and
+  `openspec validate resume-research-after-failure --strict`; all pass.
 
 ## Workflow follow-up
 

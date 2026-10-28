@@ -70,6 +70,13 @@ class _FailureRecordReason(StrEnum):
     SNAPSHOT_FAILED = "snapshot_failed"
 
 
+class _SavedInstead(StrEnum):
+    """What a turn whose report was written saved when its full state could not be saved."""
+
+    CLOSING_STATE = "closing_state"
+    NOTHING = "nothing"
+
+
 @dataclass
 class _TurnProgress:
     """How far a turn got, which decides what it persists if it fails."""
@@ -80,10 +87,40 @@ class _TurnProgress:
     # The SDK allows one state write per turn and has no accessor that says whether one was made.
     state_saved: bool = False
 
-    def save_state(self, choice: Choice, state: dict[str, Any]) -> None:
+    def save_state(self, choice: Choice, state: dict[str, Any]) -> bytes:
+        """Encode `state` as JSON, then make the turn's one state write; return the encoding.
+
+        A state that cannot be encoded raises before the write, so the write stays free for a
+        smaller state: the SDK counts the state as set before it encodes it, so a state that
+        failed there would use the write up.
+        """
+        encoded = _encode_strictly(state)
         # Marked before the call: the SDK counts the state as set even when sending it raises.
         self.state_saved = True
         choice.set_state(state)
+        return encoded
+
+
+def _encode_strictly(value: Any) -> bytes:
+    """`value` as UTF-8 JSON, the way Starlette's `JSONResponse` renders a non-streaming response.
+
+    It is the strictest encoder the SDK sends a response with: it refuses `NaN` and infinities,
+    and a lone surrogate fails its UTF-8 encoding, while the streaming path escapes both to ASCII.
+    """
+    return json.dumps(value, ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def _save_closing_state(turn: _TurnProgress, choice: Choice) -> _SavedInstead:
+    """Save the turn's `PrepState` with research started and no transcript, after its report.
+
+    It closes the conversation as the full state would: the next request is refused before its
+    history is rebuilt, so no later turn reads the transcript it lacks.
+    """
+    try:
+        turn.save_state(choice, DialState(messages=[], preparation=turn.prep_state).to_dict())
+    except Exception:
+        return _SavedInstead.NOTHING
+    return _SavedInstead.CLOSING_STATE
 
 
 class DeepResearchCompletion(ChatCompletion):
@@ -92,7 +129,8 @@ class DeepResearchCompletion(ChatCompletion):
     One turn runs the preparation agent; if it approves the plan (`start_research`),
     the research graph runs in the same turn and streams the report. The whole turn's
     transcript plus the final `PrepState` are persisted once, and once the report is written
-    nothing fails the turn.
+    nothing fails the turn. Every state is encoded before that one write, and a state that cannot
+    be built or encoded falls back to a smaller one (see the research-resume spec).
 
     Any turn-aborting failure — an exception, an unconfigured instance, or a conversation whose
     report was already delivered — is resolved to a user-safe message and delivered through the
@@ -225,9 +263,9 @@ class DeepResearchCompletion(ChatCompletion):
         """Save the completed turn's state.
 
         An image that cannot be uploaded, the files bucket that cannot be resolved included, is
-        saved as a placeholder. Once the report is written, a failure to build or write the state
-        is one WARNING and the turn completes with nothing persisted: a report costs a whole
-        research run, and failing the turn would cost the user the report.
+        saved as a placeholder. Once the report is written, a state that cannot be built or
+        encoded is replaced by the closing state, and the turn completes with one WARNING: a
+        report costs a whole research run, and failing the turn would cost the user the report.
         """
         try:
             state = await create_dial_state(
@@ -237,10 +275,14 @@ class DeepResearchCompletion(ChatCompletion):
         except Exception as error:
             if not report_written:
                 raise
+            # After the encoding check, a write raises only on a choice that refuses state, so
+            # the closing state cannot follow it.
+            saved = _SavedInstead.NOTHING if turn.state_saved else _save_closing_state(turn, choice)
             _log.warning(
                 "Report delivery step failed after the report was written: step=save_state "
-                "error=%s",
+                "error=%s saved=%s",
                 type(error).__name__,
+                saved,
             )
 
     async def _persist_failure(
@@ -307,7 +349,7 @@ class DeepResearchCompletion(ChatCompletion):
             snapshot_dict = snapshot.model_dump(mode="json")
             state[SNAPSHOT_STATE_KEY] = snapshot_dict
             state[FAILURE_STATE_KEY] = True
-            turn.save_state(choice, state)
+            encoded_state = turn.save_state(choice, state)
         except Exception as error:
             _log.warning(
                 "Snapshot could not be saved; saving the failure record instead: error=%s",
@@ -326,9 +368,8 @@ class DeepResearchCompletion(ChatCompletion):
             len(snapshot.messages),
             snapshot.report_version,
             len(progress.data_queries),
-            # ASCII-escaped JSON, so its length is its size in bytes.
-            len(json.dumps(snapshot_dict)),
-            len(json.dumps(state)),
+            len(_encode_strictly(snapshot_dict)),
+            len(encoded_state),
         )
         return None
 

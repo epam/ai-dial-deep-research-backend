@@ -535,19 +535,26 @@ The coordinator writes four INFO records, with the fields the **logging-policy**
 
 - "Snapshot saved", with `resumable` and, for a non-resumable snapshot, the failure class (D20);
 - "Failure recorded", for a failed turn that saved no snapshot, with the reason
-  `preparation_failed` (any failure before research started), `snapshot_refused`,
-  `no_graph_state` or `snapshot_failed` (D4, D21);
+  `preparation_failed`, `snapshot_refused`,
+  `no_graph_state` or `snapshot_failed` (D4, D21). `preparation_failed` covers every failure
+  before the research runner was created, a preparation-only turn's own failed save included;
 - "Snapshot reused";
 - "Snapshot discarded", with the reason `plan_changed` or `not_resumable`. For a non-resumable
   snapshot the two plan ids are equal, so the ids alone would explain nothing. Its resume point
   appears only when it reads as a known value (D13).
 
-A step that fails after the report is written logs one WARNING naming the step (D22).
+A step that fails after the report is written logs one WARNING naming the step (D22). For the
+final save, the WARNING also says what was saved instead: `saved=closing_state`, or
+`saved=nothing` when the closing state could not be written either (D23).
 
-Sizes are `len()` of the JSON-encoded snapshot and of the whole state.
+Sizes are `len()` of the JSON-encoded snapshot and of the whole state. The state's size comes from
+the encoding the state check of D23 already made; the snapshot is encoded on its own for its size.
 
 A snapshot that cannot be built or saved, and a failure record that cannot be saved, each log one
-WARNING with the exception class, never `logger.exception` at ERROR. The single ERROR stays with
+WARNING with the exception class, never `logger.exception` at ERROR: one WARNING per snapshot state
+or failure record that could not be saved (D23). A turn without research whose full state fails
+logs no WARNING, because that failure is the turn's own error and gets its one ERROR. The single
+ERROR stays with
 `raise_dial_error`. Each retried image download logs one WARNING, with the URL stripped by the
 existing `_strip_url_query`.
 
@@ -643,7 +650,8 @@ and the failed-turn note (D14) follows every message that carries it.
   `PrepState` read from the request with `load_last_prep_state(request)`, and the flag. The
   preparation runner mutates the loaded `PrepState` in place, so the record reads it again from the
   request rather than taking the live object. A failed research turn with a snapshot persists the
-  parts of D6 instead.
+  parts of D6 instead, and falls back to the failure record when its snapshot state cannot be built
+  or encoded (D23).
 - **What persists nothing.** A failure while the application properties are fetched or validated,
   which comes before the `try` (D4); a cancellation; a non-streaming request (the SDK drops the
   state); and the 409 refusal of a conversation whose report was delivered. A failure after the
@@ -666,6 +674,11 @@ Alternatives:
   an empty or partial answer with no note, and the agent could not tell that the request failed.
 - *Persist the live `PrepState` of the failed turn* — rejected. A tool call that ran before the
   failure, such as an `update_plan`, would survive into the next turn although its turn failed.
+- *Once preparation finished, persist the turn's preparation messages and its reset `PrepState`
+  instead* — rejected by the user. Its gain would be to keep a plan the failed turn re-recorded
+  after `approve_plan` reported the recorded one as stale. Without it, the next turn recovers: the
+  approval check reports the plan as stale again and the agent re-records it. The gain is rare,
+  and the cost is a fifth state and a third fallback step in D23.
 - *Record a failure of the properties fetch too* — rejected by the user. It would need the 409
   check and `PrepState` loading moved ahead of the fetch, for a failure that is rare and that the
   next turn recovers from by reading the latest earlier state.
@@ -690,7 +703,8 @@ What runs after the draft is settled, and how each step absorbs its failure:
 | Sending the annotations | Already absorbed: the tags show as plain text (`_send_annotations`). |
 | Writing the citation log record | Caught: one WARNING. |
 | Saving the state (`_persist`): the image upload | A bucket lookup (`dial.bucket.get_raw()`) that raises is one failure, logged once: every image then gets the existing upload-failure placeholder, as one failed upload does today. The state is saved with `research_started` set, so the conversation closes like any other whose report was delivered. |
-| Saving the state: building the state dict (`DialState(...).to_dict()`) and `set_state` | Caught: one WARNING, and the turn still completes. Nothing is persisted. `set_state` can raise because the SDK serializes the chunk with `json.dumps` when it is sent. |
+| Saving the state: building the state dict (`DialState(...).to_dict()`) and checking that it serializes | Caught: one WARNING, and the turn still completes. The closing state is saved instead (D23): an empty `messages`, the turn's `PrepState` with `research_started` set, and no failure flag. The next request is refused with 409, and StatGPT reads `research_started` and shows the answer as the report. |
+| Saving the state: `set_state` | After the check of D23, it raises only on a closed choice, which takes no state at all. Caught: one WARNING, and nothing is persisted. |
 
 **The bucket lookup has two callers that treat its failure differently.** The final save of a
 turn's `messages` replaces every image with a placeholder. The save of a failed research turn's
@@ -706,15 +720,67 @@ Consequences:
 
 - D4 has no delivery case, and no snapshot ever has a delivery resume point.
 - A resumed run cannot fail after its report, so an older resumable snapshot is never left behind
-  for a report the user already has, except when the state write itself fails (Risks).
+  for a report the user already has, except when the choice is closed before the state is written
+  (Risks).
 
 Alternatives:
 
+- *Persist nothing when the final save fails* — rejected by the user. Through DIAL Chat the
+  conversation would stay open with an older snapshot resumable, so a "continue" would pay for the
+  same research again, and through StatGPT the report would not be shown as a report.
 - *Persist nothing when a step after the report fails, and deliver the error* — rejected by the
   user. The report would be lost through StatGPT, and through DIAL Chat the conversation would stay
   open with the older snapshot resumable, so a "continue" would redo delivered work.
 - *Save the snapshot on such a failure and resume the delivery step* — rejected. It is more work for
   a failure that the steps can simply absorb, and it is post-MVP in the feature design.
+
+### D23. Every state is checked before the turn's one write, and a state that fails falls back
+
+The SDK allows one `set_state` per turn, and `set_state` marks the state as submitted before it
+serializes it: it sets `_state_submitted` and only then calls `send_chunk`, whose debug log runs
+`json.dumps` on the chunk (`aidial_sdk/chat_completion/choice.py`, lines 164 and 68). A state that
+cannot be serialized therefore uses up the write and saves nothing. So the coordinator encodes
+every candidate state first, and calls `set_state` only with a state that encoded. The SDK encodes
+the chunk again when it sends the response: with a plain `json.dumps` on a streaming request
+(`aidial_sdk/utils/streaming.py`, line 40), and through Starlette's `JSONResponse` on a
+non-streaming one (`aidial_sdk/application.py`, line 286), which renders with
+`ensure_ascii=False, allow_nan=False` and then encodes the text as UTF-8
+(`starlette/responses.py`, `JSONResponse.render`). The check encodes the same way as that render,
+the strictest of these encoders, so a state that passed the check passes all of them: a `NaN`
+from a tool result never reaches a client as an invalid JSON token, and a lone surrogate never
+fails a non-streaming response after the report.
+
+After the check, `set_state` raises only on a closed choice, because the turn calls it once and on
+an opened choice. A closed choice takes no state at all, so no fallback can help there.
+
+A state that cannot be built or cannot be encoded falls back to the next one in this order. The
+research-resume spec owns the four states and this order ("A turn's one state write falls back in
+a fixed order").
+
+| Turn | Candidate states, in order |
+|---|---|
+| The report was written | The full state, then the closing state. |
+| The turn completed without research | The full state. When it fails, the turn fails and saves the failure record (D21). |
+| Research failed after its graph streamed state | The snapshot state (D6), then the failure record (D21). |
+| The turn failed in any other way | The failure record. |
+
+**The closing state** is the final save of a turn whose report was written, without its
+transcript: an empty `messages`, the turn's `PrepState` with `research_started` set, and no failure
+flag. It needs no image upload, and its `PrepState` encodes as any turn's does. It closes the
+conversation as the full state would: the next request is refused with 409 before the history is
+rebuilt, so no later turn reads the transcript it lacks.
+
+Each snapshot state or failure record that cannot be saved logs one WARNING with the exception
+class, and a failed final save after the report logs its one WARNING with `saved=` (D18). The
+"Snapshot saved"
+record takes the state's size from the encoding the check made.
+
+Alternatives:
+
+- *Call `set_state` and catch what it raises* — rejected. A serialization failure inside
+  `set_state` has already used up the write, so no fallback could follow.
+- *Save a closing state that keeps the report as one message* — rejected. No later turn reads it,
+  and a state that keeps any part of the transcript can fail for the reason the full state failed.
 
 ## No changes required
 
@@ -800,12 +866,23 @@ Alternatives:
   start a new conversation, and changing the query or the plan also gets past it. A snapshot whose
   `plan_id` itself cannot be read is the exception: it counts as matching (D13), so only a new
   conversation gets past it.
-- **[The state write fails after the report]** → The turn completes (D22), but nothing is
-  persisted. Through DIAL Chat the report is shown, and the next turn reads the latest earlier
-  state, so the conversation stays open, and a "continue" may resume an older snapshot. Through
-  StatGPT the answer carries no state, so StatGPT reads the report as a clarification: it does not
-  show it as the report, and it keeps the session open. This is accepted: it needs building the
-  state or `set_state` itself to fail, for example when the SDK's `json.dumps` of the state raises.
+- **[The choice is closed before the state is written after the report]** → The turn completes
+  (D22), but nothing is persisted, because a closed choice takes no state (D23). The next turn
+  reads the latest earlier state, so the conversation stays open, and a "continue" may resume an
+  older snapshot. Through StatGPT the answer carries no state, so StatGPT does not show it as the
+  report. This is accepted: a closed choice also refuses the report's content, so the report most
+  likely did not reach the user either.
+- **[A non-resumable snapshot that cannot be saved leaves an older resumable one]** → A resumed
+  run that fails in a way a resume repeats (D20), and whose snapshot state then cannot be built or
+  encoded, saves a failure record without a snapshot. The older resumable snapshot of the same plan
+  stays the latest one, so the next "continue" replays the failure, which D20 exists to prevent.
+  Two causes are realistic: a files bucket lookup that fails, which usually passes on the next
+  save, and a tool result holding a value the check refuses, such as a `NaN`, which repeats on every
+  replay. This is accepted: it needs a repeating failure and a failed snapshot save in the same
+  turn. A header-only snapshot marked not resumable would prevent it, at the cost of a fifth state.
+- **[A closing state carries no transcript]** → The conversation is closed, so no later turn reads
+  it (D23). Offline tools that read a conversation's final transcript, and debugging, lose that one
+  turn. This is accepted: it needs the full state to fail to build or encode.
 - **[The transcript's tool artifacts can still meet the `index` merge]** → This is today's exposure
   under `messages`, unchanged. Only non-streaming callers are affected.
 

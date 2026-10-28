@@ -67,13 +67,17 @@ not fail at all (**A turn never fails once its report is written**).
 A turn that fails and is delivered as a protocol error SHALL persist a state that carries a failure
 flag, under a key of its own and never inside `PrepState`, which every turn carries forward. A turn
 whose research run saved a snapshot persists the parts that **A failed research turn persists the
-snapshot beside a reset PrepState** lists, the flag among them. Any other failed turn SHALL persist
-an empty `messages`, the `PrepState` the request's history held when the turn started, and the
-flag. That `PrepState` is read again from the request, so a failure during preparation never
-changes the recorded query, plan or plan id. These cases persist nothing: a failure before the
-conversation's state is loaded and checked, such as a failure while the application properties
-are fetched or validated; a cancellation; a non-streaming request; and the refusal of a
-conversation whose report was delivered.
+snapshot beside a reset PrepState** lists, the flag among them. Any other failed turn, and a
+failed research turn whose snapshot state cannot be built or encoded, SHALL persist the failure
+record: an empty `messages`, the `PrepState` the request's history held when the turn started,
+and the flag. That `PrepState` is read again from the request, so a failure during preparation
+never changes the recorded query, plan or plan id.
+
+A state that cannot be built or encoded SHALL fall back in the order that **A turn's one state
+write falls back in a fixed order** lists. These cases persist nothing: a failure
+before the conversation's state is loaded and checked, such as a failure while the application
+properties are fetched or validated; a cancellation; a non-streaming request; the refusal of a
+conversation whose report was delivered; and a closed choice, which takes no state.
 
 #### Scenario: A failure while the properties are fetched persists nothing
 
@@ -87,6 +91,13 @@ conversation whose report was delivered.
 - **THEN** the persisted `PrepState` SHALL equal the one the turn started from, and the state SHALL
   carry the failure flag
 
+#### Scenario: A snapshot state that cannot be encoded falls back
+
+- **WHEN** a research run fails after its graph streamed state, and the state carrying its
+  snapshot cannot be encoded as JSON
+- **THEN** the turn SHALL persist the failure record instead, with one state write, and SHALL
+  deliver the original error
+
 #### Scenario: The flag is not carried forward
 
 - **WHEN** a turn completes after a failed turn
@@ -94,8 +105,8 @@ conversation whose report was delivered.
 
 #### Scenario: Saving the failure record never hides the failure
 
-- **WHEN** persisting the failure record itself raises
-- **THEN** the turn SHALL persist no state, SHALL record the save failure once
+- **WHEN** the failure record itself cannot be built, encoded or saved
+- **THEN** the turn SHALL persist no state, SHALL record each save failure once
   (**logging-policy**), and SHALL deliver the original error
 
 ### Requirement: A turn never fails once its report is written
@@ -111,14 +122,18 @@ report only when Deep Research's answer ends without an error and its state says
 The final save SHALL still close the conversation. When an image cannot be uploaded for any reason,
 the files bucket that cannot be resolved included, the image SHALL be replaced by the upload-failure
 placeholder (**dial-agent-with-mcp**), and the state SHALL be saved with the research-started flag
-set, like that of any turn whose report was delivered. When building or writing the state itself
-fails, the turn SHALL still complete without an error, and it SHALL persist no state.
+set, like that of any turn whose report was delivered. The state SHALL be encoded as JSON before
+the turn's one state write. When building or encoding it fails, the turn SHALL save the closing
+state instead: an empty `messages`, the turn's `PrepState` with the research-started flag set, and
+no failure flag. The closing state closes the conversation as the full state would, so the same
+research cannot run again in it, and the turn SHALL still complete without an error.
 
-Two outcomes of a failed step are accepted, because only a bug or a failed state write causes them.
+Two outcomes of a failed step are accepted, because only a bug or a closed choice causes them.
 When appending the report itself fails, the report does not reach the user, yet the saved state
-closes the conversation. When the state cannot be written, the answer carries no state: through
-DIAL Chat the conversation stays open, and through StatGPT the report is not shown as a report,
-because StatGPT then reads the answer as a clarification.
+closes the conversation. When the choice is closed, it takes no state, so the answer carries none:
+through DIAL Chat the conversation stays open, and through StatGPT the report is not shown as a
+report, because StatGPT then reads the answer as a clarification. A closed choice also refuses the
+report's content, so the report most likely did not reach the user either.
 
 #### Scenario: The files bucket cannot be resolved at the final save
 
@@ -126,6 +141,17 @@ because StatGPT then reads the answer as a clarification.
   images then raises
 - **THEN** the turn SHALL end without a protocol error, and its state SHALL be saved with each image
   replaced by its placeholder and the research-started flag set
+
+#### Scenario: The full state cannot be saved after the report
+
+- **WHEN** research delivered its report and building or encoding the turn's full state then
+  raises
+- **THEN** the turn SHALL save the closing state, SHALL end without a protocol error, and SHALL
+  record the failed save once (**logging-policy**)
+- **AND** the next request in that conversation SHALL be refused as a conversation whose report was
+  delivered, so no research runs and no snapshot is resumed
+- **AND** through StatGPT, Deep Research's answer SHALL carry a state whose research-started flag is
+  set, so StatGPT shows the report to the user
 
 #### Scenario: An unexpected failure in the citation step
 
@@ -139,6 +165,41 @@ because StatGPT then reads the answer as a clarification.
   upload of the final save then fails
 - **THEN** Deep Research's answer SHALL end without an error and carry a state whose
   research-started flag is set, so StatGPT shows the report to the user
+
+### Requirement: A turn's one state write falls back in a fixed order
+
+The DIAL SDK allows one state write per turn. Every turn that persists a state SHALL save exactly
+one of the four states below with that write. Before the write, the app SHALL encode the
+candidate state as UTF-8 JSON, the strictest way the SDK sends a response, refusing `NaN`,
+infinities and text that is not valid UTF-8. A candidate that cannot be built or
+encoded SHALL fall back to the next candidate of its turn, and the write SHALL be made only with a
+candidate that encoded. When the last candidate fails too, or the choice is closed, the turn
+SHALL persist no state.
+
+| State | `messages` | `preparation` | Snapshot | Failure flag |
+|---|---|---|---|---|
+| Full state | the turn's whole transcript | the turn's `PrepState` as it is | no | no |
+| Closing state | empty | the turn's `PrepState` as it is, research started | no | no |
+| Snapshot state | the turn's preparation messages | the turn's `PrepState`, plan-approved and research-started reset | yes | yes |
+| Failure record | empty | the `PrepState` the request's history held when the turn started | no | yes |
+
+| Turn | Candidates, in order |
+|---|---|
+| Its report was written | the full state, then the closing state |
+| It completed without research | the full state; when that fails, the turn fails and saves the failure record |
+| Its research failed after the graph streamed state | the snapshot state, then the failure record |
+| It failed in any other way | the failure record |
+
+#### Scenario: A preparation-only turn whose own save fails
+
+- **WHEN** a turn presents a plan without starting research, and its full state cannot be built
+- **THEN** the turn SHALL persist the failure record, and SHALL deliver the save's failure as its
+  error
+
+#### Scenario: A candidate that cannot be encoded leaves the write unused
+
+- **WHEN** a candidate state holds a value that JSON cannot encode, or a `NaN`
+- **THEN** the app SHALL NOT call the state write with it, so the next candidate can still be saved
 
 ### Requirement: Failures a resume would repeat save a snapshot that is never resumed
 
@@ -298,8 +359,8 @@ channels SHALL be the research graph's state as that node received it.
 
 ### Requirement: A snapshot that cannot be built does not hide the failure
 
-When building or saving the snapshot raises, its image upload included, the turn SHALL drop the
-snapshot, persist only its failure record (**Every failed turn records that it failed**), and
+When building, encoding or saving the snapshot raises, its image upload included, the turn SHALL
+drop the snapshot, persist only its failure record (**Every failed turn records that it failed**), and
 deliver the original error, not the snapshot's. The snapshot's failure SHALL be recorded once
 (**logging-policy**) and SHALL cost only the resume. A snapshot too large for DIAL Core is not
 caught this way: saving it does not raise, and DIAL Core rejects a later request that carries it.

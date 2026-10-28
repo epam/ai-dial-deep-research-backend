@@ -1281,14 +1281,50 @@ def test_a_bucket_that_cannot_be_resolved_after_the_report_still_closes_the_conv
     assert any("outcome=completed" in r.getMessage() for r in caplog.records)
 
 
-def test_a_state_that_cannot_be_written_after_the_report_still_completes_the_turn(
+def _closing_state() -> dict[str, Any]:
+    """The state a turn whose report was written saves when its full state cannot be saved."""
+    preparation = _recorded_plan_state(plan_approved=True, research_started=True)["preparation"]
+    return {"messages": [], "preparation": preparation}
+
+
+class _StateWriteRecorder:
+    """Just enough of a `Choice` for a state write: it records each state, or raises when told."""
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.states: list[Any] = []
+        self.calls = 0
+        self._fail = fail
+
+    def set_state(self, state: Any) -> None:
+        self.calls += 1
+        if self._fail:
+            raise RuntimeError("Trying to append state to a closed choice")
+        self.states.append(state)
+
+
+@pytest.mark.parametrize(
+    "unencodable",
+    [{1, 2}, float("nan"), "\ud800"],
+    ids=["value json cannot encode", "nan", "lone surrogate"],
+)
+def test_a_state_that_cannot_be_encoded_leaves_the_write_unused(unencodable: Any) -> None:
+    turn = completion_module._TurnProgress(prep_state=PrepState())
+    choice = _StateWriteRecorder()
+
+    with pytest.raises((TypeError, ValueError)):
+        turn.save_state(choice, {"messages": [unencodable]})  # type: ignore[arg-type]
+
+    assert choice.calls == 0
+    assert turn.state_saved is False
+
+
+def test_a_full_state_that_cannot_be_encoded_after_the_report_saves_the_closing_state(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     turn_dial: _TurnDial,
     research: type[_ResearchSpy],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    # A value `json.dumps` rejects makes `set_state` raise when the SDK serializes the chunk.
     research.messages = [AIMessage(content=_DRAFT, additional_kwargs={"unserializable": {1, 2}})]
     monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
     caplog.set_level(logging.INFO)
@@ -1296,11 +1332,78 @@ def test_a_state_that_cannot_be_written_after_the_report_still_completes_the_tur
     result = _post_turn(client, _conversation(("yes, go", _recorded_plan_state()), ("go", None)))
 
     assert result.errors == []
-    assert result.states == []
+    assert result.state == _closing_state()
     assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
     [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert "step=save_state error=TypeError" in warning
+    assert "step=save_state error=TypeError saved=closing_state" in warning
     assert any("outcome=completed" in r.getMessage() for r in caplog.records)
+
+
+def test_a_full_state_that_cannot_be_built_after_the_report_saves_the_closing_state(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def fail(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("state unbuildable")
+
+    research.messages = [AIMessage(content=_DRAFT)]
+    monkeypatch.setattr(completion_module, "create_dial_state", fail)
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
+    caplog.set_level(logging.INFO)
+
+    result = _post_turn(client, _conversation(("yes, go", _recorded_plan_state()), ("go", None)))
+
+    assert result.errors == []
+    assert result.state == _closing_state()
+    [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert "step=save_state error=RuntimeError saved=closing_state" in warning
+
+
+def test_after_a_closing_state_the_same_research_never_runs_again(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+) -> None:
+    # A resumed run delivers its report, but its full state cannot be encoded. The older
+    # resumable snapshot stays in the history, and must not be resumed again.
+    research.messages = [AIMessage(content=_DRAFT, additional_kwargs={"unserializable": {1, 2}})]
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
+    failed = ("yes", _failed_research_state())
+
+    resumed = _post_turn(client, _conversation(failed, ("continue", None)))
+    closing = resumed.state
+    refused = _post_turn(client, _conversation(failed, ("continue", closing), ("continue", None)))
+
+    assert closing == _closing_state()
+    assert len(research.runs) == 1
+    assert refused.states == []
+    [error] = refused.errors
+    assert "new conversation" in error["display_message"]
+
+
+async def test_a_state_write_that_raises_after_the_report_saves_nothing(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def full_state(**_kwargs: Any) -> dict[str, Any]:
+        return {"messages": [], "preparation": {}}
+
+    monkeypatch.setattr(completion_module, "create_dial_state", full_state)
+    turn = completion_module._TurnProgress(prep_state=PrepState(research_started=True))
+    choice = _StateWriteRecorder(fail=True)
+    caplog.set_level(logging.INFO)
+
+    await completion_module.DeepResearchCompletion()._persist(
+        turn, choice, [], _TurnDial(), report_written=True  # type: ignore[arg-type]
+    )
+
+    # The refused write is the only one: no closing state is tried after it.
+    assert choice.calls == 1
+    [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert "step=save_state error=RuntimeError saved=nothing" in warning
 
 
 # --- The turn: what a failed turn persists ---------------------------------------------------------
@@ -1517,6 +1620,99 @@ def test_a_failure_record_that_cannot_be_saved_still_delivers_the_original_error
     assert _QUOTA_MESSAGE in result.errors[0]["display_message"]
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert warnings == ["Failure record could not be saved: error=RuntimeError"]
+
+
+def _hand_off_with_a_nan(prep_state: PrepState) -> list[Any]:
+    """`_hand_off`, with a preparation message holding a `NaN`, which the state check refuses."""
+    messages = _hand_off(prep_state)
+    messages[0].additional_kwargs["score"] = float("nan")
+    return messages
+
+
+def test_a_snapshot_state_that_cannot_be_encoded_falls_back_to_the_failure_record(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    research.fail_with = _quota_error()
+    research.progress = _research_progress()
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off_with_a_nan))
+    caplog.set_level(logging.INFO)
+
+    result = _post_turn(client, _conversation(("yes", _recorded_plan_state()), ("go", None)))
+
+    assert result.state == {"messages": [], "preparation": _started_prep(), FAILURE_STATE_KEY: True}
+    assert _QUOTA_MESSAGE in result.errors[0]["display_message"]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == [
+        "Snapshot could not be saved; saving the failure record instead: error=ValueError"
+    ]
+
+
+def test_a_failure_record_that_cannot_be_encoded_saves_nothing(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _UnencodableState:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        def to_dict(self) -> dict[str, Any]:
+            return {"messages": [float("nan")]}
+
+    monkeypatch.setattr(completion_module, "DialState", _UnencodableState)
+    monkeypatch.setattr(
+        completion_module, "PrepAgentRunner", _prep_runner(_failing(_quota_error()))
+    )
+    caplog.set_level(logging.INFO)
+
+    result = _post_turn(client, _conversation(("yes", _recorded_plan_state()), ("go", None)))
+
+    assert result.states == []
+    assert _QUOTA_MESSAGE in result.errors[0]["display_message"]
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == ["Failure record could not be saved: error=ValueError"]
+
+
+@pytest.mark.parametrize("failure", ["build", "encode"])
+def test_a_preparation_only_turn_whose_own_save_fails_saves_the_failure_record(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    caplog: pytest.LogCaptureFixture,
+    failure: str,
+) -> None:
+    async def unbuildable(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("state unbuildable")
+
+    def present_a_plan(prep_state: PrepState) -> list[Any]:
+        # Preparation itself succeeds; only the turn's own save fails.
+        score = float("nan") if failure == "encode" else 1.0
+        return [AIMessage(content="Here is the plan.", additional_kwargs={"score": score})]
+
+    if failure == "build":
+        monkeypatch.setattr(completion_module, "create_dial_state", unbuildable)
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(present_a_plan))
+    caplog.set_level(logging.INFO)
+
+    result = _post_turn(client, _conversation(("yes", _recorded_plan_state()), ("go", None)))
+
+    assert result.state == {"messages": [], "preparation": _started_prep(), FAILURE_STATE_KEY: True}
+    # The save's failure is the turn's only failure, so it is the one error delivered.
+    assert len(result.errors) == 1
+    expected = RuntimeError if failure == "build" else ValueError
+    [error_record] = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert error_record.exc_info is not None and error_record.exc_info[0] is expected
+    records = [(r.levelno, r.getMessage()) for r in caplog.records]
+    assert [level for level, _ in records if level == logging.WARNING] == []
+    recorded = [i for i, (_, text) in enumerate(records) if "Failure recorded" in text]
+    errors = [i for i, (level, _) in enumerate(records) if level >= logging.ERROR]
+    assert [records[i][1] for i in recorded] == ["Failure recorded: reason=preparation_failed"]
+    assert len(errors) == 1 and recorded[0] < errors[0]
 
 
 # --- The turn: the records a failed turn logs -------------------------------------------------------

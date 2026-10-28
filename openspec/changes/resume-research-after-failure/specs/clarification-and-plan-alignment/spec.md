@@ -187,15 +187,23 @@ SHALL persist both the message slice and the resulting `PrepState` into
 `preparation` respectively) via `choice.set_state`. A failed turn persists as well,
 with a failure flag (**research-resume**). A turn whose research run saved a
 snapshot persists its preparation messages, its `PrepState` with the plan-approved
-and research-started flags reset, and the snapshot. Any other failed turn persists
-an empty `messages` and the `PrepState` the request's history held when the turn
-started. A failure while the application properties are fetched or validated
-persists nothing, and a turn never fails once its report is written. The app SHALL
-NOT keep server-side session state across requests.
+and research-started flags reset, and the snapshot. Any other failed turn, and a
+failed research turn whose snapshot cannot be saved, persists an empty `messages`
+and the `PrepState` the request's history held when the turn started. A failure
+while the application properties are fetched or validated
+persists nothing, and a turn never fails once its report is written. When the full
+state of a turn whose report was written cannot be built or encoded, the turn
+persists a closing state instead: an empty `messages` and its `PrepState` with
+research started (**research-resume**). The app SHALL NOT keep server-side session
+state across requests.
 
 #### Scenario: Turn persists transcript and PrepState
-- **WHEN** a turn completes
+- **WHEN** a turn completes and its full state can be built and encoded
 - **THEN** the assistant message's `custom_content.state` SHALL contain the turn's `messages` slice and the current `preparation` state, and the app SHALL hold no other cross-request state for the session
+
+#### Scenario: A delivered report whose state cannot be saved still closes the conversation
+- **WHEN** a turn delivered its report and its full state cannot be built or encoded
+- **THEN** the assistant message's `custom_content.state` SHALL contain an empty `messages` and the `preparation` state with research started, and the next request SHALL be refused as a conversation whose research has started
 
 #### Scenario: Next turn restores PrepState from the transcript
 - **WHEN** a follow-up request carries a prior assistant message whose `custom_content.state` `preparation` field records a resolved clarification and an unapproved plan

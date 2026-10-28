@@ -44,7 +44,7 @@ content allowlist.
 
 When a failed turn persists its failure record without a snapshot (**research-resume**), the app
 SHALL write one INFO "failure recorded" record that names the reason no snapshot was saved:
-`preparation_failed` for any failure before research started, `snapshot_refused`,
+`preparation_failed` for any failure before the research runner was created, `snapshot_refused`,
 `no_graph_state` or `snapshot_failed`. It SHALL carry
 nothing about the failure's content, and SHALL precede the turn's single ERROR record, so the logs
 say why a failed turn left no snapshot.
@@ -57,9 +57,10 @@ say why a failed turn left no snapshot.
 
 ### Requirement: A snapshot or failure record that could not be saved is one WARNING
 
-When building or saving a snapshot raises, or saving the failure record raises, the app SHALL log
-one WARNING that names the exception's class. It SHALL NOT log this at ERROR: the turn's single
-ERROR record belongs to the original failure, which the turn still raises.
+When building, encoding or saving a snapshot raises, or building, encoding or saving the failure
+record raises, the app SHALL log one WARNING that names the exception's class: one WARNING per
+state that could not be saved. It SHALL NOT log this at ERROR: the turn's single ERROR record
+belongs to the original failure, which the turn still raises.
 
 #### Scenario: The snapshot fails while a quota error is handled
 
@@ -73,7 +74,9 @@ ERROR record belongs to the original failure, which the turn still raises.
 When a step fails after the report loop settled a draft (**research-resume**), the app SHALL log
 one WARNING that names the step and the exception's class, and SHALL log no ERROR record for it,
 because the turn completes. A files bucket that cannot be resolved is one failure, logged once, not
-once per image. The citation step's own failure records keep their existing form.
+once per image. The citation step's own failure records keep their existing form. When the full
+state of the final save cannot be built, encoded or written, the WARNING SHALL also say what was
+saved instead: `saved=closing_state`, or `saved=nothing` when no state could be written.
 
 #### Scenario: The final save cannot resolve the files bucket
 
@@ -81,6 +84,13 @@ once per image. The citation step's own failure records keep their existing form
   raises
 - **THEN** the logs SHALL hold one WARNING naming the save and the exception's class, no ERROR
   record, and the turn's "request completed" record SHALL carry `outcome=completed`
+
+#### Scenario: The final save falls back to the closing state
+
+- **WHEN** research delivered its report and the turn's full state cannot be encoded
+- **THEN** the logs SHALL hold one WARNING naming the save, the exception's class and
+  `saved=closing_state`, no ERROR record, and the turn's "request completed" record SHALL carry
+  `outcome=completed`
 
 ### Requirement: A retried snapshot image download is one WARNING per failed attempt
 

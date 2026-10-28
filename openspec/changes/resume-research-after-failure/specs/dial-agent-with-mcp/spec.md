@@ -32,6 +32,9 @@ messages, and the research slice SHALL be written into the turn's snapshot inste
 with its images uploaded the same way (**research-resume**). Any other failed turn
 persists an empty `messages`. History reconstruction never reads the snapshot, so a
 failed run's research transcript never reaches a later turn's preparation agent.
+When a turn's state cannot be built or encoded, the turn saves the state that
+**research-resume** ("A turn's one state write falls back in a fixed order") names
+instead: after a written report, a closing state with an empty `messages`.
 
 #### Scenario: Research turn slice is fully persisted
 
