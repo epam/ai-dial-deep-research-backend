@@ -13,7 +13,12 @@ before today.
   the N although it is not over: in 2026, "the last 2 years" is 2025–2026 and "the last 10 years"
   is 2017–2026. The preparation agent's prompt says so where it tells the agent to resolve a
   mechanical time normalization itself, and its example for the default span is counted the same
-  way.
+  way. The current year is the one the user most wants to see; the other reading that keeps it,
+  the last N completed years plus the current one, would turn "the last 2 years" into three
+  calendar years.
+- The agent writes the resolved years into the query it records ("over the last 10 years
+  (2017–2026)"), so the research phase, whose prompts carry no rule on relative spans, never
+  reads the span itself.
 - The query check's prompt carries the same rule next to its line on relative spans, so the check
   does not send the span back as a question when the agent has resolved it this way.
 - Spans given in months or days ("the last 6 months", "the last 90 days") are unchanged: they run

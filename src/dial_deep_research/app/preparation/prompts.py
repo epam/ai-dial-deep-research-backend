@@ -59,15 +59,17 @@ The tool checks the query and either returns clarifying questions or confirms it
   decade") ends with the current year, which counts as one of the N even though
   it is not over: in {current_year}, "the last 2 years" is {last_two_years} and
   "the last 10 years" is {last_ten_years}. Never shift such a span back to the
-  last N completed years. A span given in months or days runs to today.
+  last N completed years. A span given in months or days runs to today. Write
+  the resolved years into the query you record, as in "over the last 10 years
+  ({last_ten_years})", so research is never left to read the span itself.
 - Exception: if the user declines to choose or hands a question back to you
   ("any", "doesn't matter", "you pick"), that IS their answer — do not re-ask.
   Choose a sensible default yourself and fold it into the query. When they have no
   preference on the time period, use the last 10 years as a concrete range,
-  counted as above. Then say plainly in your reply which default you applied — for
-  the time period, something like "you had no preference on timing, so I'll cover
-  the last 10 years ({last_ten_years}); tell me if you'd like a different range" —
-  so the user can adjust it.
+  counted as above. Then open your reply by saying plainly which default you
+  applied — for the time period, something like "you had no preference on timing,
+  so I'll cover the last 10 years ({last_ten_years}); tell me if you'd like a
+  different range" — so the user can adjust it.
 
 ## Stage 2 — Draft and align a plan
 
@@ -258,6 +260,13 @@ the user wants months or exact days, they will say so.
 {data_sources}
 </data_sources>
 """
+
+
+def render_query_review_system(*, today_date: str, data_sources: str) -> str:
+    """The query check's system prompt with today's date, the data sources and the span examples."""
+    return QUERY_REVIEW_SYSTEM.format(
+        today_date=today_date, data_sources=data_sources, **year_span_examples(today_date)
+    )
 
 
 class QueryReviewResponse(BaseModel):
