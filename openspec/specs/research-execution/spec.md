@@ -3,16 +3,18 @@
 ## Purpose
 TBD - created by archiving change research-execution-loop. Update Purpose after archive.
 ## Requirements
-
 ### Requirement: Research runs as a deterministic graph launched after plan approval
 
 The app SHALL run research as a deterministic LangGraph graph with four nodes —
 **research-agent**, **research-review**, **report**, and **report-review** — once the
 preparation agent approves a plan (its `start_research` tool fires, setting
 `research_started`), in the **same** chat-completion turn, seeded with the approved query and
-plan. The graph SHALL have no checkpointer and SHALL NOT use `interrupt()`. Phase transitions
-SHALL be graph edges decided by Python over the graph state, never by the model:
-`START → research-agent → (research-review when another iteration may still run, else report —
+plan — or, on a resumed run, with the channels of the snapshot a failed run saved
+(**research-resume**). The graph SHALL have no checkpointer and SHALL NOT use `interrupt()`. Phase
+transitions SHALL be graph edges decided by Python over the graph state, never by the model:
+`START → (research-agent on a fresh run; on a resumed run, the node the snapshot's resume point
+names — research-agent, research-review, report or report-review) →` and from research-agent on:
+`research-agent → (research-review when another iteration may still run, else report —
 the last permitted iteration's findings go to the report without a review call) →
 (research-agent when research-review returns a non-empty next plan, else report) → (END when
 this call was a revision whose own model call failed, or when the draft is the last version the
@@ -37,7 +39,10 @@ review entirely.
 Each node name SHALL distinguish the two review steps and separate the research agent from the
 graph that contains it: **research-review** judges evidence coverage and **report-review**
 judges the written report, while **research-agent** is the tool-calling agent inside the
-research graph, not the graph itself.
+research graph, not the graph itself. research-agent's node SHALL run that agent over research-agent's own
+conversation, the state's `research_agent_messages`, and SHALL count the iteration once the agent
+returns, so an iteration that fails is not counted. The agent's own streamed steps SHALL keep the
+namespace of the research-agent node, which the runner reads progress from (**research-resume**).
 
 Research SHALL NOT run before a plan is approved; an unprepared or unapproved turn
 SHALL stop at the preparation stage as before.
@@ -46,6 +51,11 @@ SHALL stop at the preparation stage as before.
 
 - **WHEN** the preparation agent approves the plan and calls `start_research` during a turn
 - **THEN** the app SHALL run the research graph in that same turn, seeded with the approved query and plan, and deliver the final report as that turn's assistant message
+
+#### Scenario: A resumed run enters at the node that failed
+
+- **WHEN** research starts in a turn and the latest snapshot in the history is a resumable snapshot of the current plan whose resume point is report review
+- **THEN** the graph SHALL go from `START` straight to report-review, seeded with the snapshot's channels, and no research-agent, research-review or report call SHALL run before it
 
 #### Scenario: Research does not run without approval
 
@@ -70,14 +80,14 @@ SHALL stop at the preparation stage as before.
 ### Requirement: First iteration plan is the approved preparation plan
 
 The first research-agent iteration SHALL be driven by exactly the plan the user
-approved during preparation (`PrepState.plan`). The graph's initial state SHALL
+approved during preparation (`CrossTurnPrepState.plan`). The graph's initial state SHALL
 record the original (aligned) query and seed the plan list with the approved plan;
 the first plan SHALL be presented to research-agent as its instruction.
 
 #### Scenario: Approved plan seeds the first iteration
 
 - **WHEN** the research graph starts
-- **THEN** its first iteration plan SHALL equal the approved `PrepState.plan`, unchanged, and the original query SHALL be the aligned query from preparation
+- **THEN** its first iteration plan SHALL equal the approved `CrossTurnPrepState.plan`, unchanged, and the original query SHALL be the aligned query from preparation
 
 ### Requirement: Researcher investigates with forced tool choice and a finish_iteration sentinel
 
@@ -316,8 +326,14 @@ application property (default 500, minimum 1; see the
 
 What the budget limits SHALL be read precisely. It counts LangGraph super-steps — node
 executions — within a single graph run, and each nested graph run receives the budget
-again instead of drawing on what the parent has left. The research-agent node is itself a
-compiled graph, so one research-agent iteration gets its own budget.
+again instead of drawing on what the parent has left. The research-agent node runs a
+compiled agent graph, so one research-agent iteration gets its own budget.
+
+Research-agent's run SHALL use the channel's step budget. LangChain's `create_agent` sets its own
+`recursion_limit` on the agent graph that it returns. This value SHALL NOT replace the channel's
+budget. For this reason, research-agent's node SHALL pass its run config to the agent explicitly.
+A config that the node passes explicitly overrides the value that `create_agent` sets. A config
+that the agent's run only inherits from the research graph does not override that value.
 
 The budget therefore constrains research-agent's own loop, whose length nothing else
 bounds, while the outer graph's length is already fixed by its own caps —
@@ -349,6 +365,15 @@ DIAL protocol errors** requirement), never deliver a half-finished answer as a s
 
 - **WHEN** research-agent keeps calling MCP tools without ever calling `finish_iteration`, until its agent run exhausts the step budget
 - **THEN** the turn SHALL fail through the DIAL error protocol with the step-budget message, and SHALL NOT deliver a partial report as a successful answer
+
+#### Scenario: Research-agent's run uses the channel's step budget
+
+- **WHEN** a channel sets `max_research_graph_steps` to a value below the `recursion_limit` that
+  `create_agent` sets
+- **AND** research-agent never calls `finish_iteration`
+- **THEN** research-agent's run SHALL stop with `GraphRecursionError` when it reaches the
+  channel's value
+- **AND** it SHALL stop although the research graph itself has made only one super-step
 
 ### Requirement: Report node writes the final cited report and is the only assistant content
 
@@ -573,10 +598,22 @@ and no checkpointer. Across iterations the accumulated message context SHALL gro
 without summarization (research-agent always sees the full prior history, and
 research-review and the report nodes see all accumulated tool results).
 
+A run that an exception ends is the one case that continues in a later turn: its snapshot lets a
+later turn, started by the user's request to continue, resume it (**research-resume**). A failure
+a resume would repeat leaves a snapshot that is never resumed, and research on a later turn starts
+fresh. The resumed run is again autonomous within its own turn, and its accumulated message context
+is the snapshot's research-agent messages followed by what the resumed run adds, still without
+summarization.
+
 #### Scenario: Whole loop runs in one turn
 
 - **WHEN** research is launched
 - **THEN** the research-agent/research-review loop and the report loop SHALL all run within that one turn without pausing for user input, and the turn SHALL complete with the report as the assistant message
+
+#### Scenario: A failed run continues in a later turn
+
+- **WHEN** a research run fails with a quota error in its second iteration, and on a later turn the user asks to continue
+- **THEN** the later turn SHALL run the rest of the research from the snapshot without pausing for user input, research-agent SHALL see the snapshot's whole research-agent messages, and the turn SHALL complete with the report as the assistant message
 
 ### Requirement: Every research LLM call's inputs and outputs are specified
 
@@ -585,6 +622,15 @@ report-review node. Each one's inputs SHALL be exactly what is listed here — n
 a model, and adding an input SHALL require updating this requirement. Where a call deliberately
 omits something another call receives, the omission
 is part of the contract, not an accident of implementation.
+
+The research graph's state holds research-agent's conversation as `research_agent_messages`, which
+this requirement calls the transcript. On a resumed run (**research-resume**), the transcript
+begins with the messages the snapshot restored — written by the failed turn, with its images
+downloaded back to base64 — and every call below that reads the transcript reads it including that
+part. The other state fields a call reads come from the snapshot too: the query, the approved plan,
+the research reviews, the iteration count, the drafts and the report reviews. Every value derived
+from them is derived by the reading node in the same way on a fresh and on a resumed run. No call
+receives the failed-turn note or the preparation agent messages of any turn.
 
 **1. research-agent** (one call per agent step)
 
@@ -607,8 +653,7 @@ is part of the contract, not an accident of implementation.
   terminology — and, when
   a rule of the channel's `prompts.client_rules` has a research-agent part, those parts in a
   `<client_rules>` block after them (see **source-selection**).
-- Messages: the graph's accumulated `messages` — the seed instruction (the aligned query and the
-  approved plan), every `AIMessage` and `ToolMessage` of the turn so far **including image
+- Messages: the transcript — the seed instruction (the aligned query and the approved plan), every `AIMessage` and `ToolMessage` of the run so far **including image
   content blocks**, and each research-review-injected next-plan instruction. Image blocks are
   subject to the image budget (see **image-budget**), which may have substituted the newest
   image-carrying results with error messages. This call is the only one that receives its own
@@ -620,8 +665,9 @@ is part of the contract, not an accident of implementation.
 **2. research-review** (one call per completed iteration)
 
 - System prompt: the research-review instructions, filled with today's date.
-- Messages: one human message carrying the original query, the rendered findings, and the plans
-  pursued so far. The findings rendering carries the instructions given, the name and arguments
+- Messages: one human message carrying the query preparation finalized, the rendered findings,
+  and the plans pursued so far: the approved plan, then the next steps of each earlier research
+  review. The earlier reviews' assessments are NOT included. The findings rendering carries the instructions given, the name and arguments
   of every tool call, any notes research-agent wrote, and the **text** of every tool result.
 - **Images are NOT included**: an image-carrying tool result is rendered with a marker noting an
   image was returned, and the image itself is omitted. This call therefore judges coverage
@@ -642,7 +688,8 @@ is part of the contract, not an accident of implementation.
   use none. The gaps the quality rules define need the call to weigh each fact of the question
   against the findings, and without reasoning it closed research on a listing or a title alone.
 - Output: a structured verdict — the assessment, then the next-iteration steps (empty means
-  research is complete).
+  research is complete). The whole verdict is appended to the state's `research_reviews`; the next
+  steps alone feed the next iteration's instruction, the plans later calls list, and the routing.
 
 **3. report** (one call per draft: the first, and each revision)
 
@@ -662,20 +709,23 @@ is part of the contract, not an accident of implementation.
   report-writer part — and, when a
   rule of the channel's `prompts.client_rules` has a report-writer part, those parts in a
   `<client_rules>` block after them (see **source-selection**).
-- Messages: the accumulated `messages` transcript **including images** (already clamped by
+- Messages: the transcript **including images** (already clamped by
   the image budget) with the `update_status` calls and their acknowledgements removed, then the
   report request carrying the aligned query and the plans pursued. Removal is deterministic, so
   successive report calls in a run still share a byte prefix (see **prompt-caching**).
 - **The status announcements are NOT included**: what research told the user it was doing is not
   evidence, and SHALL NOT reach the model that writes the report.
-- On a revision, additionally: the draft being revised, the revision instruction, and the draft's
-  measured word count alongside the ceiling. The instruction is the review step's findings, the
+- On a revision, additionally: the draft being revised (the latest of the state's `reports`), the
+  revision instruction, and the draft's measured word count alongside the ceiling. The node builds
+  the instruction from the latest report-review round only: its rule violations, then the blind
+  review's violations, then the grounded review's items; a review call that failed contributes
+  nothing. No earlier draft or earlier round reaches the call. The instruction is the review step's findings, the
   app-rendered length direction when the count forced the revision, or both merged — a revision is
   never issued without one (see **report-composition**). These SHALL be **appended after** the
   original report request rather than replacing it, so the byte prefix is unchanged and the
   provider's prompt cache can serve it (see **prompt-caching**).
 - Tools bound: none.
-- Output: the report text. It is not streamed to the assistant content (see the report-node
+- Output: the report text, appended to the state's `reports`. It is not streamed to the assistant content (see the report-node
   requirement below).
 
 **4. blind review** (one call per draft, in the report-review node)
@@ -725,6 +775,8 @@ is part of the contract, not an accident of implementation.
 - Output: a structured verdict — one list of report violations, where an empty list is the
   approval. There is no separate approval field, so a remark the model does not want acted on
   cannot be expressed and forces a revision instead.
+- The whole verdict is saved as the blind review of the round's entry in the state's
+  `report_reviews`, next to the violations the app's own report rules found in the draft.
 
 **5. grounded review** (one call per draft, in the report-review node, concurrent with call 4; see
 **faithful-relay**)
@@ -732,8 +784,8 @@ is part of the contract, not an accident of implementation.
 - System prompt: a short neutral message saying that the messages after it are the research the
   assistant did for the question, and that the last messages say what to do with it. It carries no
   rule, no date and no data sources.
-- Messages, after it: the research transcript exactly as call 3 receives it — the accumulated
-  `messages` **including images**, already clamped by the image budget, with the `update_status`
+- Messages, after it: the research transcript exactly as call 3 receives it — the transcript
+  **including images**, already clamped by the image budget, with the `update_status`
   calls and their acknowledgements removed — and no report request.
 - Then a system message with the grounded review's instructions: today's date, the
   instruction to compare every claim with the source passage it relays, the generic policy blocks
@@ -758,7 +810,8 @@ is part of the contract, not an accident of implementation.
   `high` the grounded review found slightly more and was more precise, but took about half again
   as long.
 - Tools bound: none. No output schema.
-- Output: free text, read as a numbered list of violations; `No violations.` adds none.
+- Output: free text, read as a numbered list of violations; `No violations.` adds none. The answer
+  is saved whole, as the grounded review of the round's entry in the state's `report_reviews`.
 
 #### Scenario: research-review judges coverage without the images
 
@@ -826,6 +879,14 @@ is part of the contract, not an accident of implementation.
   report-review SHALL each carry the same data-sources string, including the same datasets
   section, and only research-agent's SHALL carry the instruction about the dataset
   tools
+
+#### Scenario: A resumed research-agent call receives the snapshot's transcript
+
+- **WHEN** a run resumes inside research-agent from a snapshot whose transcript holds the seed
+  instruction and two completed model calls, one of whose tool results carries an image
+- **THEN** research-agent's next model call SHALL receive those messages in order, with the image
+  as a base64 block, and SHALL NOT receive the failed turn's preparation messages or the
+  failed-turn note
 
 ### Requirement: Research-agent and research-review act on a failed tool call
 

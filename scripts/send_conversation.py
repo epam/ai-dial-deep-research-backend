@@ -3,9 +3,9 @@
 
 The app is a *stateful* DIAL app: stateless per HTTP request, but it threads
 conversation state across turns via `assistant.custom_content.state` on each
-message. `app/history.py:reconstruct_history` rebuilds the agent's view by
-walking the full `messages` array we send back — every `user` becomes a turn,
-every `assistant` carrying a `custom_content.state` is decoded into its slice.
+message. `app/history.py:reconstruct_prep_agent_history` rebuilds the preparation
+agent's view by walking the full `messages` array we send back — every `user` becomes a
+turn, every `assistant` carrying a `custom_content.state` is decoded into its slice.
 So the only thing a client must get right is re-sending prior assistant messages
 *verbatim, state included*. The state blob is opaque — we capture and resend it,
 never construct or inspect it.

@@ -6,7 +6,8 @@ Four edges and the helpers that decide them:
   the iteration budget: the last permitted iteration hands straight to the report without a
   review call.
 - `route_after_research_review` (research-review → research-agent | report) loops back only when
-  research-review recorded a plan for a not-yet-run iteration (`len(plans) > iteration`).
+  research-review recorded a plan for a not-yet-run iteration: more iteration plans (the approved
+  plan, then each review's next steps) than finished iterations.
 - `ReportReviewOutcome.revision_instruction` decides the report loop: a non-empty violations
   list becomes the numbered revision instruction, an empty one delivers. The router maps its
   presence to an edge and the report-review node logs the same value, so neither can disagree
@@ -32,17 +33,27 @@ from dial_deep_research.app.research.nodes import (
     route_after_research_agent,
     route_after_research_review,
 )
-from dial_deep_research.app.research.state import ResearchState
+from dial_deep_research.app.research.prompts import ReportReview, ResearchReview
+from dial_deep_research.app.research.state import ReportReviewRound, ResearchState
 
 
-def _state(plans: list[list[str]], research_iteration: int) -> ResearchState:
+def _state(
+    research_iteration: int, research_reviews: list[ResearchReview] | None = None
+) -> ResearchState:
     return ResearchState(
-        messages=[],
-        original_query="q",
-        plans=plans,
+        research_query="q",
+        approved_plan=["a"],
+        research_agent_messages=[],
         research_iteration=research_iteration,
-        report=None,
+        research_reviews=research_reviews or [],
+        reports=[],
+        report_reviews=[],
+        report_revision_failed=False,
     )
+
+
+def _review(*next_steps: str) -> ResearchReview:
+    return ResearchReview(assessment="The findings so far.", next_steps=list(next_steps))
 
 
 def test_iteration_with_budget_left_is_reviewed() -> None:
@@ -50,7 +61,7 @@ def test_iteration_with_budget_left_is_reviewed() -> None:
     route = route_after_research_agent(
         max_research_iterations=10, emit_budget_exhausted=lambda _outcome: None
     )
-    assert route(_state(plans=[["a"]], research_iteration=1)) == "research-review"
+    assert route(_state(research_iteration=1)) == "research-review"
 
 
 def test_last_permitted_iteration_hands_straight_to_report() -> None:
@@ -58,14 +69,14 @@ def test_last_permitted_iteration_hands_straight_to_report() -> None:
     route = route_after_research_agent(
         max_research_iterations=2, emit_budget_exhausted=lambda _outcome: None
     )
-    assert route(_state(plans=[["a"], ["b"]], research_iteration=2)) == "report"
+    assert route(_state(research_iteration=2, research_reviews=[_review("b")])) == "report"
 
 
 def test_budget_of_one_iteration_skips_the_review_entirely() -> None:
     route = route_after_research_agent(
         max_research_iterations=1, emit_budget_exhausted=lambda _outcome: None
     )
-    assert route(_state(plans=[["a"]], research_iteration=1)) == "report"
+    assert route(_state(research_iteration=1)) == "report"
 
 
 def test_the_skipped_review_is_announced_with_both_numbers(
@@ -79,7 +90,7 @@ def test_the_skipped_review_is_announced_with_both_numbers(
     )
 
     with caplog.at_level(logging.INFO):
-        route(_state(plans=[["a"], ["b"]], research_iteration=2))
+        route(_state(research_iteration=2, research_reviews=[_review("b")]))
 
     [outcome] = reported
     assert (outcome.research_iteration, outcome.max_research_iterations) == (2, 2)
@@ -94,7 +105,7 @@ def test_an_iteration_with_budget_left_announces_nothing() -> None:
         max_research_iterations=10, emit_budget_exhausted=reported.append
     )
 
-    route(_state(plans=[["a"]], research_iteration=1))
+    route(_state(research_iteration=1))
 
     assert reported == []
 
@@ -108,7 +119,7 @@ def test_a_budget_of_one_announces_nothing(caplog: LogCaptureFixture) -> None:
     )
 
     with caplog.at_level(logging.INFO):
-        route(_state(plans=[["a"]], research_iteration=1))
+        route(_state(research_iteration=1))
 
     assert reported == []
     assert "max_research_iterations=1" in caplog.text
@@ -117,14 +128,16 @@ def test_a_budget_of_one_announces_nothing(caplog: LogCaptureFixture) -> None:
 def test_empty_review_routes_to_report() -> None:
     # research-review returned no new plan after iteration 1: len(plans) == iteration.
     route = route_after_research_review()
-    assert route(_state(plans=[["a"]], research_iteration=1)) == "report"
+    assert route(_state(research_iteration=1)) == "report"
 
 
 def test_new_plan_routes_to_research_agent() -> None:
-    # research-review added a plan for iteration 2: len(plans) > iteration. The iteration cap
-    # needs no check here — the review only ran because another iteration was permitted.
+    # research-review returned next steps for iteration 2: two plans for one iteration. The
+    # iteration cap needs no check here — the review only ran because another iteration was
+    # permitted.
     route = route_after_research_review()
-    assert route(_state(plans=[["a"], ["b"]], research_iteration=1)) == "research-agent"
+    state = _state(research_iteration=1, research_reviews=[_review("b")])
+    assert route(state) == "research-agent"
 
 
 # --- ReportReviewOutcome.revision_instruction ----------------------------------------------------
@@ -136,7 +149,6 @@ def _outcome(**overrides: Any) -> ReportReviewOutcome:
         "draft_number": 1,
         "word_count": 900,
         "max_words": 2750,
-        "length_exemptions": "the inline citations and the References section",
         "violations": [],
         "blind_review_error": None,
         "duration_seconds": 1.0,
@@ -157,14 +169,15 @@ def test_violations_become_a_numbered_instruction() -> None:
 
 def test_a_failed_review_with_no_violations_delivers() -> None:
     # The error alone forces nothing: an instruction exists iff the list is non-empty.
-    assert _outcome(error="RuntimeError").revision_instruction is None
+    assert _outcome(blind_review_error="RuntimeError").revision_instruction is None
 
 
 def test_a_failed_review_still_revises_on_a_violation_in_the_list() -> None:
     # The node merges the app-measured length violation into the list even when the call
     # failed, so the instruction needs no fallback of its own.
     instruction = _outcome(
-        error="RuntimeError", violations=["The draft is 3910 words, over the 2750-word ceiling."]
+        blind_review_error="RuntimeError",
+        violations=["The draft is 3910 words, over the 2750-word ceiling."],
     ).revision_instruction
     assert instruction is not None
     assert "3910" in instruction
@@ -174,17 +187,23 @@ def test_a_failed_review_still_revises_on_a_violation_in_the_list() -> None:
 
 
 def _report_state(**overrides: Any) -> ResearchState:
+    """A state with one draft written and no review round yet, with the given keys overridden."""
     state: dict[str, Any] = {
-        "messages": [],
-        "original_query": "q",
-        "plans": [["a"]],
+        "research_query": "q",
+        "approved_plan": ["a"],
+        "research_agent_messages": [],
         "research_iteration": 1,
-        "report": "the draft",
-        "report_revision_instruction": None,
-        "report_version": 1,
+        "research_reviews": [],
+        "reports": ["the draft"],
+        "report_reviews": [],
         "report_revision_failed": False,
     }
     return ResearchState(**{**state, **overrides})  # type: ignore[typeddict-item]
+
+
+def _drafts(count: int, latest: str = "the draft") -> list[str]:
+    """`count` drafts, the last one `latest`: the draft number is the list's length."""
+    return [*(f"draft {n}" for n in range(1, count)), latest]
 
 
 def _report_router(
@@ -204,12 +223,12 @@ def test_report_routes_to_review_when_the_budget_allows() -> None:
 
 def test_the_next_to_last_version_is_still_reviewed() -> None:
     # Version 2 with a budget of 3: one more version may be written, so a verdict is actionable.
-    assert _report_router(max_versions=3)(_report_state(report_version=2)) == "report-review"
+    assert _report_router(max_versions=3)(_report_state(reports=_drafts(2))) == "report-review"
 
 
 def test_the_last_permitted_version_delivers_without_a_review_call() -> None:
     # Version 3 with a budget of 3: no version may follow, so a verdict could not be acted on.
-    assert _report_router(max_versions=3)(_report_state(report_version=3)) == "end"
+    assert _report_router(max_versions=3)(_report_state(reports=_drafts(3))) == "end"
 
 
 def test_failed_revision_ends_the_loop_even_with_budget_left() -> None:
@@ -231,7 +250,7 @@ def test_the_exhausted_version_budget_is_announced_with_its_numbers(
     route = _report_router(max_versions=3, reported=reported)
 
     with caplog.at_level(logging.INFO):
-        route(_report_state(report_version=3, report="w1 w2"))
+        route(_report_state(reports=_drafts(3, latest="w1 w2")))
 
     [outcome] = reported
     assert (outcome.draft_number, outcome.max_versions, outcome.word_count) == (3, 3, 2)
@@ -242,7 +261,7 @@ def test_a_version_with_budget_left_announces_nothing() -> None:
     reported: list[ReportBudgetExhausted] = []
     route = _report_router(max_versions=3, reported=reported)
 
-    route(_report_state(report_version=2, report="fine"))
+    route(_report_state(reports=_drafts(2, latest="fine")))
 
     assert reported == []
 
@@ -254,7 +273,7 @@ def test_a_version_budget_of_one_announces_nothing(caplog: LogCaptureFixture) ->
     route = _report_router(max_versions=1, reported=reported)
 
     with caplog.at_level(logging.INFO):
-        route(_report_state(report_version=1, report="fine"))
+        route(_report_state(reports=_drafts(1, latest="fine")))
 
     assert reported == []
     assert "max_versions=1" in caplog.text
@@ -265,17 +284,29 @@ def test_a_failed_revision_announces_no_exhausted_budget() -> None:
     reported: list[ReportBudgetExhausted] = []
     route = _report_router(max_versions=3, reported=reported)
 
-    route(_report_state(report_version=3, report="fine", report_revision_failed=True))
+    route(_report_state(reports=_drafts(3, latest="fine"), report_revision_failed=True))
 
     assert reported == []
 
 
 def test_recorded_instruction_routes_back_to_report() -> None:
+    review_round = ReportReviewRound(
+        draft_number=1, rule_violations=["Shorten it."], blind_review=None, grounded_review=None
+    )
     route = route_after_report_review()
-    assert route(_report_state(report_revision_instruction="Shorten it.")) == "report"
+    assert route(_report_state(report_reviews=[review_round])) == "report"
 
 
 def test_no_instruction_ends_the_turn() -> None:
-    # `revision_instruction` already folded in the count and the budget, so an absent
-    # instruction is the whole signal to deliver.
+    # No review round means no instruction: the latest draft is delivered as it stands.
     assert route_after_report_review()(_report_state()) == "end"
+
+
+def test_an_approving_round_ends_the_turn() -> None:
+    review_round = ReportReviewRound(
+        draft_number=1,
+        rule_violations=[],
+        blind_review=ReportReview(report_violations=[]),
+        grounded_review="No violations.",
+    )
+    assert route_after_report_review()(_report_state(report_reviews=[review_round])) == "end"

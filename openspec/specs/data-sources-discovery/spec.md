@@ -1,7 +1,6 @@
 # data-sources-discovery Specification
 
 ## Purpose
-
 Builds the description of a channel's data sources from what its MCP servers report, so an admin
 does not have to write and maintain by hand what changes with the servers' content. Once per turn,
 with retries, the app fetches the list of datasets, their structures and the glossary from the
@@ -10,7 +9,6 @@ RAG server. It puts them, together with each server's static description, into t
 model calls that plan the research, run it and write the report.
 
 ## Requirements
-
 ### Requirement: The data sources are fetched once per turn, before preparation
 
 When a channel configures a `statgpt` MCP server, or a `generic_rag` server that sets
@@ -55,7 +53,10 @@ The fetched data sources SHALL NOT be persisted to the turn state. They live for
 the next turn fetches them again.
 
 A turn that ends before preparation because its conversation already handed off to research SHALL
-make no data-sources call: the fetch runs only on a turn that goes on to preparation.
+make no data-sources call: the fetch runs only on a turn that goes on to preparation. A
+conversation counts as handed off once its research delivered its report; a conversation whose
+research failed is not handed off, so a turn that resumes or restarts that research fetches the
+data sources as any other turn does (**research-resume**).
 
 #### Scenario: One fetch serves the whole turn
 
@@ -119,8 +120,14 @@ make no data-sources call: the fetch runs only on a turn that goes on to prepara
 
 #### Scenario: A handed-off conversation makes no call
 
-- **WHEN** a turn arrives on a conversation whose research already started on an earlier turn
+- **WHEN** a turn arrives on a conversation whose research delivered its report on an earlier turn
 - **THEN** the app SHALL make no data-sources call, and the turn SHALL fail as it does today
+
+#### Scenario: A conversation whose research failed fetches the data sources
+
+- **WHEN** a turn arrives on a conversation whose research failed on an earlier turn
+- **THEN** the app SHALL run the data-sources fetch before the preparation agent's first model call,
+  as on any turn that goes on to preparation
 
 ### Requirement: The list of datasets is requested with at most three attempts
 

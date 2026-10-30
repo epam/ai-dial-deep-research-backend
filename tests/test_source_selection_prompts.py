@@ -236,12 +236,14 @@ class _RecordingLLM:
 
 def _state() -> dict[str, Any]:
     return {
-        "messages": [HumanMessage(content="seed")],
-        "original_query": "q",
-        "plans": [["step"]],
+        "research_agent_messages": [HumanMessage(content="seed")],
+        "research_query": "q",
+        "approved_plan": ["step"],
         "research_iteration": 1,
-        "report": "## Overview\n\nA draft.",
-        "report_version": 1,
+        "research_reviews": [],
+        "reports": ["## Overview\n\nA draft."],
+        "report_reviews": [],
+        "report_revision_failed": False,
     }
 
 

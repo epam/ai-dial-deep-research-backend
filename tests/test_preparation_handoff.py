@@ -3,8 +3,8 @@
 `StopAfterResearchStartMiddleware` ends the preparation agent's loop once `start_research`
 succeeded, so the launch turn's answer is the report alone. Two invariants:
 
-- it jumps only on `PrepState.research_started`, so a **rejected** `start_research` (the gate
-  leaves the flag false) still returns to the model and the agent answers the user;
+- it jumps only on `CrossTurnPrepState.research_started`, so a **rejected** `start_research`
+  (the gate leaves the flag false) still returns to the model and the agent answers the user;
 - its `before_model` hook declares `can_jump_to=["end"]`. Without that declaration the agent
   graph gives the middleware node no END destination and the returned `jump_to` is ignored —
   `langchain.agents.factory._get_can_jump_to` is what reads it while compiling the graph.
@@ -14,12 +14,12 @@ from __future__ import annotations
 
 from langchain.agents.factory import _get_can_jump_to
 
-from dial_deep_research.app.history import Plan, PrepState
+from dial_deep_research.app.history import CrossTurnPrepState, Plan
 from dial_deep_research.app.preparation.middleware import StopAfterResearchStartMiddleware
 
 
-def _prep_state(*, research_started: bool) -> PrepState:
-    return PrepState(
+def _prep_state(*, research_started: bool) -> CrossTurnPrepState:
+    return CrossTurnPrepState(
         current_query="q",
         plan=Plan(steps=["step"]),
         plan_approved=True,

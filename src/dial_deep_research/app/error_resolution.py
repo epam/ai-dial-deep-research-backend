@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from enum import StrEnum
 from typing import Any, NoReturn
 
 import httpx
@@ -65,7 +66,10 @@ _MSG_AI_MODEL_TIMEOUT = "The request to the AI model service timed out."
 _MSG_AI_MODEL_STREAM_FAILURE = "The AI model service failed while responding."
 _MSG_AI_MODEL_CONFLICT = "The AI model service reported a temporary conflict."
 
-# Non-retryable constants carry the cause plus cause-specific advice.
+# Non-retryable constants carry the cause, plus advice where it fits every call that fails this way.
+# A rejected input — a context overflow, a content filter, a model 400, 413 or 422 — comes from
+# preparation and research calls alike, and a research call sends the app's own transcript rather
+# than the user's messages, so those texts state what happened and give no advice.
 _MSG_AI_MODEL_NO_PERMISSION = (
     "You don't have permission to use the AI model configured in this application. "
     "Please contact your administrator."
@@ -77,20 +81,10 @@ _MSG_AI_MODEL_NOT_FOUND = (
     "The AI model configured in this application could not be found. "
     "Please contact your administrator."
 )
-_MSG_AI_MODEL_INVALID_REQUEST = (
-    "The request was rejected as invalid by the AI model service. "
-    "Please contact your administrator."
-)
-_MSG_AI_MODEL_CONTENT_FILTER = (
-    "The request was blocked by the content management policy. Please rephrase your message."
-)
-_MSG_AI_MODEL_CONTEXT_LENGTH = (
-    "The request exceeds the maximum context length of the AI model. "
-    "Please shorten your messages and try again."
-)
-_MSG_AI_MODEL_PAYLOAD_TOO_LARGE = (
-    "The request payload is too large. Please reduce the size of your message or attachments."
-)
+_MSG_AI_MODEL_INVALID_REQUEST = "The request was rejected as invalid by the AI model service."
+_MSG_AI_MODEL_CONTENT_FILTER = "The request was blocked by the content management policy."
+_MSG_AI_MODEL_CONTEXT_LENGTH = "The request exceeds the maximum context length of the AI model."
+_MSG_AI_MODEL_PAYLOAD_TOO_LARGE = "The request payload is too large for the AI model service."
 _MSG_AI_MODEL_NO_CONNECTIVITY = (
     "Could not connect to the AI model service. "
     "Please check connectivity or contact your administrator."
@@ -119,9 +113,11 @@ _MSG_HTTP_UNEXPECTED = (
 _MSG_HTTP_GENERIC = "An HTTP error occurred. Please try again or contact your administrator."
 
 # --- Internal, in-process conditions ---
+# No "start a new conversation": a request to continue in the same conversation starts the
+# research again from the beginning, because such a failure's snapshot is never resumed.
 _MSG_RESEARCH_STEP_BUDGET = (
     "The research ran too long and reached its internal step budget without finishing. "
-    "Please narrow the request and start a new conversation."
+    "Please narrow the request."
 )
 
 # Error codes that resolve to a specific message ahead of the status ladder. All are
@@ -165,6 +161,20 @@ class ResearchAlreadyHandedOffError(AppConditionError):
         "Start a new conversation to prepare another research."
     )
     status_code = 409
+
+
+class SnapshotImageUnavailableError(AppConditionError):
+    """An image of the research snapshot to resume could not be downloaded in its attempts."""
+
+    user_message = "The saved research progress could not be loaded."
+    retryable = True
+
+
+class RepeatingFailure(StrEnum):
+    """A class of research failure that resuming the run would repeat."""
+
+    INPUT_REJECTED = "input_rejected"
+    STEP_BUDGET_EXHAUSTED = "step_budget_exhausted"
 
 
 class ErrorDetails(BaseModel):
@@ -506,6 +516,36 @@ def resolve_exception(e: Exception) -> ResolvedError:
 
     # 6. Generic fallback (non-retryable).
     return _compose(_FALLBACK_MESSAGE, False, details)
+
+
+# A model call that failed with one of these statuses rejected the request it was sent.
+_INPUT_REJECTED_STATUS_CODES = frozenset({400, 413, 422})
+
+
+def repeating_failure(e: Exception) -> RepeatingFailure | None:
+    """The class of a research failure that resuming the run would repeat, or `None`.
+
+    A resume re-sends the failed run's input and restores its state, so it fails again the same
+    way after a model call that rejected its input — a code of `_CODE_MESSAGES`, or a model call's
+    400, 413 or 422 — and after an exhausted step budget, where the unfinished iteration would get
+    its whole transcript back and a fresh budget. A 4xx from DIAL Core or an MCP server is left
+    out: it is a configuration fault, and resuming succeeds once it is fixed. So is everything
+    else, including failures `resolve_exception` calls non-retryable, such as a bug.
+
+    This is a standing rule, not a detail of the resume: any later retry or resume mechanism
+    consults this function rather than retrying every exception, unless it changes what it
+    re-sends. The failure is unwrapped and its code read exactly as `resolve_exception` does, so
+    the two never disagree on what a rejected input is.
+    """
+    e = exception_leaves(e)[0]
+    if isinstance(e, GraphRecursionError):
+        return RepeatingFailure.STEP_BUDGET_EXHAUSTED
+    details = _extract_error_details(e)
+    if details.code in _CODE_MESSAGES:
+        return RepeatingFailure.INPUT_REJECTED
+    if isinstance(e, openai.APIError) and details.status_code in _INPUT_REJECTED_STATUS_CODES:
+        return RepeatingFailure.INPUT_REJECTED
+    return None
 
 
 def _outgoing_status_code(resolved: ResolvedError) -> int:

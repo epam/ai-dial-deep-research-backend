@@ -1,9 +1,9 @@
 """Middleware that ends the preparation agent's run the moment research starts.
 
-`start_research` sets `PrepState.research_started`. Without this, `create_agent` routes from the
-tool result back to the model, which writes a closing message ("research is starting") into the
-same assistant content the report is about to fill — so the launch turn's answer would not be the
-report alone.
+`start_research` sets `CrossTurnPrepState.research_started`. Without this, `create_agent` routes
+from the tool result back to the model, which writes a closing message ("research is starting") into
+the same assistant content the report is about to fill — so the launch turn's answer would not be
+the report alone.
 
 Keying on `research_started` rather than on the tool call is what keeps a **rejected**
 `start_research` working: the gate leaves the flag false, the loop continues to the model, and the
@@ -24,13 +24,13 @@ from typing import Any
 from langchain.agents.middleware import AgentMiddleware, AgentState, hook_config
 from langgraph.runtime import Runtime
 
-from dial_deep_research.app.history import PrepState
+from dial_deep_research.app.history import CrossTurnPrepState
 
 
 class StopAfterResearchStartMiddleware(AgentMiddleware):
     """Jump to the end of the agent loop once research has been marked as started."""
 
-    def __init__(self, state: PrepState) -> None:
+    def __init__(self, state: CrossTurnPrepState) -> None:
         super().__init__()
         self._state = state
 
