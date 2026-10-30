@@ -1168,8 +1168,10 @@ Alternatives:
   reads it (D23). Debugging and evals lose that one turn's research record. This is accepted: it needs the full state to fail to build or encode.
 - **[The transcript's tool artifacts can still meet the `index` merge]** → A persisted tool result
   has always been exposed to it, and it stays plain JSON in `research_agent_messages`. Only
-  non-streaming callers are affected. A task before archiving checks whether any server sends such
-  a field.
+  non-streaming callers are affected. No output model of the Generic RAG or StatGPT MCP tools
+  declares an `index` field (checked in their source). Generic RAG's `list_documents` copies each
+  document's configured metadata into its results, so only a deployment whose document metadata
+  defines an integer `index` field would meet the merge.
 
 ## Migration Plan
 

@@ -1,7 +1,6 @@
 # report-citations Specification
 
 ## Purpose
-
 Turns the document citations of the delivered report into DIAL inline citation annotations, so a
 reader can open the cited page of a cited document from the report itself. Owns which citations may
 be converted and which stay as text, how citations supporting one statement share a pill, the
@@ -10,68 +9,6 @@ contract the file-sharing tool must satisfy, the annotation payload, and what ha
 of it fails.
 
 ## Requirements
-
-### Requirement: A citation step runs after the report loop settles and before delivery
-
-The app SHALL run one citation step per turn, after the report review loop has settled on the draft
-to deliver (see **report-composition**) and before that draft's text is appended to the assistant
-message content. The step SHALL NOT run at all on a turn that delivers no report.
-
-The step SHALL be the only thing that alters the settled draft, and it SHALL make exactly three
-kinds of alteration, in this order:
-
-1. **Remove everything that points the reader outward** — every hyperlink form the
-   **report-composition** capability enumerates, each repaired the way that capability states: the
-   label kept where the form has one, the construct deleted whole where it has none. That capability
-   owns which forms count and how each is repaired; this step owns only that they go first.
-2. **Replace each convertible citation marker** with that citation's marker tag.
-3. **Append the References section** the app builds from the cited sources' metadata (see the
-   References-section requirement below). It is an addition only: this step removes no text the
-   writer wrote, including a references section the writer wrote itself.
-
-The order is fixed so the outcome is deterministic. The first two do not repair each other's input:
-link removal runs first, and citation conversion then reads the text it produced, making no
-distinction about where a marker came from. The third is ordered last for a stronger reason than
-determinism — it writes text the two passes before it would otherwise act on, and the app's own
-markup is not the writer's output to be repaired. Nothing else about the draft SHALL be rewritten,
-reordered, shortened or reformatted, and the step SHALL NOT call a model.
-
-The text the step produces SHALL be the text appended to the assistant content **and** the text
-persisted as the turn's report message, so what a later turn reads back is what the user saw. That
-text carries the marker tags, which are markup only this feature's reader understands: a renderer
-that knows them replaces each tag with a pill, and one that does not either drops the tag or shows
-it. This is a property of the delivered report, not an accident, and the failure modes it creates
-are covered by the delivery-failure requirement below and by the **research-execution** capability.
-
-#### Scenario: The step runs once on the settled draft
-
-- **WHEN** the report review loop settles on a draft and the turn is about to deliver it
-- **THEN** the citation step SHALL run once on that draft, before any of its text reaches the
-  assistant message content, and the loop SHALL NOT be re-entered
-
-#### Scenario: An unreviewed draft still gets the deterministic edits
-
-- **WHEN** an instance configures `max_report_versions` as 1, so the first draft is delivered with
-  no review call at all, and that draft carries a bare URL beside a convertible citation
-- **THEN** the step SHALL still run on it: the URL SHALL be gone from the delivered text, the
-  citation SHALL be converted and the References section SHALL be built, because the step is gated
-  on a report being delivered and never on a review having judged it
-
-#### Scenario: A turn with no report runs no citation step
-
-- **WHEN** a turn ends without a delivered report — the preparation agent asked a clarifying
-  question, or the turn failed
-- **THEN** no citation step SHALL run, no annotations SHALL be emitted and no References section
-  SHALL be built
-
-#### Scenario: The delivered text is what gets persisted
-
-- **WHEN** the citation step converts citations in the settled draft and builds its References
-  section
-- **THEN** the text appended to the assistant content and the text persisted as the report message
-  SHALL be identical to each other, SHALL carry the marker tags of the converted citations and the
-  built section, and SHALL be the post-processed text rather than the draft the review judged
-
 ### Requirement: A citation is converted when the document it names has a PDF URL
 
 The report is written entirely in the inline citation forms the **research-execution** capability
@@ -1236,8 +1173,8 @@ other than the marker tag. The no-hyperlink rule governs what the report writer 
 writes no link of its own, so the rule needs no exemption for an app-written section.
 
 **Where it is appended.** The built section SHALL be appended to the text the citation conversion
-produced — after the link-removal pass and after the conversion — and SHALL therefore reach both the
-assistant message content and the persisted report message. It SHALL NOT be searched for citation
+produced — after the link-removal pass and after the conversion — and SHALL therefore reach the
+assistant message content. It SHALL NOT be searched for citation
 markers or for hyperlinks: the app wrote it, and it carries neither — its only markup is the marker
 tags of its openable rows, which the build writes together with their annotations.
 
@@ -1789,8 +1726,12 @@ Keeping the elements whole means a later feature that shows more of a query read
 record already holds, rather than a change to the capture. When a later result reports a `queryId`
 already kept, the later record SHALL replace the earlier one. A query id is stable for the same
 query run on the same day, so a repeated query reports the same id, and the latest report of it is
-the one the agent read last. Records SHALL be kept for one turn only: a query id reported in an
-earlier turn is not resolvable in a later one.
+the one the agent read last. Records SHALL be kept for one research run only: a query id reported
+in an earlier run is not resolvable in a later one. A run that failed and is resumed on a later
+turn is still one run. Its snapshot saves the records captured so far, and the resumed run SHALL
+start with them restored, whole, before it captures anything new (**research-resume**). A query id
+reported before the failure therefore resolves in the report the resumed run delivers. A record
+the resumed run captures for an id already restored SHALL replace it, as for any repeated query.
 
 **Why capture rather than read the tool messages.** The MCP adapter the app builds its tools with
 passes the structured result on to the tool message and discards `_meta`, so by the time a tool
@@ -1861,6 +1802,20 @@ parts are in hand.
   and no structured result
 - **THEN** the app SHALL keep the record with its URL, and a citation of that query SHALL still
   become a pill, labelled with its marker text, whose card carries no filter item
+
+#### Scenario: A query captured before a failure resolves after the resume
+
+- **WHEN** research-agent captured a record for `dq_0123abcd45` with a data explorer URL, the run
+  then failed with a quota error, and on a later turn the resumed run delivers a report citing
+  `[data_query dq_0123abcd45]`
+- **THEN** the citation SHALL become a pill that opens that URL, exactly as it would had the run not
+  failed
+
+#### Scenario: A research run on a new plan starts with no records
+
+- **WHEN** research starts fresh after the user changed the plan, and the history holds a snapshot
+  with data-query records for the old plan
+- **THEN** the run SHALL start with no records, and a query id from the old run SHALL NOT resolve
 
 ### Requirement: A data-query citation is converted when its query has an explorer link
 
@@ -2301,3 +2256,67 @@ citation failure costs the citations and never the report requires.
   `[glossary World Economic Outlook]`
 - **THEN** the text SHALL be delivered as written, and the References section SHALL carry no
   glossary table
+
+### Requirement: A citation step runs on the settled report before delivery
+
+The app SHALL run one citation step per turn, after the report review loop has settled on the draft
+to deliver (see **report-composition**) and before that draft's text is appended to the assistant
+message content. The step SHALL NOT run at all on a turn that delivers no report.
+
+The step SHALL be the only thing that alters the settled draft, and it SHALL make exactly three
+kinds of alteration, in this order:
+
+1. **Remove everything that points the reader outward** — every hyperlink form the
+   **report-composition** capability enumerates, each repaired the way that capability states: the
+   label kept where the form has one, the construct deleted whole where it has none. That capability
+   owns which forms count and how each is repaired; this step owns only that they go first.
+2. **Replace each convertible citation marker** with that citation's marker tag.
+3. **Append the References section** the app builds from the cited sources' metadata (see the
+   References-section requirement below). It is an addition only: this step removes no text the
+   writer wrote, including a references section the writer wrote itself.
+
+The order is fixed so the outcome is deterministic. The first two do not repair each other's input:
+link removal runs first, and citation conversion then reads the text it produced, making no
+distinction about where a marker came from. The third is ordered last for a stronger reason than
+determinism — it writes text the two passes before it would otherwise act on, and the app's own
+markup is not the writer's output to be repaired. Nothing else about the draft SHALL be rewritten,
+reordered, shortened or reformatted, and the step SHALL NOT call a model.
+
+The text the step produces SHALL be the text appended to the assistant content, and the assistant
+content is the one place the delivered report is kept. The research record keeps each draft as the
+writer wrote it (**research-resume**), not the delivered text, and no later turn reads a delivered
+report back. That text carries the marker tags, which are markup only this feature's reader understands: a renderer
+that knows them replaces each tag with a pill, and one that does not either drops the tag or shows
+it. This is a property of the delivered report, not an accident, and the failure modes it creates
+are covered by the delivery-failure requirement below and by the **research-execution** capability.
+
+#### Scenario: The step runs once on the settled draft
+
+- **WHEN** the report review loop settles on a draft and the turn is about to deliver it
+- **THEN** the citation step SHALL run once on that draft, before any of its text reaches the
+  assistant message content, and the loop SHALL NOT be re-entered
+
+#### Scenario: An unreviewed draft still gets the deterministic edits
+
+- **WHEN** an instance configures `max_report_versions` as 1, so the first draft is delivered with
+  no review call at all, and that draft carries a bare URL beside a convertible citation
+- **THEN** the step SHALL still run on it: the URL SHALL be gone from the delivered text, the
+  citation SHALL be converted and the References section SHALL be built, because the step is gated
+  on a report being delivered and never on a review having judged it
+
+#### Scenario: A turn with no report runs no citation step
+
+- **WHEN** a turn ends without a delivered report — the preparation agent asked a clarifying
+  question, or the turn failed
+- **THEN** no citation step SHALL run, no annotations SHALL be emitted and no References section
+  SHALL be built
+
+#### Scenario: The delivered text is the assistant content
+
+- **WHEN** the citation step converts citations in the settled draft and builds its References
+  section
+- **THEN** the text appended to the assistant content SHALL carry the marker tags of the converted
+  citations and the built section, and SHALL be the post-processed text rather than the draft the
+  review judged
+- **AND** the turn's research record SHALL hold the draft the review judged, unchanged, as the last
+  of its drafts, and SHALL hold no copy of the delivered text

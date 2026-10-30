@@ -472,14 +472,6 @@ Decision numbers (D1–D24) refer to this change's `design.md`.
   `make lint`, `make test` and `openspec validate resume-research-after-failure --strict`; all
   pass.
 
-## 15. Before archiving
-
-- [ ] 15.1 Check whether any MCP server's structured content carries an `index` field: inspect real
-  results of the glossary and document tools. If one does, the snapshot's tool artifacts meet the
-  chunk merge that D12 protects the data-query records from, so revise the plan before archiving.
-  Record the outcome in the design's risk "The transcript's tool artifacts can still meet the
-  `index` merge".
-
 ## Workflow follow-up
 
 - Verify the implementation against the change with `/opsx:verify`.
