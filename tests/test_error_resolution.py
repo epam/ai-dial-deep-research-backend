@@ -17,11 +17,14 @@ from langgraph.errors import GraphRecursionError
 
 from dial_deep_research.app.error_resolution import (
     ApplicationNotConfiguredError,
+    RepeatingFailure,
     ResearchAlreadyHandedOffError,
+    SnapshotImageUnavailableError,
     _extract_error_details,
     exception_leaves,
     is_immediately_retryable,
     raise_dial_error,
+    repeating_failure,
     resolve_exception,
 )
 
@@ -190,6 +193,93 @@ def test_graph_recursion_error_maps_to_step_budget() -> None:
     resolved = resolve_exception(GraphRecursionError("limit"))
     assert "step budget" in resolved.message
     assert resolved.retryable is False
+
+
+def test_a_snapshot_image_that_cannot_be_loaded_is_retryable() -> None:
+    resolved = resolve_exception(SnapshotImageUnavailableError())
+    assert "could not be loaded" in resolved.message
+    assert resolved.retryable is True
+    assert resolved.message.endswith("Please try again later.")
+    assert resolved.details.status_code is None
+
+
+# --- Texts of a rejected input and an exhausted step budget -------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("error", "dropped"),
+    [
+        (
+            _openai_status_error(400, {"error": {"code": "context_length_exceeded"}}),
+            "shorten your messages",
+        ),
+        (_openai_status_error(400, {"error": {"code": "content_filter"}}), "rephrase your message"),
+        (_openai_status_error(400, {}), "contact your administrator"),
+        (_openai_status_error(422, {}), "contact your administrator"),
+        (_openai_status_error(413, {}), "reduce the size of your message"),
+        (GraphRecursionError("limit"), "start a new conversation"),
+    ],
+)
+def test_a_rejected_input_or_step_budget_says_what_happened_without_the_advice(
+    error: Exception, dropped: str
+) -> None:
+    """These texts hold for a research call, which sends the app's transcript, not the user's."""
+    message = resolve_exception(error).message
+    assert dropped not in message.lower()
+    assert message.strip()
+
+
+# --- Failures a resume would repeat -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "code", ["context_length_exceeded", "truncate_prompt_error", "content_filter"]
+)
+def test_a_rejection_code_is_an_input_rejection(code: str) -> None:
+    error = _openai_status_error(400, {"error": {"code": code}})
+    assert repeating_failure(error) is RepeatingFailure.INPUT_REJECTED
+
+
+@pytest.mark.parametrize("status", [400, 413, 422])
+def test_a_model_call_rejecting_the_request_is_an_input_rejection(status: int) -> None:
+    error = _openai_status_error(status, {})
+    assert repeating_failure(error) is RepeatingFailure.INPUT_REJECTED
+
+
+def test_an_exhausted_step_budget_is_repeated_by_a_resume() -> None:
+    assert repeating_failure(GraphRecursionError("limit")) is RepeatingFailure.STEP_BUDGET_EXHAUSTED
+
+
+async def test_a_wrapped_context_length_rejection_is_still_an_input_rejection() -> None:
+    error = _openai_status_error(400, {"error": {"code": "context_length_exceeded"}})
+    wrapped = await _raised_by_a_task_group(error)
+    assert isinstance(wrapped, ExceptionGroup)
+    assert repeating_failure(wrapped) is RepeatingFailure.INPUT_REJECTED
+
+
+def test_a_400_from_a_service_is_not_an_input_rejection() -> None:
+    """A DIAL Core or MCP 4xx is a configuration fault: resuming succeeds once it is fixed."""
+    assert repeating_failure(AiDialHTTPException(message="bad", status_code=400)) is None
+    assert repeating_failure(_http_status_error(400)) is None
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        openai.RateLimitError(
+            "quota",
+            response=httpx.Response(429, request=_REQUEST, json={}),
+            body={"code": "429"},
+        ),
+        _openai_status_error(502, {}),
+        _openai_status_error(503, {}),
+        openai.APITimeoutError(request=_REQUEST),
+        _openai_status_error(401, {}),
+        RuntimeError("a bug"),
+    ],
+)
+def test_a_failure_a_resume_can_get_past_is_not_repeating(error: Exception) -> None:
+    assert repeating_failure(error) is None
 
 
 # --- No-leak guarantee --------------------------------------------------------------------------

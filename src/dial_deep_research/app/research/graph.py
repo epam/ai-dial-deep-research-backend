@@ -1,15 +1,17 @@
 """Assembles the deterministic research graph.
 
 `START → research-agent → (research-review | report) → (research-agent | report) →
-(report-review | END) → (report | END)`. No checkpointer, no `interrupt()` — research runs
-autonomously within one turn. Every loop/termination decision is pure Python over the graph
-state: the research loop's are `route_after_research_agent` and `route_after_research_review`,
-the report loop's are `route_after_report` and `route_after_report_review`.
+(report-review | END) → (report | END)`. A run resumed from a failed run's snapshot enters from
+`START` at the node the snapshot names instead (`route_from_start`). No checkpointer, no
+`interrupt()` — research runs autonomously within one turn. Every loop/termination decision is
+pure Python over the graph state: the research loop's are `route_after_research_agent` and
+`route_after_research_review`, the report loop's are `route_after_report` and
+`route_after_report_review`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from typing import Any
 
 from langchain_core.tools import BaseTool
@@ -28,13 +30,30 @@ from .nodes import (
     build_research_agent,
     make_report_node,
     make_report_review_node,
+    make_research_agent_node,
     make_research_review_node,
     route_after_report,
     route_after_report_review,
     route_after_research_agent,
     route_after_research_review,
 )
+from .snapshot import RESUME_POINT_NODES, ResumePoint
 from .state import ResearchState
+
+
+def route_from_start(entry: ResumePoint) -> Callable[[ResearchState], str]:
+    """Decide the edge out of `START`: the node `entry` names.
+
+    A fresh run enters at research-agent; a resumed run at the node its snapshot names. The
+    entry is fixed when the graph is built rather than read from the state, so no persisted value
+    reaches any node's state.
+    """
+    node = RESUME_POINT_NODES[entry]
+
+    def route(state: ResearchState) -> str:
+        return node
+
+    return route
 
 
 def build_research_graph(
@@ -59,6 +78,7 @@ def build_research_graph(
     emit_report_revision_failed: ReportRevisionFailureEmitter,
     emit_report_budget_exhausted: ReportBudgetExhaustedEmitter,
     emit_activity: ActivityEmitter,
+    entry: ResumePoint = ResumePoint.RESEARCH,
 ) -> Any:
     """Compile the research graph over the loaded tools and this turn's configuration.
 
@@ -81,7 +101,8 @@ def build_research_graph(
     which the report reviewer's terminology check depends on. `client_rules` is the channel's own
     rules; each node's system prompt carries their part for it after the generic rules.
     `source_kinds` is the kinds of source the channel's servers give it, which every node's generic
-    rules are told.
+    rules are told. `entry` is where the run enters: research-agent on a fresh run, the snapshot's
+    resume point on a resumed one.
     """
     research_agent = build_research_agent(
         tools=tools,
@@ -95,9 +116,12 @@ def build_research_graph(
     )
 
     builder = StateGraph(ResearchState)
-    builder.add_node(node="research-agent", action=research_agent)
     # mypy can't infer the node's TypedDict state param from an async callable; the
     # plain-function node form is the documented one and works at runtime.
+    builder.add_node(
+        node="research-agent",
+        action=make_research_agent_node(research_agent),  # type: ignore[call-overload]
+    )
     builder.add_node(
         node="research-review",
         action=make_research_review_node(  # type: ignore[call-overload]
@@ -145,7 +169,11 @@ def build_research_graph(
         ),
     )
 
-    builder.add_edge(start_key=START, end_key="research-agent")
+    builder.add_conditional_edges(
+        source=START,
+        path=route_from_start(entry),
+        path_map={node: node for node in RESUME_POINT_NODES.values()},
+    )
     builder.add_conditional_edges(
         source="research-agent",
         path=route_after_research_agent(

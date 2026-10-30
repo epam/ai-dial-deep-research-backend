@@ -17,7 +17,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 from pytest import MonkeyPatch
 
 from dial_deep_research.app.data_sources import DataSources
-from dial_deep_research.app.history import Plan, PrepState
+from dial_deep_research.app.history import CrossTurnPrepState, Plan
 from dial_deep_research.app.mcp_tools import LoadedMcpTools
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research import runner as runner_module
@@ -67,8 +67,8 @@ def _properties() -> ApplicationProperties:
     )
 
 
-def _approved_prep_state() -> PrepState:
-    return PrepState(
+def _approved_prep_state() -> CrossTurnPrepState:
+    return CrossTurnPrepState(
         current_query="q", plan=Plan(steps=["step"]), plan_approved=True, research_started=True
     )
 

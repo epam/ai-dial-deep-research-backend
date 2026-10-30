@@ -27,7 +27,7 @@ from tests.mcp_fakes import BOTH_SOURCE_KINDS
 
 @pytest.fixture(autouse=True)
 def _fast_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(llm_module, "_STREAM_DROP_INITIAL_DELAY", 0.01)
+    monkeypatch.setattr(llm_module, "STREAM_DROP_INITIAL_DELAY", 0.01)
 
 
 # --- with_stream_drop_retry ---------------------------------------------------------------------
@@ -90,13 +90,13 @@ def test_middleware_reraises_on_exhaustion_and_uses_shared_budget() -> None:
 
 def _report_state(**overrides: Any) -> dict[str, Any]:
     state: dict[str, Any] = {
-        "plans": [["step one"]],
-        "messages": [],
-        "original_query": "q",
+        "approved_plan": ["step one"],
+        "research_reviews": [],
+        "research_agent_messages": [],
+        "research_query": "q",
         "research_iteration": 1,
-        "report": None,
-        "report_revision_instruction": None,
-        "report_version": 0,
+        "reports": [],
+        "report_reviews": [],
         "report_revision_failed": False,
     }
     return {**state, **overrides}
@@ -144,9 +144,9 @@ async def test_report_node_retries_a_dropped_call(monkeypatch: pytest.MonkeyPatc
     result = await report(_report_state())  # type: ignore[arg-type]
 
     assert llm.attempts == 2
-    assert result["report"] == "full report"
-    # Drafts stay out of the transcript; the runner builds the assistant message.
-    assert "messages" not in result
+    assert result["reports"] == ["full report"]
+    # Drafts stay out of research-agent's conversation.
+    assert "research_agent_messages" not in result
 
 
 async def test_report_node_reraises_after_budget_exhausted(

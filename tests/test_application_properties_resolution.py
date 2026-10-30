@@ -15,6 +15,7 @@ from aidial_sdk.chat_completion import Request
 from fastapi.testclient import TestClient
 
 import dial_deep_research.app.completion as completion_module
+from dial_deep_research.app.preparation.tools import PrepReviews
 from dial_deep_research.app_properties import Prompts
 
 COMPLETIONS_URL = "/openai/deployments/deep-research/chat/completions"
@@ -116,9 +117,10 @@ def test_valid_properties_reach_the_prep_agent(
     class _FakeRunner:
         def __init__(self, choice) -> None:
             self._choice = choice
+            self.reviews = PrepReviews()
 
         async def run(
-            self, *, request, dial, prep_state, prompts: Prompts, data_sources, opik_tracer=None
+            self, *, request, prep_state, prompts: Prompts, data_sources, opik_tracer=None
         ):
             captured["prompts"] = prompts
             captured["data_sources"] = data_sources

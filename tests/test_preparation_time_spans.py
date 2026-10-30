@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from dial_deep_research.app.data_sources import DataSources
 from dial_deep_research.app.preparation import prompts as prep_prompts
-from dial_deep_research.app.preparation.agent import render_prep_agent_system
 
 _TEXT = "Publications: the quarterly economic bulletin."
 
@@ -19,7 +18,7 @@ def test_the_examples_are_counted_from_the_year_of_the_given_date() -> None:
 
 
 def test_the_agent_prompt_ends_a_span_of_years_with_the_current_year() -> None:
-    prompt = render_prep_agent_system(
+    prompt = prep_prompts.render_prep_agent_system(
         agent_name="ACME", today_date="2026-10-28", data_sources=DataSources(text=_TEXT)
     )
     assert 'in 2026, "the last 2 years" is 2025–2026' in prompt

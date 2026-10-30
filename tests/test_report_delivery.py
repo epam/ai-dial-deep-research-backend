@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from aidial_sdk.chat_completion import Status
 from langchain_core.documents.base import Blob
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import ValuesStreamPart
 from mcp.types import CallToolResult
@@ -71,8 +71,10 @@ def _settle(runner: ResearchRunner, report: str, *, transcript: list[Any] | None
             type="values",
             ns=(),
             data={
-                "messages": transcript if transcript is not None else [HumanMessage(content="q")],
-                "report": report,
+                "research_agent_messages": (
+                    transcript if transcript is not None else [HumanMessage(content="q")]
+                ),
+                "reports": [report],
             },
             interrupts=(),
         )
@@ -267,16 +269,16 @@ async def test_a_convertible_citation_is_delivered_as_a_marker_tag() -> None:
     assert annotations[0]["body"]["source"]["attachment"]["url"] == _URL
 
 
-async def test_the_delivered_text_is_what_gets_persisted() -> None:
-    """A later turn reads back what the user saw, marker tags included."""
+async def test_the_delivered_text_goes_to_the_assistant_content_alone() -> None:
+    """The run's messages, which the research record stores, gain no message of the report."""
     runner, choice = _make_runner()
-    _settle(runner, "Defaults rise. [doc 442, page 3]")
+    transcript = [HumanMessage(content="q")]
+    _settle(runner, "Defaults rise. [doc 442, page 3]", transcript=transcript)
 
     await _deliver(runner, tool=_sharing_tool(urls={"442": _URL}))
 
-    report_message = runner._messages[-1]
-    assert isinstance(report_message, AIMessage)
-    assert report_message.content == choice.content
+    assert '<cit data-id="' in choice.content
+    assert runner._messages == transcript
 
 
 async def test_a_hyperlink_is_removed_even_with_no_file_sharing_tool() -> None:
@@ -1514,3 +1516,94 @@ async def test_a_catalogue_the_review_fetched_is_not_fetched_again_at_delivery()
     )
 
     assert len(calls) == 1
+
+
+# --- Nothing after the settled draft fails the turn (research-resume) ------------------------------
+
+
+def _errors(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+async def test_a_citation_step_failure_outside_its_passes_delivers_the_settled_draft(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    runner, choice = _make_runner()
+    runner._set_activity("Writing the report")
+    _settle(runner, "## Summary\n\nDefaults rise. [doc 442, page 3]")
+
+    async def failing_step(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(runner, "_run_citation_step", failing_step)
+
+    with caplog.at_level(logging.INFO, logger=runner_module.logger.name):
+        await _deliver(runner, configured_tool_name=None)
+
+    assert choice.content == "## Summary\n\nDefaults rise. [doc 442, page 3]"
+    assert _warnings(caplog) == [
+        "Report citations failed: kind=citation_step_failed error=RuntimeError"
+    ]
+    assert _errors(caplog) == []
+    assert all(stage.status is Status.COMPLETED for stage in choice.stages)
+
+
+async def test_a_report_that_cannot_be_appended_is_one_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _ClosedChoice(ChoiceSpy):
+        def append_content(self, text: str) -> None:
+            raise RuntimeError("choice closed")
+
+    choice = _ClosedChoice()
+    runner = ResearchRunner(choice)  # type: ignore[arg-type]
+    _settle(runner, "## Summary\n\nDefaults rise.")
+
+    with caplog.at_level(logging.INFO, logger=runner_module.logger.name):
+        await _deliver(runner, configured_tool_name=None)
+
+    assert _warnings(caplog) == [
+        "Report delivery step failed after the report was written: "
+        "step=append_report error=RuntimeError"
+    ]
+    assert _errors(caplog) == []
+
+
+async def test_a_citation_log_record_that_fails_is_one_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    runner, choice = _make_runner()
+    _settle(runner, "## Summary\n\nDefaults rise.")
+
+    def failing_record(*args: Any, **kwargs: Any) -> None:
+        raise ValueError("bad field")
+
+    monkeypatch.setattr(runner_module, "log_citations_resolved", failing_record)
+
+    with caplog.at_level(logging.INFO, logger=runner_module.logger.name):
+        await _deliver(runner, configured_tool_name=None)
+
+    assert "Defaults rise." in choice.content
+    assert _warnings(caplog) == [
+        "Report delivery step failed after the report was written: "
+        "step=citation_log_record error=ValueError"
+    ]
+    assert _errors(caplog) == []
+
+
+async def test_a_cancelled_citation_step_still_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
+    runner, choice = _make_runner()
+    runner._set_activity("Writing the report")
+    _settle(runner, "## Summary\n\nDefaults rise.")
+
+    async def cancelled_step(*args: Any, **kwargs: Any) -> Any:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(runner, "_run_citation_step", cancelled_step)
+
+    with pytest.raises(asyncio.CancelledError):
+        await _deliver(runner, configured_tool_name=None)
+
+    [activity] = choice.stages
+    assert activity.status is Status.FAILED
+    assert choice.content == ""

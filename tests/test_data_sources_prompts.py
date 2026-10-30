@@ -11,7 +11,7 @@ from langchain_core.runnables import RunnableLambda
 from dial_deep_research.app.data_sources import DatasetsFetch, DataSources
 from dial_deep_research.app.glossary import GlossaryFetch
 from dial_deep_research.app.preparation import prompts as prep_prompts
-from dial_deep_research.app.preparation.agent import render_prep_agent_system
+from dial_deep_research.app.preparation.prompts import render_prep_agent_system
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.prompts import (
     GLOSSARY_TERMINOLOGY_RULE,
@@ -274,12 +274,14 @@ class _RecordingLLM:
 
 def _state(messages: list[Any] | None = None) -> dict[str, Any]:
     return {
-        "messages": messages or [HumanMessage(content="seed")],
-        "original_query": "q",
-        "plans": [["step"]],
+        "research_agent_messages": messages or [HumanMessage(content="seed")],
+        "research_query": "q",
+        "approved_plan": ["step"],
         "research_iteration": 1,
-        "report": "## Overview\n\nA draft.",
-        "report_version": 1,
+        "research_reviews": [],
+        "reports": ["## Overview\n\nA draft."],
+        "report_reviews": [],
+        "report_revision_failed": False,
     }
 
 

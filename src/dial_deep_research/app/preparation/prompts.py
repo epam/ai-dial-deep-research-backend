@@ -3,19 +3,25 @@
 Holds the system prompts for the preparation agent and its two independent checks,
 the Pydantic response schemas those checks return (`QueryReviewResponse`,
 `PlanReviewResponse`), the result and gate-error messages the tools
-return to the agent, and the helper that fills the prompts' examples of a span of years.
+return to the agent, the note that follows a failed turn in the history, and the helpers that
+render the agent's and the query check's system prompts.
 """
 
 from __future__ import annotations
 
 from datetime import date
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from dial_deep_research.app.data_sources import DataSources
 
 
 def year_span_examples(today_date: str) -> dict[str, str]:
     """Placeholders for the prompts' examples of a span of years counted back from today, so
-    the years in them are always those of the current year."""
+    the years in them are always those of the current year. `today_date` is an ISO date
+    (`YYYY-MM-DD`); any other string raises `ValueError`."""
     year = date.fromisoformat(today_date).year
     return {
         "current_year": str(year),
@@ -49,12 +55,6 @@ The tool checks the query and either returns clarifying questions or confirms it
   Do not call any other tool in the same turn.
 - When the user answers, fold their answer into an improved query and call `update_query` again.
   Repeat until the query is clear.
-- Never answer a clarifying question on the user's behalf,
-  only the user can introduce meaningful changes to the query
-- Exception: if a question asks only to restate the time period as an absolute
-  date range (or a similar mechanical normalization), do not relay it to the
-  user — resolve it yourself and call `update_query` with the updated query.
-  It's not a conceptual edit.
 - A span of N years counted back from today ("the last 2 years", "the past
   decade") ends with the current year, which counts as one of the N even though
   it is not over: in {current_year}, "the last 2 years" is {last_two_years} and
@@ -62,6 +62,12 @@ The tool checks the query and either returns clarifying questions or confirms it
   last N completed years. A span given in months or days runs to today. Write
   the resolved years into the query you record, as in "over the last 10 years
   ({last_ten_years})", so research is never left to read the span itself.
+- Never answer a clarifying question on the user's behalf,
+  only the user can introduce meaningful changes to the query
+- Exception: if a question asks only to restate the time period as an absolute
+  date range (or a similar mechanical normalization), do not relay it to the
+  user — resolve it yourself and call `update_query` with the updated query.
+  It's not a conceptual edit.
 - Exception: if the user declines to choose or hands a question back to you
   ("any", "doesn't matter", "you pick"), that IS their answer — do not re-ask.
   Choose a sensible default yourself and fold it into the query. When they have no
@@ -262,6 +268,20 @@ the user wants months or exact days, they will say so.
 """
 
 
+def render_prep_agent_system(*, agent_name: str, today_date: str, data_sources: DataSources) -> str:
+    """The preparation agent's system prompt, carrying the turn's data-sources string, and the
+    instruction to plan around a failed list of datasets on a turn whose list failed."""
+    return PREP_AGENT_SYSTEM.format(
+        agent_name=agent_name,
+        today_date=today_date,
+        data_sources=data_sources.text,
+        dataset_list_failed_instruction=(
+            DATASET_LIST_FAILED_INSTRUCTION if data_sources.dataset_list_failed else ""
+        ),
+        **year_span_examples(today_date),
+    )
+
+
 def render_query_review_system(*, today_date: str, data_sources: str) -> str:
     """The query check's system prompt with today's date, the data sources and the span examples."""
     return QUERY_REVIEW_SYSTEM.format(
@@ -295,6 +315,12 @@ Work through two checks, in order:
    older version, it does NOT match.
 2. Has the user actually approved the plan — not merely discussed it, asked a
    question, or requested changes?
+
+The conversation may hold a "System note:" line saying that the previous user message
+failed with an error before its answer finished. After such a note, a user's request to
+continue or retry the research approves the recorded plan, but only when the user approved
+that same plan before the failure. Check 1 applies as always. The note by itself approves
+nothing.
 
 In `failure_reason`, give a short, user-facing summary of what blocks approval:
 if the recorded plan is stale, say the latest plan must be recorded first; if the
@@ -368,3 +394,14 @@ RESEARCH_READY = """\
 Research has started. It runs now, and its report is the answer the user sees.
 Your turn is over: write nothing further — no acknowledgement, no summary,
 no "research is starting" message."""
+
+# --- The failed-turn note ---------------------------------------------------
+#
+# History reconstruction puts this note, as a system message, after every
+# assistant answer whose turn failed; the two checks see it as a "System note:"
+# line. It says nothing about whether research progress was saved: whether a
+# resume happens is decided once research starts.
+FAILED_TURN_NOTE = """\
+The previous user message failed with an error before its answer finished. If the user asks to
+continue a research whose plan they had approved, call approve_plan, then start_research.
+Otherwise handle the user's request as usual."""

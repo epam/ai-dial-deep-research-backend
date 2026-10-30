@@ -25,7 +25,7 @@ TRANSIENT_STREAM_DROP_ERRORS: tuple[type[Exception], ...] = (
 # Per LLM call: 2 retries (3 attempts total), exponential backoff with jitter.
 STREAM_DROP_MAX_RETRIES = 2
 STREAM_DROP_MAX_ATTEMPTS = STREAM_DROP_MAX_RETRIES + 1
-_STREAM_DROP_INITIAL_DELAY = 1.0
+STREAM_DROP_INITIAL_DELAY = 1.0
 
 
 def stream_drop_retry_middleware() -> ModelRetryMiddleware:
@@ -38,7 +38,7 @@ def stream_drop_retry_middleware() -> ModelRetryMiddleware:
         max_retries=STREAM_DROP_MAX_RETRIES,
         retry_on=TRANSIENT_STREAM_DROP_ERRORS,
         on_failure="error",
-        initial_delay=_STREAM_DROP_INITIAL_DELAY,
+        initial_delay=STREAM_DROP_INITIAL_DELAY,
     )
 
 
@@ -47,7 +47,7 @@ def with_stream_drop_retry[I, O](runnable: Runnable[I, O]) -> Runnable[I, O]:
     return runnable.with_retry(
         retry_if_exception_type=TRANSIENT_STREAM_DROP_ERRORS,
         stop_after_attempt=STREAM_DROP_MAX_ATTEMPTS,
-        exponential_jitter_params={"initial": _STREAM_DROP_INITIAL_DELAY},
+        exponential_jitter_params={"initial": STREAM_DROP_INITIAL_DELAY},
     )
 
 

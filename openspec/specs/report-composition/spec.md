@@ -1,13 +1,11 @@
 # report-composition Specification
 
 ## Purpose
-
 Defines what a delivered research report looks like — the report structure it follows, the
 word ceiling it respects, and the meta-annotations it must never carry — and the review ↔
 revise loop that enforces those rules on a finished draft before it reaches the user.
 
 ## Requirements
-
 ### Requirement: Reports follow the configured report structure
 
 The report SHALL be organized into the sections configured for the application instance
@@ -1117,8 +1115,10 @@ is mechanical and stops at removal:
 
 - It SHALL NOT interpret the link. No attempt is made to work out which source it meant, to match
   its target against the retrieved documents, or to turn it into a citation.
-- It SHALL NOT preserve the URL anywhere — not in the delivered text, not as a footnote, not in the
-  references section, and not in the persisted message.
+- It SHALL NOT preserve the URL anywhere the user reads — not in the delivered text, not as a
+  footnote, and not in the references section. The research record keeps each draft as the writer
+  wrote it, links included, for observability (**research-resume**): the removal applies to what is
+  delivered, not to the writer's output.
 - It SHALL NOT rewrite the prose around the removal. The wording stays as the writer wrote it and
   may read worse for the loss; only the link's own characters go. Rewriting is the review loop's
   business, one layer earlier.

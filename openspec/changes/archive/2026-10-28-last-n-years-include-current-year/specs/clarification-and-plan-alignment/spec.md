@@ -22,7 +22,7 @@ check's prompt SHALL both state the rule with an example that uses the current y
 
 #### Scenario: A span stated in the first turn is recorded with its years
 
-- **WHEN** in 2026 the user asks how premium growth developed over the last 10 years, with the
+- **WHEN** in 2026 the user asks how GDP growth developed over the last 10 years, with the
   subject and the region given
 - **THEN** the query the agent records SHALL state the period as 2017–2026, and SHALL NOT keep
   it as the words "the last 10 years" alone
@@ -30,8 +30,8 @@ check's prompt SHALL both state the rule with an example that uses the current y
 #### Scenario: The default span on a declined time choice ends with the current year
 
 - **WHEN** in 2026 the user declines to choose the time period
-- **THEN** the agent SHALL apply 2017–2026 as the last 10 years, and SHALL tell the user that
-  range
+- **THEN** the agent SHALL apply 2017–2026 as the last 10 years, and SHALL open its reply by
+  telling the user that range
 
 #### Scenario: The query check accepts a span resolved this way
 

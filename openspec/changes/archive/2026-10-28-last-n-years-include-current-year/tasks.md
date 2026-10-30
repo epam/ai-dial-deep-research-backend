@@ -9,9 +9,7 @@
 
 ## 2. Preparation eval (private repository)
 
-- [x] 2.1 Add preparation cases: a two-turn conversation that asks for "the last 2 years" and a single-turn "last 10 years"; add the current-year red flag to the existing relative-span case and to the decline-to-choose case, and update the comments that show the old default span; verify the files parse as YAML
-- [x] 2.2 Run the time-period cases twice each on a local app with the new prompt, and once on the old prompt as a baseline; verify the new cases pass and the existing ones do not regress, and record the outcomes in the case comments. Done on 2026-10-28 for the time-period cases and the decline-to-choose case; three cases could not be run because the key hit its cost limit
-- [x] 2.3 Re-run the time-period cases, the decline-to-choose case (three times) and the three unrun cases after the 2026-10-29 prompt edits (the resolved years go into the query; the default opens the reply); verify the recorded query carries the years and the default is announced. Done on 2026-10-29: all pass, the years were in the query every time, the default was announced in both runs that reached it
+- [x] 2.1 Cover the reading of a span of years in the preparation eval, and re-run it on the new prompt; verify that no existing result regresses
 
 ## Workflow follow-up
 

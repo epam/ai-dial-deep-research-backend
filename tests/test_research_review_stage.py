@@ -15,10 +15,11 @@ from itertools import count
 from typing import Any
 
 import pytest
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langgraph.graph.message import add_messages
 from pytest import LogCaptureFixture, MonkeyPatch
 
-from dial_deep_research.app.history import Plan, PrepState
+from dial_deep_research.app.history import CrossTurnPrepState, Plan
 from dial_deep_research.app.research import graph as graph_module
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.graph import build_research_graph
@@ -27,7 +28,7 @@ from dial_deep_research.app.research.nodes import (
     ResearchBudgetExhausted,
     ResearchReviewOutcome,
 )
-from dial_deep_research.app.research.prompts import ResearchReview
+from dial_deep_research.app.research.prompts import REPORT_REQUEST, ResearchReview
 from dial_deep_research.app.research.runner import ResearchRunner
 from dial_deep_research.app.research.state import build_initial_state
 from dial_deep_research.app_properties import ReportSection
@@ -65,7 +66,7 @@ class _FakeReviewModel:
 
 def _reviewed_state() -> dict[str, Any]:
     """The state research-review reads after one completed research iteration."""
-    prep = PrepState(
+    prep = CrossTurnPrepState(
         current_query="q", plan=Plan(steps=["step one"]), plan_approved=True, research_started=True
     )
     state = dict(build_initial_state(prep))
@@ -132,6 +133,83 @@ async def test_full_coverage_reports_the_report_verdict(monkeypatch: MonkeyPatch
     assert outcome.will_continue is False
     assert outcome.next_steps == []
     assert nodes.route_after_research_review()({**_reviewed_state(), **update}) == "report"
+
+
+def _apply(state: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    """`state` after a node's `update`, with the transcript merged as the graph's reducer does."""
+    merged = {**state, **update}
+    if "research_agent_messages" in update:
+        merged["research_agent_messages"] = add_messages(
+            state["research_agent_messages"], update["research_agent_messages"]
+        )
+    return merged
+
+
+class _RecordingReportModel:
+    """The report call: `with_retry(...).ainvoke(...)`, recording the messages it received."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[BaseMessage]] = []
+
+    def with_retry(self, **kwargs: Any) -> _RecordingReportModel:
+        return self
+
+    async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:
+        self.calls.append(list(messages))
+        return AIMessage(content="## Summary\n\nThe answer.")
+
+
+async def test_each_iteration_plan_is_counted_and_reaches_the_writer_numbered(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    """The approved plan is plan 1 and the first review's next steps are plan 2: the router counts
+    both, and the writer is told both, in that order."""
+    route = nodes.route_after_research_review()
+    state = _reviewed_state()
+
+    first_review, _ = _review_node(
+        monkeypatch, ResearchReview(assessment=_ASSESSMENT, next_steps=_STEPS)
+    )
+    state = _apply(state, await first_review(state))
+    assert len(nodes.iteration_plans(state)) == 2
+    assert route(state) == "research-agent"
+
+    # Research-agent ran the second iteration; the second review finds nothing left to do.
+    state["research_iteration"] = 2
+    second_review, _ = _review_node(
+        monkeypatch, ResearchReview(assessment="Every plan item is covered.", next_steps=[])
+    )
+    state = _apply(state, await second_review(state))
+    assert len(nodes.iteration_plans(state)) == 2
+    assert route(state) == "report"
+
+    model = _RecordingReportModel()
+    monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: model)
+    report = nodes.make_report_node(
+        today_date="2026-08-14",
+        sections=_SECTIONS,
+        max_words=2750,
+        references_name="References",
+        lookups=no_lookups(),
+        data_sources="The topics map.",
+        glossary=None,
+        emit_revision_failed_stage=lambda _failure: None,
+        emit_activity=lambda _title: None,
+        source_kinds=BOTH_SOURCE_KINDS,
+        client_rules=(),
+    )
+    await report(state)
+
+    [messages] = model.calls
+    request = messages[-1]
+    assert isinstance(request, HumanMessage)
+    assert request.content == REPORT_REQUEST.format(
+        query="q",
+        plans=(
+            "Plan 1:\n1. step one\n\n"
+            "Plan 2:\n1. Open the source page.\n2. Confirm the 2025 figure there."
+        ),
+    )
 
 
 async def test_the_logged_duration_is_the_call_only_not_the_whole_node(
@@ -234,13 +312,14 @@ async def _run_graph_with_the_cap_reached(
 ) -> tuple[dict[str, Any], list[Any], list[str]]:
     """Drive a whole run whose research ends on the cap, collecting what each emitter reported.
 
-    The stubbed research-agent lands on the cap in one pass, so the run reaches the router in the
-    state a real one would after its last permitted iteration. A version budget of one turns the
-    report review off, so the run needs no review model.
+    The run starts one iteration short of the cap, so the stubbed research-agent's one pass reaches
+    the router in the state a real run would after its last permitted iteration. A version budget
+    of one turns the report review off, so the run needs no review model.
     """
 
-    async def research_agent(state: dict[str, Any]) -> dict[str, Any]:
-        return {"research_iteration": max_research_iterations}
+    class _ResearchAgent:
+        async def ainvoke(self, agent_input: dict[str, Any], config: Any = None) -> dict[str, Any]:
+            return {"messages": agent_input["messages"]}
 
     class _ReportModel:
         def with_retry(self, **kwargs: Any) -> _ReportModel:
@@ -249,7 +328,7 @@ async def _run_graph_with_the_cap_reached(
         async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:
             return AIMessage(content="## Summary\n\nThe answer.")
 
-    monkeypatch.setattr(graph_module, "build_research_agent", lambda *a, **kw: research_agent)
+    monkeypatch.setattr(graph_module, "build_research_agent", lambda *a, **kw: _ResearchAgent())
     monkeypatch.setattr(nodes, "get_chat_model", lambda model_config: _ReportModel())
     findings: list[Any] = []
     exhausted: list[Any] = []
@@ -284,10 +363,12 @@ async def _run_graph_with_the_cap_reached(
         emit_activity=lambda title: order.append(f"activity:{title}"),
     )
 
-    prep = PrepState(
+    prep = CrossTurnPrepState(
         current_query="q", plan=Plan(steps=["step one"]), plan_approved=True, research_started=True
     )
-    final = await compiled.ainvoke(build_initial_state(prep))
+    initial = build_initial_state(prep)
+    initial["research_iteration"] = max_research_iterations - 1
+    final = await compiled.ainvoke(initial)
     return final, exhausted + findings, order
 
 
@@ -296,7 +377,7 @@ async def test_the_cap_announces_the_review_it_skipped(monkeypatch: MonkeyPatch)
         monkeypatch, max_research_iterations=10
     )
 
-    assert final["report"]
+    assert final["reports"]
     [outcome] = reported
     assert (outcome.research_iteration, outcome.max_research_iterations) == (10, 10)
     # Announced while research is still the current work, so it precedes the report's own stages.
@@ -310,7 +391,7 @@ async def test_a_cap_of_one_announces_nothing(monkeypatch: MonkeyPatch) -> None:
         monkeypatch, max_research_iterations=1
     )
 
-    assert final["report"]
+    assert final["reports"]
     assert reported == []
     assert "budget-exhausted" not in order
 
