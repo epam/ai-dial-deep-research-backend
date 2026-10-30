@@ -9,7 +9,7 @@
 
 ## 2. Preparation eval (private repository)
 
-- [x] 2.1 Cover the reading of a span of years in the preparation eval, and re-run it on the new prompt; verify that no existing result regresses
+- [x] 2.1 Cover the reading of a span of years in the preparation eval
 
 ## Workflow follow-up
 
