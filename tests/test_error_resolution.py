@@ -20,8 +20,6 @@ from dial_deep_research.app.error_resolution import (
     RepeatingFailure,
     ResearchAlreadyHandedOffError,
     SnapshotImageUnavailableError,
-    SnapshotUnreadableError,
-    SnapshotVersionUnsupportedError,
     _extract_error_details,
     exception_leaves,
     is_immediately_retryable,
@@ -195,24 +193,6 @@ def test_graph_recursion_error_maps_to_step_budget() -> None:
     resolved = resolve_exception(GraphRecursionError("limit"))
     assert "step budget" in resolved.message
     assert resolved.retryable is False
-
-
-def test_a_snapshot_of_another_version_is_refused_with_409() -> None:
-    resolved = resolve_exception(SnapshotVersionUnsupportedError())
-    assert "different version" in resolved.message
-    assert "new conversation" in resolved.message
-    assert resolved.retryable is False
-    assert "try again later" not in resolved.message.lower()
-    assert resolved.details.status_code == 409
-
-
-def test_an_unreadable_snapshot_is_refused_as_our_error() -> None:
-    resolved = resolve_exception(SnapshotUnreadableError())
-    assert "error on our side" in resolved.message
-    assert "new conversation" in resolved.message
-    assert resolved.retryable is False
-    assert "try again later" not in resolved.message.lower()
-    assert resolved.details.status_code is None
 
 
 def test_a_snapshot_image_that_cannot_be_loaded_is_retryable() -> None:

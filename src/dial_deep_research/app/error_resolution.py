@@ -43,8 +43,7 @@ logger = logging.getLogger(__name__)
 # Statuses that pass through the outgoing-status policy unchanged. Everything else becomes 500 so
 # the app never emits a status DIAL Core's balancer treats as retriable (429/502/503/504) — for an
 # application Core cannot retry, so it would discard the error body. 409 is included for the
-# research-already-handed-off condition and for a snapshot saved by a different version; it is
-# non-retriable by the balancer, so it is safe.
+# research-already-handed-off condition; it is non-retriable by the balancer, so it is safe.
 _CLIENT_ERROR_STATUS_CODES = frozenset({400, 401, 403, 404, 409, 413, 422})
 
 # Appended by the resolver to any retryable-classified message — and only those. No message
@@ -162,25 +161,6 @@ class ResearchAlreadyHandedOffError(AppConditionError):
         "Start a new conversation to prepare another research."
     )
     status_code = 409
-
-
-class SnapshotVersionUnsupportedError(AppConditionError):
-    """The research snapshot to resume was saved in a format version this code does not read."""
-
-    user_message = (
-        "This research was saved by a different version of Deep Research and cannot be resumed. "
-        "Start a new conversation to run the research again."
-    )
-    status_code = 409
-
-
-class SnapshotUnreadableError(AppConditionError):
-    """The research snapshot to resume cannot be read."""
-
-    user_message = (
-        "An error on our side prevents resuming this research. "
-        "Start a new conversation to run the research again."
-    )
 
 
 class SnapshotImageUnavailableError(AppConditionError):

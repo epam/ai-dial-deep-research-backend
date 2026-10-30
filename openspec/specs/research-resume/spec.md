@@ -15,9 +15,9 @@ graph has streamed at least one state, the turn SHALL save a snapshot of the pro
 single state write, then deliver the original error (**dial-agent-with-mcp**). Any kind counts (a
 quota error, an upstream outage, a timeout, a bug), and so does a failure a resume would repeat,
 whose snapshot is marked not resumable (**Failures a resume would repeat save a snapshot that is
-never resumed**). No snapshot is saved when the run fails before its graph streamed any state, or
-when the snapshot being resumed is refused. Once the report loop has settled a draft, the run does
-not fail at all (**A turn never fails once its report is written**).
+never resumed**). No snapshot is saved when the run fails before its graph streamed any state. Once
+the report loop has settled a draft, the run does not fail at all (**A turn never fails once its
+report is written**).
 
 #### Scenario: A quota error inside research-agent
 
@@ -597,11 +597,12 @@ the failure (**clarification-and-plan-alignment**).
 
 When research starts in a turn, the app SHALL take the latest assistant message in the history that
 carries a snapshot. It SHALL resume from that snapshot only when the snapshot's plan id equals the
-current plan id and the snapshot is not marked not resumable; otherwise research SHALL start fresh.
-A latest record that is not resumable hides every older one, whatever its reason: research then
-starts fresh, and no older snapshot is used. A resumable snapshot of the current plan whose image is
-gone is discarded the same way (**A snapshot's images are downloaded before the resumed run
-starts**). Turns between the failure and the resume, failed turns
+current plan id, the snapshot is not marked not resumable, and the snapshot can be read; otherwise
+research SHALL start fresh. A latest record that is not resumable hides every older one, whatever
+its reason: research then starts fresh, and no older snapshot is used. A resumable snapshot of the
+current plan whose image is gone is discarded the same way (**A snapshot's images are downloaded
+before the resumed run starts**), and so is a snapshot that cannot be read (**A snapshot that
+cannot be read is discarded**). Turns between the failure and the resume, failed turns
 that saved no snapshot among them, SHALL NOT hide the snapshot.
 
 #### Scenario: A question between the failure and the resume
@@ -768,55 +769,83 @@ the rest.
 - **WHEN** a snapshot of the current version carries a field this code does not know
 - **THEN** the snapshot SHALL be read, and the field ignored
 
-### Requirement: A matching snapshot that cannot be read fails the turn
+### Requirement: A snapshot that cannot be read is discarded
 
-The app SHALL compare plan ids, then read the resumable mark, before it reads the rest of the
-snapshot. A matching resumable snapshot whose version this code does not read SHALL fail the turn
-with a non-retryable error: the research was saved by a different version and cannot be resumed. A
-matching resumable snapshot that cannot be read for any other reason SHALL fail the turn with a
-non-retryable error: an error on our side prevents resuming it. Neither refusal saves a snapshot:
-the turn persists only its failure record, which keeps the plan id.
+The app SHALL compare plan ids, then read the resumable mark, then the format version, before it
+reads the rest of the snapshot. A snapshot SHALL be discarded, and research SHALL start from the
+beginning in the same turn, when any of these holds:
+
+- The research record is not a JSON object, or its plan id is not a string, whatever the current
+  plan id. The reason is `unreadable`.
+- It is a snapshot of the current plan whose resumable mark is not a boolean. The reason is
+  `unreadable`.
+- It is a resumable snapshot of the current plan whose format version this code does not read. The
+  reason is `version_unsupported`.
+- It is a resumable snapshot of the current plan, of a known version, that fails validation, or
+  whose research-agent messages or data-query records cannot be decoded. The reason is
+  `unreadable`.
+
+No turn SHALL fail because of what a snapshot contains. A refusal could only tell the user to
+start a new conversation, which also runs the research from the beginning and costs the
+conversation too. The discard is logged as one WARNING (**logging-policy**), which is how a
+developer learns of it. The record the fresh run saves then becomes the latest one, so the same
+snapshot is not met again.
 
 #### Scenario: A snapshot saved by a different version
 
 - **WHEN** research starts with a matching resumable snapshot whose format version this code does
   not read, for example after a release changed the format, or after a rollback
-- **THEN** the turn SHALL fail with the "saved by a different version and cannot be resumed"
-  message, which tells the user to start a new conversation (**dial-agent-with-mcp**)
+- **THEN** the snapshot SHALL be discarded with the reason `version_unsupported`, and research
+  SHALL start from the beginning in the same turn, with no protocol error
 
 #### Scenario: A snapshot that fails to read
 
 - **WHEN** research starts with a matching resumable snapshot of a known version that fails
-  validation or whose research-agent messages cannot be decoded, or with a snapshot whose plan id cannot be read
-  or whose resumable mark is not a boolean
-- **THEN** the turn SHALL fail with the "an error on our side prevents resuming" message, which
-  tells the user to start a new conversation, and the turn's error record SHALL carry the stack
-  trace
+  validation or whose research-agent messages cannot be decoded
+- **THEN** the snapshot SHALL be discarded with the reason `unreadable`, and research SHALL start
+  from the beginning in the same turn, with no protocol error
 
-#### Scenario: A snapshot that will not be resumed is discarded, not refused
+#### Scenario: A snapshot header that cannot be read
+
+- **WHEN** research starts and the latest research record is not a JSON object or has a plan id
+  that is not a string
+- **THEN** the snapshot SHALL be discarded with the reason `unreadable`, whatever the current plan
+  id, and research SHALL start from the beginning in the same turn
+
+#### Scenario: A resumable mark that cannot be read
+
+- **WHEN** research starts and the latest snapshot has a resumable mark that is not a boolean
+- **THEN** the snapshot SHALL be discarded with the reason `unreadable` when its plan id equals the
+  current one, and with the reason `plan_changed` when it does not
+
+#### Scenario: A snapshot that will not be resumed is discarded without being read whole
 
 - **WHEN** research starts with a snapshot whose plan id differs from the current one, or which is
   marked not resumable, whatever its version or contents
-- **THEN** research SHALL start fresh, and the snapshot SHALL be discarded without being
-  read further
+- **THEN** research SHALL start fresh, and the snapshot SHALL be discarded with the reason
+  `plan_changed` or `not_resumable`, without being read further
 
-#### Scenario: The refusal repeats
+#### Scenario: The next request after a discard
 
-- **WHEN** a turn was refused for a snapshot that cannot be read, and the user asks to continue
-  again
-- **THEN** the turn SHALL be refused again in the same way, because the refusal saved no snapshot
-  and kept the plan id, so the same snapshot is still the latest one and still matches
+- **WHEN** a turn discarded an unreadable snapshot and its fresh research run saved a record
+- **THEN** the next request that starts research SHALL read that record, not the unreadable one
+
+#### Scenario: A fresh run that fails before its graph starts
+
+- **WHEN** a turn discarded an unreadable snapshot and its fresh research run failed before its
+  graph streamed any state, so the turn saved only its failure record
+- **THEN** the next request that starts research SHALL discard the same snapshot again and run
+  research from the beginning, and SHALL NOT fail because of it
 
 ### Requirement: The turn shows whether it reused a snapshot
 
 When research starts and the history holds a snapshot, the turn SHALL show one stage. It is
 "[DEBUG] reusing snapshot" when the run resumes from the snapshot, and "[DEBUG] existing snapshot
-discarded" when the plan ids differ, the snapshot is marked not resumable, or one of its images is
-gone. Both stages SHALL carry
+discarded" when the plan ids differ, the snapshot is marked not resumable, one of its images is
+gone, its format version is not one this code reads, or it cannot be read. Both stages SHALL carry
 only ids, names and counts. They SHALL always be emitted, because "[DEBUG]" is only part of the
 title. No such stage SHALL be shown when no snapshot is found, or when the turn fails before
-deciding: a refused snapshot and an image that cannot be downloaded fail the turn without a
-stage.
+deciding: an image that cannot be downloaded fails the turn without a stage.
 
 #### Scenario: A reused snapshot
 
@@ -829,9 +858,16 @@ stage.
 #### Scenario: A discarded snapshot
 
 - **WHEN** research starts and the latest snapshot will not be resumed
-- **THEN** the "[DEBUG] existing snapshot discarded" stage SHALL carry the snapshot's plan id, the
-  current plan id, and the reason: the plan changed, the snapshot is not resumable, with the
-  reason the record names when that reads as a known reason, or an image is missing
+- **THEN** the "[DEBUG] existing snapshot discarded" stage SHALL carry the snapshot's plan id when
+  it reads as a string, the current plan id, and the reason: the plan changed, the snapshot is not resumable, with the
+  reason the record names when that reads as a known reason, an image is missing, the format
+  version is unsupported, or the snapshot is unreadable
 - **AND** it SHALL carry the resume point the snapshot names only when that reads as a known resume
-  point, because a snapshot discarded for a changed plan or for being not resumable is not read
-  past its header
+  point, because a snapshot discarded for a changed plan, for being not resumable, for its version
+  or for being unreadable is not read whole
+
+#### Scenario: A snapshot whose plan id cannot be read
+
+- **WHEN** research starts and the latest snapshot's plan id is not a string
+- **THEN** the "[DEBUG] existing snapshot discarded" stage SHALL carry the current plan id and the
+  reason that the snapshot is unreadable, and SHALL carry no plan id for the snapshot

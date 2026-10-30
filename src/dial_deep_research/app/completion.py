@@ -12,8 +12,6 @@ from langchain_core.messages import BaseMessage
 from dial_deep_research.app.data_sources import fetch_data_sources
 from dial_deep_research.app.error_resolution import (
     ResearchAlreadyHandedOffError,
-    SnapshotUnreadableError,
-    SnapshotVersionUnsupportedError,
     repeating_failure,
 )
 from dial_deep_research.app.history import (
@@ -44,10 +42,6 @@ from dial_deep_research.utils.tracing import build_opik_tracer, extract_thread_i
 
 _log = logging.getLogger(__name__)
 
-# The two refusals of a snapshot that cannot be read. Each happens before the research graph
-# streams any state, so it is told apart before the turn would look for research progress.
-_SNAPSHOT_REFUSALS = (SnapshotVersionUnsupportedError, SnapshotUnreadableError)
-
 # "[DEBUG]" is only part of the title: the stages are always emitted, and a client that hides
 # Deep Research's debug stages hides them.
 _SNAPSHOT_REUSED_STAGE = "[DEBUG] reusing snapshot"
@@ -67,7 +61,6 @@ class _FailureRecordReason(StrEnum):
     """Why a failed turn saved its failure record without a snapshot."""
 
     PREPARATION_FAILED = "preparation_failed"
-    SNAPSHOT_REFUSED = "snapshot_refused"
     NO_GRAPH_STATE = "no_graph_state"
     SNAPSHOT_FAILED = "snapshot_failed"
 
@@ -250,8 +243,8 @@ class DeepResearchCompletion(ChatCompletion):
         When a record is found, a closed stage says whether it is reused or discarded, and one
         INFO record carries the same facts. The images are downloaded before the stage, so the
         stage says what the turn does: an image that is gone discards the snapshot, and research
-        runs fresh. A record that cannot be read raises its refusal, and an image that still
-        cannot be downloaded raises `SnapshotImageUnavailableError`.
+        runs fresh. A record that cannot be read is discarded the same way, and an image that
+        still cannot be downloaded raises `SnapshotImageUnavailableError`.
         """
         raw = find_latest_snapshot(request.messages)
         if raw is None:
@@ -328,9 +321,7 @@ class DeepResearchCompletion(ChatCompletion):
         """
         if turn.state_saved:
             return
-        if isinstance(failure, _SNAPSHOT_REFUSALS):
-            reason = _FailureRecordReason.SNAPSHOT_REFUSED
-        elif turn.research is None:
+        if turn.research is None:
             reason = _FailureRecordReason.PREPARATION_FAILED
         else:
             outcome = await self._persist_snapshot(

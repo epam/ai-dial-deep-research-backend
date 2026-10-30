@@ -382,7 +382,7 @@ class ResearchReview(BaseModel):
     instructions define is open, so research is complete.
 
     The research record stores each response whole, so a field added later needs a default: an
-    older record without it would otherwise fail validation, and its resume would be refused.
+    older record without it would otherwise fail validation and be discarded.
     """
 
     assessment: str = Field(description="""\
@@ -1216,7 +1216,7 @@ class ReportReview(BaseModel):
     otherwise-approved draft cannot be expressed, and forces a revision instead.
 
     The research record stores each response whole, so a field added later needs a default: an
-    older record without it would otherwise fail validation, and its resume would be refused.
+    older record without it would otherwise fail validation and be discarded.
     """
 
     report_violations: list[str] = Field(

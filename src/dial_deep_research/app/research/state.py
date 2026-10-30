@@ -31,7 +31,7 @@ class ReportReviewRound(BaseModel):
     """One report-review round, whole: what the app's own rules found and both reviews' responses.
 
     The research record stores each round, so a field added later needs a default: an older
-    record without it would otherwise fail validation, and its resume would be refused.
+    record without it would otherwise fail validation and be discarded.
     """
 
     draft_number: int

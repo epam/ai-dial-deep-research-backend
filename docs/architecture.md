@@ -214,7 +214,7 @@ flowchart TD
     prep_full -->|"cannot be built or<br/>encoded: the turn fails"| record
     ended -->|"its research failed after<br/>the graph streamed state"| snapshot["The snapshot state: the preparation<br/>part with approval and research-started<br/>reset, and the snapshot, marked not<br/>resumable when a resume would repeat<br/>the failure or an image was not stored"]
     snapshot -->|"cannot be built<br/>or encoded"| record["The failure record: only the<br/>CrossTurnPrepState the turn started from"]
-    ended -->|"it failed in any other way:<br/>in preparation, before the graph<br/>streamed state, or on a refused snapshot"| record
+    ended -->|"it failed in any other way:<br/>in preparation, or before the graph<br/>streamed state"| record
     snapshot --> flag(["The state carries the failure flag;<br/>then the error is delivered"])
     record --> flag
 ```
@@ -256,13 +256,13 @@ sequenceDiagram
     A->>T: start_research
     T-->>K: research started — same turn
     K->>K: take the latest research record in the history
-    opt its plan id is the current one and it is resumable
+    opt its plan id is the current one, it is resumable, and it reads
         K->>K: download the snapshot's images
     end
     alt every image downloaded
         K-->>C: closed stage "[DEBUG] reusing snapshot"
         K->>G: enter at the snapshot's resume point,<br/>every channel from the snapshot
-    else the plan changed, it is not resumable, or an image is gone (404)
+    else the plan changed, it is not resumable or cannot be read, or an image is gone (404)
         K-->>C: closed stage "[DEBUG] existing snapshot discarded"
         K->>G: start fresh from the approved plan, in this turn
     end
@@ -275,8 +275,9 @@ sequenceDiagram
 - **The plan id ties a snapshot to one query and plan.** `update_plan` sets a fresh id on every
   call, `update_query` clears it with the plan, and `start_research` gives one to a plan an earlier
   release recorded without it. So any change to the query or the plan starts research fresh.
-- **A matching snapshot that cannot be read is refused**, with a non-retryable error that tells
-  the user to start a new conversation.
+- **A snapshot that cannot be read is discarded**, and so is a matching snapshot of a format
+  version this code does not read. Research then runs fresh in the same turn, and one WARNING
+  names what failed. No turn fails because of what a snapshot contains.
 - **Its images are downloaded before the stage**, so the stage says what the turn does. An image
   whose file is gone discards the snapshot, and research runs fresh in the same turn. An image that
   still fails to download for another reason fails the turn with a retryable error, before the

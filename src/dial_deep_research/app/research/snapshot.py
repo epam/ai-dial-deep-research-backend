@@ -5,12 +5,13 @@ A record is the app's own versioned JSON, stored under its own key of the turn's
 has the same shape and is never resumed. A record names its resume point in the app's own terms,
 never by graph node, so renaming a node does not break a pending resume: `RESUME_POINT_NODES` is
 the one place the two meet. `read_snapshot` decides, header first, whether the latest record in
-the history is resumed, discarded or refused (see the research-resume spec).
+the history is resumed or discarded (see the research-resume spec).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from typing import Any
@@ -24,21 +25,20 @@ from langchain_core.messages import (
     messages_from_dict,
     messages_to_dict,
 )
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
-from dial_deep_research.app.error_resolution import (
-    SnapshotUnreadableError,
-    SnapshotVersionUnsupportedError,
-)
 from dial_deep_research.app.history import SNAPSHOT_STATE_KEY, raw_dial_state
 from dial_deep_research.utils.image_attachments import (
     replace_images_with_placeholders,
     upload_snapshot_images,
 )
+from dial_deep_research.utils.pydantic_errors import validation_error_summary
 
 from .data_queries import DataQueryRecord
 from .prompts import ResearchReview
 from .state import ReportReviewRound
+
+logger = logging.getLogger(__name__)
 
 SNAPSHOT_VERSION = 1
 """Bumped by a format change that a reader of the current version could not read. A change that
@@ -189,26 +189,29 @@ class DiscardReason(StrEnum):
     PLAN_CHANGED = "plan_changed"
     NOT_RESUMABLE = "not_resumable"
     IMAGE_MISSING = "image_missing"
+    VERSION_UNSUPPORTED = "version_unsupported"
+    UNREADABLE = "unreadable"
 
 
 class DiscardedSnapshot(BaseModel):
     """A record found in the history that will not be resumed.
 
-    One discarded for `plan_changed` or `not_resumable` is read no further than its header, so
-    `resume_at` is set only when it reads as a known value, and `not_resumable_reason` only for
-    `not_resumable`, when it reads as a known reason. One discarded for `image_missing` was read
-    whole, and names its resume point.
+    One discarded for `plan_changed`, `not_resumable`, `version_unsupported` or `unreadable` is
+    not read whole, so `resume_at` is set only when it reads as a known value, and
+    `not_resumable_reason` only for `not_resumable`, when it reads as a known reason. `plan_id` is
+    `None` only for an `unreadable` record whose plan id is not a string. One discarded for
+    `image_missing` was read whole, and names its resume point.
     """
 
-    plan_id: str
+    plan_id: str | None
     reason: DiscardReason
     resume_at: ResumePoint | None
     not_resumable_reason: NotResumableReason | None = None
 
     def facts(self, *, current_plan_id: str) -> list[tuple[str, str]]:
         """What the "existing snapshot discarded" stage and log record say: ids and names only."""
-        facts = [
-            ("plan_id", self.plan_id),
+        facts = [("plan_id", self.plan_id)] if self.plan_id is not None else []
+        facts += [
             ("current_plan_id", current_plan_id),
             ("reason", self.reason.value),
         ]
@@ -230,7 +233,7 @@ class ResumableSnapshot(BaseModel):
 
     @property
     def resume_at(self) -> ResumePoint:
-        """Where the resumed run enters; `read_snapshot` refuses a resumable record without one."""
+        """Where the resumed run enters; `read_snapshot` discards a resumable record without one."""
         if self.snapshot.resume_at is None:
             raise ValueError("A resumable snapshot names no resume point")
         return self.snapshot.resume_at
@@ -298,38 +301,60 @@ def find_latest_snapshot(messages: Sequence[Message]) -> Any:
 
 
 def read_snapshot(raw: Any, *, current_plan_id: str) -> ResumableSnapshot | DiscardedSnapshot:
-    """Decide whether `raw` is resumed, discarded or refused, reading its header first.
+    """Decide whether `raw` is resumed or discarded, reading its header first.
 
-    The plan id is compared first, then the resumable mark is read, so a record of another plan
-    or one marked not resumable is discarded whatever its version or contents. Only a matching
-    resumable snapshot is read whole; its images are downloaded afterwards, by the caller. Raises
-    `SnapshotVersionUnsupportedError` for a version this code does not read, and
-    `SnapshotUnreadableError` for anything else that cannot be read, chained to the original
-    failure so the turn's error record carries both stack traces.
+    The plan id is compared first, then the resumable mark is read, then the version, so a record
+    of another plan or one marked not resumable is discarded whatever its version or contents.
+    Only a matching resumable snapshot of this version is read whole; its images are downloaded
+    afterwards, by the caller. Nothing a record contains raises: a record that cannot be read is
+    discarded, with one WARNING that names what failed, and research runs fresh.
     """
-    plan_id = raw.get("plan_id") if isinstance(raw, dict) else None
+    unreadable = DiscardReason.UNREADABLE
+    if not isinstance(raw, dict):
+        return _discard_unreadable(
+            raw, plan_id=None, reason=unreadable, cause={"field": "record", "type": _json_type(raw)}
+        )
+    plan_id = raw.get("plan_id")
     if not isinstance(plan_id, str):
-        raise SnapshotUnreadableError()
+        cause = {"field": "plan_id", "type": _json_type(plan_id)}
+        return _discard_unreadable(raw, plan_id=None, reason=unreadable, cause=cause)
     if plan_id != current_plan_id:
         return _discarded(raw, plan_id=plan_id, reason=DiscardReason.PLAN_CHANGED)
     resumable = raw.get("resumable")
     if not isinstance(resumable, bool):
-        raise SnapshotUnreadableError()
+        cause = {"field": "resumable", "type": _json_type(resumable)}
+        return _discard_unreadable(raw, plan_id=plan_id, reason=unreadable, cause=cause)
     if not resumable:
         return _discarded(raw, plan_id=plan_id, reason=DiscardReason.NOT_RESUMABLE)
-    if raw.get("version") != SNAPSHOT_VERSION:
-        raise SnapshotVersionUnsupportedError()
+    version = raw.get("version")
+    if version != SNAPSHOT_VERSION:
+        # The field is read before validation and could hold anything, so only a number is logged
+        # as itself; any other value is logged by its JSON type.
+        cause = (
+            {"version": str(version)}
+            if type(version) is int
+            else {"version_type": _json_type(version)}
+        )
+        return _discard_unreadable(
+            raw, plan_id=plan_id, reason=DiscardReason.VERSION_UNSUPPORTED, cause=cause
+        )
     try:
         snapshot = ResearchSnapshot.model_validate(raw)
         if snapshot.resume_at is None:
             raise ValueError("A resumable snapshot names no resume point")
-        return ResumableSnapshot(
-            snapshot=snapshot,
-            messages=messages_from_dict(snapshot.research_agent_messages),
-            data_queries=decode_data_queries(snapshot.data_queries),
-        )
     except Exception as failure:
-        raise SnapshotUnreadableError() from failure
+        return _discard_unreadable_body(raw, plan_id=plan_id, part="validation", failure=failure)
+    try:
+        messages = messages_from_dict(snapshot.research_agent_messages)
+    except Exception as failure:
+        return _discard_unreadable_body(
+            raw, plan_id=plan_id, part="research_agent_messages", failure=failure
+        )
+    try:
+        data_queries = decode_data_queries(snapshot.data_queries)
+    except Exception as failure:
+        return _discard_unreadable_body(raw, plan_id=plan_id, part="data_queries", failure=failure)
+    return ResumableSnapshot(snapshot=snapshot, messages=messages, data_queries=data_queries)
 
 
 def discard_for_missing_image(resumed: ResumableSnapshot) -> DiscardedSnapshot:
@@ -341,7 +366,65 @@ def discard_for_missing_image(resumed: ResumableSnapshot) -> DiscardedSnapshot:
     )
 
 
-def _discarded(raw: dict, *, plan_id: str, reason: DiscardReason) -> DiscardedSnapshot:
+def _json_type(value: Any) -> str:
+    """The JSON type name of a decoded JSON value, for a log record that must not carry it."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int | float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
+def _discard_unreadable_body(
+    raw: dict, *, plan_id: str, part: str, failure: Exception
+) -> DiscardedSnapshot:
+    """The discard of a matching resumable snapshot whose `part` failed to read."""
+    return _discard_unreadable(
+        raw,
+        plan_id=plan_id,
+        reason=DiscardReason.UNREADABLE,
+        cause={"part": part, "error": type(failure).__name__},
+        failure=failure,
+    )
+
+
+def _discard_unreadable(
+    raw: Any,
+    *,
+    plan_id: str | None,
+    reason: DiscardReason,
+    cause: dict[str, str],
+    failure: Exception | None = None,
+) -> DiscardedSnapshot:
+    """The discard of a record this code cannot resume from, and its one WARNING.
+
+    `cause` names what failed, as `key=value` facts after the reason. A `ValidationError` over a
+    stored record adds only its error count, `loc` paths and error types, never its rendered text
+    or traceback, which quote the stored values; any other `failure` adds its stack trace.
+    """
+    facts = {"reason": reason.value, **cause}
+    if isinstance(failure, ValidationError):
+        facts["errors"] = validation_error_summary(failure)
+        failure = None
+    logger.warning(
+        "Snapshot cannot be read; discarding it: %s",
+        " ".join(f"{key}={value}" for key, value in facts.items()),
+        exc_info=failure,
+    )
+    if not isinstance(raw, dict):
+        return DiscardedSnapshot(plan_id=None, reason=reason, resume_at=None)
+    return _discarded(raw, plan_id=plan_id, reason=reason)
+
+
+def _discarded(raw: dict, *, plan_id: str | None, reason: DiscardReason) -> DiscardedSnapshot:
     return DiscardedSnapshot(
         plan_id=plan_id,
         reason=reason,

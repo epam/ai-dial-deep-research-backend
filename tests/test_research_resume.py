@@ -31,10 +31,6 @@ from pydantic import Field
 
 import dial_deep_research.app.completion as completion_module
 from dial_deep_research.app.data_sources import DataSources
-from dial_deep_research.app.error_resolution import (
-    SnapshotUnreadableError,
-    SnapshotVersionUnsupportedError,
-)
 from dial_deep_research.app.history import (
     FAILURE_STATE_KEY,
     SNAPSHOT_STATE_KEY,
@@ -281,38 +277,121 @@ def test_a_discard_names_the_not_resumable_reason_only_when_it_reads_as_one() ->
     assert "not_resumable_reason" not in dict(discarded.facts(current_plan_id=_PLAN_ID))
 
 
-@pytest.mark.parametrize("raw", ["not a snapshot", {"plan_id": 7}, {"resumable": True}])
-def test_a_snapshot_whose_plan_id_cannot_be_read_is_unreadable(raw: Any) -> None:
-    with pytest.raises(SnapshotUnreadableError):
-        read_snapshot(raw, current_plan_id=_PLAN_ID)
-
-
-def test_a_resumable_mark_that_is_not_a_boolean_is_unreadable() -> None:
-    with pytest.raises(SnapshotUnreadableError):
-        read_snapshot(_snapshot_dict(resumable="yes"), current_plan_id=_PLAN_ID)
-
-
-def test_a_matching_snapshot_of_another_version_is_refused() -> None:
-    with pytest.raises(SnapshotVersionUnsupportedError):
-        read_snapshot(_snapshot_dict(version=SNAPSHOT_VERSION + 1), current_plan_id=_PLAN_ID)
+def _warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
 
 
 @pytest.mark.parametrize(
-    "overrides",
+    ("raw", "field"),
+    [("not a snapshot", "record"), ({"plan_id": 7}, "plan_id"), ({"resumable": True}, "plan_id")],
+)
+def test_a_snapshot_whose_plan_id_cannot_be_read_is_discarded_as_unreadable(
+    raw: Any, field: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    discarded = read_snapshot(raw, current_plan_id=_PLAN_ID)
+
+    assert discarded == DiscardedSnapshot(
+        plan_id=None, reason=DiscardReason.UNREADABLE, resume_at=None
+    )
+    assert dict(discarded.facts(current_plan_id=_PLAN_ID)) == {
+        "current_plan_id": _PLAN_ID,
+        "reason": "unreadable",
+    }
+    [warning] = _warnings(caplog)
+    assert f"reason=unreadable field={field}" in warning
+
+
+def test_a_resumable_mark_that_is_not_a_boolean_is_discarded_as_unreadable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    discarded = read_snapshot(_snapshot_dict(resumable="yes"), current_plan_id=_PLAN_ID)
+
+    assert isinstance(discarded, DiscardedSnapshot)
+    assert discarded.reason is DiscardReason.UNREADABLE
+    assert discarded.plan_id == _PLAN_ID
+    [warning] = _warnings(caplog)
+    assert "field=resumable type=string" in warning
+    assert "yes" not in warning
+
+
+def test_a_resumable_mark_that_is_not_a_boolean_on_another_plan_is_a_changed_plan() -> None:
+    raw = _snapshot_dict(plan_id="another-plan", resumable="yes")
+
+    discarded = read_snapshot(raw, current_plan_id=_PLAN_ID)
+
+    assert isinstance(discarded, DiscardedSnapshot)
+    assert discarded.reason is DiscardReason.PLAN_CHANGED
+
+
+def test_a_matching_snapshot_of_another_version_is_discarded(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    raw = _snapshot_dict(version=SNAPSHOT_VERSION + 1)
+
+    discarded = read_snapshot(raw, current_plan_id=_PLAN_ID)
+
+    assert discarded == DiscardedSnapshot(
+        plan_id=_PLAN_ID, reason=DiscardReason.VERSION_UNSUPPORTED, resume_at=ResumePoint.RESEARCH
+    )
+    [warning] = _warnings(caplog)
+    assert f"reason=version_unsupported version={SNAPSHOT_VERSION + 1}" in warning
+
+
+@pytest.mark.parametrize(
+    ("overrides", "part"),
     [
-        {"research_iteration": "two"},
-        {"research_agent_messages": [{"type": "no-such-type", "data": {}}]},
-        {"data_queries": "{not json"},
-        {"research_reviews": [{"next_steps": ["no assessment"]}]},
-        {"resume_at": None},
+        ({"research_iteration": "two"}, "validation"),
+        (
+            {"research_agent_messages": [{"type": "no-such-type", "data": {}}]},
+            "research_agent_messages",
+        ),
+        ({"data_queries": "{not json"}, "data_queries"),
+        ({"research_reviews": [{"next_steps": ["no assessment"]}]}, "validation"),
+        ({"resume_at": None}, "validation"),
     ],
 )
-def test_a_matching_snapshot_that_fails_to_read_is_unreadable_with_its_cause(
-    overrides: dict[str, Any],
+def test_a_matching_snapshot_that_fails_to_read_is_discarded_with_its_cause(
+    overrides: dict[str, Any], part: str, caplog: pytest.LogCaptureFixture
 ) -> None:
-    with pytest.raises(SnapshotUnreadableError) as raised:
-        read_snapshot(_snapshot_dict(**overrides), current_plan_id=_PLAN_ID)
-    assert raised.value.__cause__ is not None
+    discarded = read_snapshot(_snapshot_dict(**overrides), current_plan_id=_PLAN_ID)
+
+    assert isinstance(discarded, DiscardedSnapshot)
+    assert discarded.reason is DiscardReason.UNREADABLE
+    assert discarded.plan_id == _PLAN_ID
+    [warning] = _warnings(caplog)
+    assert f"reason=unreadable part={part} error=" in warning
+
+
+def test_a_version_that_is_not_a_number_is_logged_by_its_type(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    read_snapshot(_snapshot_dict(version="2"), current_plan_id=_PLAN_ID)
+
+    [warning] = _warnings(caplog)
+    assert "reason=version_unsupported version_type=string" in warning
+    assert " version=" not in warning
+
+
+def test_a_decoding_failure_is_logged_with_its_stack_trace(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    read_snapshot(_snapshot_dict(data_queries="{not json"), current_plan_id=_PLAN_ID)
+
+    [record] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "part=data_queries error=JSONDecodeError" in record.getMessage()
+    assert record.exc_info is not None
+
+
+def test_a_validation_failure_is_logged_without_the_stored_values(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    read_snapshot(_snapshot_dict(research_iteration="two"), current_plan_id=_PLAN_ID)
+
+    [record] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    message = record.getMessage()
+    assert "error=ValidationError errors=1 error(s): research_iteration(int_parsing)" in message
+    assert "two" not in message
+    assert record.exc_info is None
 
 
 # --- The history search -------------------------------------------------------------------------
@@ -2161,28 +2240,116 @@ def test_a_snapshot_that_will_not_be_resumed_starts_research_fresh(
     assert f"reason={reason}" in record
 
 
-def test_a_refused_snapshot_is_refused_again_on_the_next_request(
+def _unreadable_research_state(**snapshot_overrides: Any) -> dict[str, Any]:
+    """A failed research turn's state whose snapshot carries `snapshot_overrides`."""
+    state = _failed_research_state()
+    state[SNAPSHOT_STATE_KEY] = _snapshot_dict(**snapshot_overrides)
+    return state
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [
+        ({"version": SNAPSHOT_VERSION + 1}, DiscardReason.VERSION_UNSUPPORTED),
+        ({"research_iteration": "two"}, DiscardReason.UNREADABLE),
+        ({"plan_id": 7}, DiscardReason.UNREADABLE),
+    ],
+)
+def test_a_snapshot_that_cannot_be_read_starts_research_fresh_without_an_error(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+    caplog: pytest.LogCaptureFixture,
+    overrides: dict[str, Any],
+    reason: DiscardReason,
+) -> None:
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
+    caplog.set_level(logging.INFO)
+
+    result = _post_turn(
+        client,
+        _conversation(("yes, go", _unreadable_research_state(**overrides)), ("continue", None)),
+    )
+
+    assert result.errors == []
+    [run] = research.runs
+    assert run["resumed"] is None
+    (title, body), *_ = result.stages()
+    assert title == "[DEBUG] existing snapshot discarded"
+    assert f"**reason** {reason}" in body
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
+    [warning] = _warnings(caplog)
+    assert f"reason={reason}" in warning
+
+
+def test_a_snapshot_whose_plan_id_cannot_be_read_is_shown_and_logged_without_one(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
+    caplog.set_level(logging.INFO)
+
+    result = _post_turn(
+        client,
+        _conversation(("yes, go", _unreadable_research_state(plan_id=7)), ("continue", None)),
+    )
+
+    (_, body), *_ = result.stages()
+    assert f"**current_plan_id** {research.runs[0]['prep_state'].plan_id}" in body
+    assert "**plan_id**" not in body
+    [record] = [r.getMessage() for r in caplog.records if "Snapshot discarded" in r.getMessage()]
+    assert record.startswith("Snapshot discarded: current_plan_id=")
+
+
+def test_the_next_request_after_a_discard_reads_the_fresh_runs_record(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     turn_dial: _TurnDial,
     research: type[_ResearchSpy],
 ) -> None:
-    unreadable = _failed_research_state()
-    unreadable[SNAPSHOT_STATE_KEY] = _snapshot_dict(version=SNAPSHOT_VERSION + 1)
     monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
+    unreadable = _unreadable_research_state(research_iteration="two")
+    research.fail_with = _quota_error()
+    research.progress = _research_progress(research_iteration=1)
 
-    first = _post_turn(client, _conversation(("yes, go", unreadable), ("continue", None)))
-
-    assert "different version" in first.errors[0]["display_message"]
-    assert first.state == _failure_record()
-
-    second = _post_turn(
+    fresh = _post_turn(client, _conversation(("yes, go", unreadable), ("continue", None)))
+    research.fail_with, research.progress = None, None
+    _post_turn(
         client,
-        _conversation(("yes, go", unreadable), ("continue", first.state), ("continue", None)),
+        _conversation(("yes, go", unreadable), ("continue", fresh.state), ("continue", None)),
     )
 
-    assert "different version" in second.errors[0]["display_message"]
-    assert research.runs == []
+    assert research.runs[0]["resumed"] is None
+    assert research.runs[-1]["resumed"].snapshot.research_iteration == 1
+
+
+def test_a_discarded_snapshot_is_discarded_again_after_a_fresh_run_fails_early(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+) -> None:
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
+    unreadable = _unreadable_research_state(research_iteration="two")
+    research.fail_with = httpx.ConnectError("mcp unreachable", request=_REQUEST)
+
+    failed = _post_turn(client, _conversation(("yes, go", unreadable), ("continue", None)))
+    research.fail_with = None
+    again = _post_turn(
+        client,
+        _conversation(("yes, go", unreadable), ("continue", failed.state), ("continue", None)),
+    )
+
+    assert SNAPSHOT_STATE_KEY not in failed.state
+    assert again.errors == []
+    assert [run["resumed"] for run in research.runs] == [None, None]
+    (title, body), *_ = again.stages()
+    assert title == "[DEBUG] existing snapshot discarded"
+    assert "**reason** unreadable" in body
 
 
 def test_a_resumed_run_that_fails_before_its_graph_starts_keeps_the_earlier_snapshot(

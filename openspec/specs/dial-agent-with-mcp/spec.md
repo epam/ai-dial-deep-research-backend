@@ -606,16 +606,12 @@ to **fetch** the properties from DIAL Core (as opposed to validate them) SHALL p
 top-level handler and resolve through the status/type map to a service message, rather than being
 reported as "not configured".
 
-Three more turn-aborting app conditions stop a resume (**research-resume**). A resumable snapshot
-whose plan id matches but whose format version this code does not read SHALL resolve to a
-non-retryable message saying the research was saved by a different version of Deep Research and
-cannot be resumed, so the user should start a new conversation (outgoing 409). A resumable snapshot
-whose plan id matches but which cannot be read for any other reason SHALL resolve to a
-non-retryable message saying an error on our side prevents resuming the research, so the user
-should start a new conversation (outgoing 500). A snapshot image whose download answers 404 is not
-a refusal: the snapshot is discarded and research starts fresh. A snapshot image that still cannot be downloaded after its attempts,
-for another reason, SHALL resolve to a retryable message saying the saved research progress could
-not be loaded (outgoing 500, "try again later" appended).
+One more turn-aborting app condition stops a resume (**research-resume**). A snapshot image that
+still cannot be downloaded after its attempts, for a reason other than a 404, SHALL resolve to a
+retryable message saying the saved research progress could not be loaded (outgoing 500, "try again
+later" appended). What a snapshot contains never fails a turn: a snapshot whose format version this
+code does not read, a snapshot that cannot be read, and a snapshot one of whose images answers 404
+are each discarded, and research starts fresh in the same turn.
 
 **Absorbed failures are unaffected.** Failures that are deliberately swallowed and never abort the
 turn SHALL NOT trigger this path: a failing tool call, which the **tool-call-fault-tolerance**
@@ -708,12 +704,11 @@ them: it fails the turn (**research-resume**).
 - **THEN** the turn SHALL send its state, snapshot included, and only then the in-stream
   `{"error": ...}` chunk with DIAL Core's `display_message` and the error reference
 
-#### Scenario: A snapshot saved by a different version is refused
-- **WHEN** research starts with a matching resumable snapshot whose format version this code does not read
-- **THEN** the app SHALL deliver a non-retryable protocol error (outgoing HTTP 409) whose text says
-  the research was saved by a different version and cannot be resumed and asks the user to start a
-  new conversation, plus an error reference, and SHALL persist only the turn's failure record, with
-  no snapshot
+#### Scenario: A snapshot that cannot be resumed is not an error
+- **WHEN** research starts with a matching resumable snapshot whose format version this code does
+  not read, or which cannot be read
+- **THEN** the app SHALL deliver no protocol error for it: the snapshot is discarded, and research
+  starts from the beginning in the same turn (**research-resume**)
 
 #### Scenario: A snapshot image that cannot be downloaded right now
 - **WHEN** a resumed run cannot download a snapshot image, and no attempt answered 404
@@ -721,13 +716,6 @@ them: it fails the turn (**research-resume**).
   saved research progress could not be loaded, followed by the "try again later" sentence and an
   error reference, and SHALL persist only the turn's failure record, so the snapshot the turn
   started from stays the latest one
-
-#### Scenario: A snapshot that cannot be read is refused as our error
-- **WHEN** research starts with a matching resumable snapshot of a known version that fails to read
-- **THEN** the app SHALL deliver a non-retryable protocol error (outgoing HTTP 500) whose text says
-  an error on our side prevents resuming the research and asks the user to start a new
-  conversation, plus an error reference, SHALL write the stack trace to the turn's error record,
-  and SHALL persist only the turn's failure record, with no snapshot
 
 #### Scenario: Unconfigured application delivered as a protocol error
 - **WHEN** a request's DIAL application properties cannot be validated
