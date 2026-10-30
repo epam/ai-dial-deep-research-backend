@@ -7,9 +7,6 @@
 - [x] 1.3 Add prompt tests that both prompts carry the rule and that the default-span example ends with the current year; verify with `make test`
 - [x] 1.4 Run `make format` and `make lint`; verify both pass
 
-## 2. Preparation eval (private repository)
-
-- [x] 2.1 Cover the reading of a span of years in the preparation eval
 
 ## Workflow follow-up
 
