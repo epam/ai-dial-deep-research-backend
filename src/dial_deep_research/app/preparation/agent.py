@@ -17,21 +17,8 @@ from dial_deep_research.utils.llm import (
 )
 
 from .middleware import StopAfterResearchStartMiddleware
-from .prompts import DATASET_LIST_FAILED_INSTRUCTION, PREP_AGENT_SYSTEM
+from .prompts import render_prep_agent_system
 from .tools import PrepReviews, PrepTools
-
-
-def render_prep_agent_system(*, agent_name: str, today_date: str, data_sources: DataSources) -> str:
-    """The preparation agent's system prompt, carrying the turn's data-sources string, and the
-    instruction to plan around a failed list of datasets on a turn whose list failed."""
-    return PREP_AGENT_SYSTEM.format(
-        agent_name=agent_name,
-        today_date=today_date,
-        data_sources=data_sources.text,
-        dataset_list_failed_instruction=(
-            DATASET_LIST_FAILED_INSTRUCTION if data_sources.dataset_list_failed else ""
-        ),
-    )
 
 
 def build_prep_agent(

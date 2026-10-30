@@ -20,8 +20,12 @@ That one rule prevents most of what follows.
 - **Deployment facts**: which MCP servers a live channel has configured, how many datasets or
   documents it exposes, which client runs on which environment. A fact about a real deployment is
   sensitive even when it names nobody, because it says who we work with and how.
-- **Evaluation content**: real client queries, expected answers and test cases drawn from client
-  work.
+- **Evaluation details**: anything about the private evaluation beyond its general shape. This
+  covers real client queries and expected answers, and every test case, including what a case asks
+  and the content of its fields. It also covers which cases a change added or edited, how and how
+  often they were run, and their results: outcomes, scores, regressions, and runs that failed or
+  could not be run. Write "the eval needs to cover this behaviour", never what the cases ask or how
+  the runs went.
 - **Examples modeled on a client's material**: an example built from a client's publications or
   from what an eval run returned, even with every name changed, such as a figure, a quote or a
   topic taken from one of its documents. Take examples from public statistics instead. A generic
@@ -39,6 +43,8 @@ Generic placeholders, and genuinely public facts:
   `World Economic Outlook` or `Primary Commodity Prices`. `IMF:WEO` is this repository's canonical
   dataset-identifier example in prompts, comments and tests.
 - `Market Outlook 2025` as a document or publication title.
+- **General information about the evaluation**: that it exists, that a change needs it to cover a
+  behaviour, and its general shape, such as which fields a test case requires.
 - **Approximate, typical figures**, such as "a dataset description typically takes about 200
   tokens" or "a call finishes within a few seconds". They name no deployment. An **exact** figure
   taken from a live system stays out, such as a character count or a precise token count, and so
