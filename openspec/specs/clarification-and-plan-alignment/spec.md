@@ -133,8 +133,9 @@ keeps it, the last N completed years plus the current one, turns "the last 2 yea
 calendar years; a span given in months or days runs to today and needs no such rule. The agent
 SHALL write the resolved years into the query it records, so research never reads the relative
 span itself. The default span the agent applies when the user declines to choose the time period,
-the last 10 years, SHALL be counted the same way. The preparation agent's prompt and the query
-check's prompt SHALL both state the rule with an example that uses the current year.
+the last 10 years, SHALL be counted the same way, and the agent SHALL open its reply by naming that
+range, so the user can change it. The preparation agent's prompt and the query check's prompt
+SHALL both state the rule with an example that uses the current year.
 
 #### Scenario: The last two years include the current year
 
