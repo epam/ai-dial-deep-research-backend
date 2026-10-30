@@ -175,7 +175,7 @@ class SnapshotVersionUnsupportedError(AppConditionError):
 
 
 class SnapshotUnreadableError(AppConditionError):
-    """The research snapshot to resume cannot be read, or one of its images no longer exists."""
+    """The research snapshot to resume cannot be read."""
 
     user_message = (
         "An error on our side prevents resuming this research. "

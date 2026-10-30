@@ -1,12 +1,26 @@
+## RENAMED Requirements
+
+- FROM: `### Requirement: PrepState is mutated only by tools, never by the agent`
+- TO: `### Requirement: CrossTurnPrepState is mutated only by tools, never by the agent`
+
+## REMOVED Requirements
+
+### Requirement: Stateless turns persist PrepState and transcript in DIAL custom state
+**Reason**: `PrepState` is renamed `CrossTurnPrepState`, and two of this requirement's scenario
+titles carry the old name. A modified requirement cannot rename its scenarios, so the requirement
+is removed under its old title and added again under the new one.
+**Migration**: See "Stateless turns persist CrossTurnPrepState and transcript in DIAL custom
+state" under ADDED Requirements in this delta.
+
 ## MODIFIED Requirements
 
-### Requirement: PrepState is mutated only by tools, never by the agent
+### Requirement: CrossTurnPrepState is mutated only by tools, never by the agent
 
-The preparation flow's working state SHALL be a typed `PrepState` (the working
+The preparation flow's working state SHALL be a typed `CrossTurnPrepState` (the working
 query, the clarification result, the plan, the plan id, the plan-approved flag, the
 research-started flag). The agent SHALL read the effect of its tool calls via the
-tool results but SHALL NOT have any channel to write `PrepState` fields directly;
-only tool code SHALL mutate `PrepState`. In particular, the plan-approved flag
+tool results but SHALL NOT have any channel to write `CrossTurnPrepState` fields directly;
+only tool code SHALL mutate `CrossTurnPrepState`. In particular, the plan-approved flag
 SHALL be set only by `approve_plan`, and the research-started flag only by
 `start_research`. The plan id identifies the recorded query and plan, which a
 snapshot of failed research belongs to (**research-resume**). Only three tools
@@ -15,23 +29,23 @@ the plan, and `start_research` gives one to a plan recorded before plan ids
 existed.
 
 The one write outside the tools is the state a failed research turn persists when
-it saves a snapshot: a copy of `PrepState` with the plan-approved and
+it saves a snapshot: a copy of `CrossTurnPrepState` with the plan-approved and
 research-started flags reset (**research-resume**). It changes nothing the agent
-could have written. Any other failed turn persists the `PrepState` the request's
+could have written. Any other failed turn persists the `CrossTurnPrepState` the request's
 history held when the turn started, unchanged, so a failed turn without a snapshot
 never keeps what its own tool calls wrote.
 
 #### Scenario: The agent cannot self-approve a plan
 - **WHEN** the agent emits assistant text asserting the plan is approved without `approve_plan` having set the approval flag
-- **THEN** `PrepState.plan_approved` SHALL remain false and `start_research` SHALL still refuse
+- **THEN** `CrossTurnPrepState.plan_approved` SHALL remain false and `start_research` SHALL still refuse
 
 #### Scenario: A failed research turn persists the flags reset
 - **WHEN** research fails with a quota error in the turn whose `start_research` set the research-started flag
-- **THEN** the persisted `PrepState` SHALL carry the same query, plan and plan id, with the plan-approved and research-started flags false
+- **THEN** the persisted `CrossTurnPrepState` SHALL carry the same query, plan and plan id, with the plan-approved and research-started flags false
 
 #### Scenario: A failed preparation turn keeps the state it started from
 - **WHEN** `update_plan` records a new plan in a turn whose next model call then fails with a quota error
-- **THEN** the persisted `PrepState` SHALL equal the one the turn started from, without the new plan
+- **THEN** the persisted `CrossTurnPrepState` SHALL equal the one the turn started from, without the new plan
 
 ### Requirement: update_query sets the working query and runs an independent clarity check
 
@@ -96,7 +110,7 @@ request only as this query restates it (see **faithful-relay**).
 ### Requirement: update_plan records the plan; the agent presents the query and plan verbatim after each edit
 
 The `update_plan(steps)` tool SHALL record the agent-authored research plan into
-`PrepState` with a fresh plan id, and reset the plan-approved flag. The plan id is
+`CrossTurnPrepState` with a fresh plan id, and reset the plan-approved flag. The plan id is
 renewed on every call, even when the steps equal the recorded ones, so a snapshot
 saved for an earlier plan never matches a plan recorded after it
 (**research-resume**). The plan SHALL be stored as an
@@ -116,7 +130,7 @@ follow-up.)
 
 #### Scenario: Recorded query and plan are presented to the user verbatim
 - **WHEN** the agent presents a recorded plan to the user for review
-- **THEN** it SHALL present both the working query and the recorded `PrepState.plan` steps verbatim (same wording, order, and numbering)
+- **THEN** it SHALL present both the working query and the recorded `CrossTurnPrepState.plan` steps verbatim (same wording, order, and numbering)
 
 #### Scenario: Every plan revision re-presents the query and plan
 - **WHEN** the agent revises the plan and calls `update_plan` again
@@ -160,7 +174,7 @@ always. The note by itself approves nothing.
 - **THEN** `approve_plan` SHALL set the plan-approved flag to true
 
 #### Scenario: Stale recorded plan is refused, not approved
-- **WHEN** the user approved a revised plan in the conversation but `PrepState.plan` still holds an earlier version
+- **WHEN** the user approved a revised plan in the conversation but `CrossTurnPrepState.plan` still holds an earlier version
 - **THEN** `approve_plan` SHALL NOT approve, SHALL leave the plan-approved flag false, and SHALL indicate the latest plan must be recorded first; the recorded plan content SHALL be left unchanged
 
 #### Scenario: Revision request is not approval
@@ -175,55 +189,17 @@ always. The note by itself approves nothing.
 - **WHEN** the conversation carries the failed-turn note and the user's latest message asks what happened
 - **THEN** `approve_plan` SHALL NOT approve
 
-### Requirement: Stateless turns persist PrepState and transcript in DIAL custom state
-
-The app SHALL process each turn statelessly, with no checkpointer and no
-`interrupt()`. At the start of a turn it SHALL reconstruct the LangChain message
-history from the DIAL transcript and load `PrepState` from the latest assistant
-message's `custom_content.state` — the `preparation` field of the unified
-`DialState` (a fresh `PrepState` when none is present). At the end of a turn it
-SHALL persist both the message slice and the resulting `PrepState` into
-`custom_content.state` as that unified `DialState` (under `messages` and
-`preparation` respectively) via `choice.set_state`. A failed turn persists as well,
-with a failure flag (**research-resume**). A turn whose research run saved a
-snapshot persists its preparation messages, its `PrepState` with the plan-approved
-and research-started flags reset, and the snapshot. Any other failed turn, and a
-failed research turn whose snapshot cannot be saved, persists an empty `messages`
-and the `PrepState` the request's history held when the turn started. A failure
-while the application properties are fetched or validated
-persists nothing, and a turn never fails once its report is written. When the full
-state of a turn whose report was written cannot be built or encoded, the turn
-persists a closing state instead: an empty `messages` and its `PrepState` with
-research started (**research-resume**). The app SHALL NOT keep server-side session
-state across requests.
-
-#### Scenario: Turn persists transcript and PrepState
-- **WHEN** a turn completes and its full state can be built and encoded
-- **THEN** the assistant message's `custom_content.state` SHALL contain the turn's `messages` slice and the current `preparation` state, and the app SHALL hold no other cross-request state for the session
-
-#### Scenario: A delivered report whose state cannot be saved still closes the conversation
-- **WHEN** a turn delivered its report and its full state cannot be built or encoded
-- **THEN** the assistant message's `custom_content.state` SHALL contain an empty `messages` and the `preparation` state with research started, and the next request SHALL be refused as a conversation whose research has started
-
-#### Scenario: Next turn restores PrepState from the transcript
-- **WHEN** a follow-up request carries a prior assistant message whose `custom_content.state` `preparation` field records a resolved clarification and an unapproved plan
-- **THEN** the preparation agent for the new turn SHALL run with that `PrepState` restored, so the gates reflect the prior turn's progress without re-deriving it from the messages
-
-#### Scenario: The turn after a failed research run restores the plan without approval
-- **WHEN** a follow-up request's latest stateful assistant message was written by a failed research turn that saved a snapshot
-- **THEN** the preparation agent SHALL run with that turn's query, plan and plan id restored, and with the plan-approved and research-started flags false
-
 ### Requirement: Refuse input after research has started
 
-When the loaded `PrepState` indicates research has already started, the app SHALL
+When the loaded `CrossTurnPrepState` indicates research has already started, the app SHALL
 refuse further input for that session and instruct the user to start a new
 conversation, rather than running the preparation agent again. A persisted
-`PrepState` says so only after research delivered its report: a failed research
+`CrossTurnPrepState` says so only after research delivered its report: a failed research
 turn persists the flag reset, so its conversation stays open for a resume
 (**research-resume**).
 
 #### Scenario: Message after launch is refused
-- **WHEN** a request's loaded `PrepState` has the research-started flag set
+- **WHEN** a request's loaded `CrossTurnPrepState` has the research-started flag set
 - **THEN** the app SHALL return a message instructing the user to start a new conversation, and SHALL NOT run the preparation agent
 
 #### Scenario: A conversation whose research failed is not refused
@@ -246,11 +222,12 @@ updating this requirement.
   neither the instruction to request missing definitions nor the instruction about the dataset
   tools, because this agent has no MCP tools.
 - Messages: the **full** conversation history reconstructed from the DIAL request — every user
-  message as text, and for every prior assistant turn the persisted message slice (its
-  `AIMessage`s and `ToolMessage`s) with image blocks rehydrated to base64, and directly after
-  every prior assistant turn whose state carries the failure flag one fixed failed-turn note as a
-  system message (**research-resume**) — followed by the current turn's accumulated messages. A
-  snapshot's research transcript is never part of it. There SHALL be no truncation, windowing, or
+  message as text, and for every prior assistant turn its persisted preparation agent messages
+  (its `AIMessage`s and `ToolMessage`s), and directly after every prior assistant turn whose state
+  carries the failure flag one fixed failed-turn note as a system message (**research-resume**) —
+  followed by the current turn's accumulated messages. No research record is part of it: neither
+  research-agent's messages nor a report draft. No image content is part of it, because the
+  preparation agent has no MCP tools. There SHALL be no truncation, windowing, or
   summarization; a turn that outgrows the model's context SHALL fail rather than silently drop
   history.
 - Tools bound: the four preparation control tools.
@@ -268,7 +245,8 @@ updating this requirement.
   tool results, and any other system message SHALL be dropped. No image content SHALL be
   included.
 - Output: a structured `QueryReviewResponse` — a per-dimension assessment, then the clarifying
-  questions (empty when the query is ready).
+  questions (empty when the query is ready). The tool result carries the questions; the whole
+  response is saved in the turn's `preparation.query_reviews` (**research-resume**).
 
 **3. The plan approval check** (one per `approve_plan` call)
 
@@ -277,14 +255,18 @@ updating this requirement.
 - Messages: one human message carrying the recorded plan as a numbered list and the rendered
   conversation, filtered exactly as in the clarity check. No image content.
 - Output: a structured `PlanReviewResponse` — the assessment, whether the recorded plan matches
-  the one last discussed, whether the user approved it, and a user-facing failure reason.
+  the one last discussed, whether the user approved it, and a user-facing failure reason. The tool
+  result carries the outcome and, on a refusal, the failure reason; the whole response is saved in
+  the turn's `preparation.plan_reviews` (**research-resume**).
 
 #### Scenario: The agent sees the whole conversation, the checks see only its prose
 
-- **WHEN** a preparation turn runs on a conversation whose earlier turns contain tool calls, tool
-  results, and page images
-- **THEN** the preparation agent's model call SHALL receive all of it including the images, while
-  the clarity check and the approval check SHALL receive only the user and assistant text
+- **WHEN** a preparation turn runs on a conversation whose earlier turns contain preparation tool
+  calls and tool results, and an earlier research turn whose research-agent messages hold page
+  images
+- **THEN** the preparation agent's model call SHALL receive the preparation tool calls and results
+  and no image, while the clarity check and the approval check SHALL receive only the user and
+  assistant text
 
 #### Scenario: All three calls see the failed-turn note in place
 
@@ -314,3 +296,88 @@ updating this requirement.
 - **THEN** the preparation agent's system prompt and the clarity check's system prompt SHALL carry
   the same data-sources string, including the datasets section with its structures block, and the
   approval check's system prompt SHALL carry no part of it
+
+### Requirement: Preparation agent gates research behind clarification and plan approval
+
+On each chat completion request the app SHALL drive a single-context LangChain
+tool-calling agent (the **preparation agent**) that holds one conversation and
+advances a clarify → plan → approve → launch flow by calling tools. The preparation
+agent SHALL have exactly these control tools and no MCP/data tools: `update_query`,
+`update_plan`, `approve_plan`, `start_research`. Research itself runs only after
+approval, in the same turn, as a separate graph (see the **research-execution**
+capability); the preparation agent SHALL NOT research or write a report.
+
+The flow's ordering SHALL be enforced by tool preconditions (hard gates), not by
+the agent's discretion: research SHALL NOT be startable until the working query's
+clarifications are resolved and the plan is user-approved.
+
+#### Scenario: Every turn starts with the preparation agent
+- **WHEN** a chat completion request is processed and the loaded `CrossTurnPrepState` does not have the research-started flag set
+- **THEN** the app SHALL run the preparation agent for that turn
+
+#### Scenario: No MCP client or research graph unless the agent calls start_research
+- **WHEN** the preparation agent's run for a turn finishes without having called `start_research`
+- **THEN** the app SHALL NOT construct an MCP client, fetch tools, or run the research graph for that turn
+
+#### Scenario: A clear, approved request can launch; an unprepared one cannot
+- **WHEN** the agent calls `start_research` while the query is unclear or the plan is unapproved
+- **THEN** the call SHALL fail with an error naming the missing precondition, and research SHALL NOT start
+- **AND WHEN** the agent calls `start_research` after clarifications are resolved and the plan is approved
+- **THEN** the gate SHALL pass
+
+### Requirement: Rewind continues from the surviving assistant message's state
+
+Because `CrossTurnPrepState` and the transcript ride on the assistant message, the app SHALL
+require no rewind-detection logic. When the user edits or regenerates an earlier
+message and DIAL truncates the later turns, the app SHALL naturally continue from
+the `CrossTurnPrepState` recorded on the last surviving assistant message. Editing the first
+user message (no prior assistant message) SHALL start from a fresh `CrossTurnPrepState`.
+
+#### Scenario: Rewound conversation continues from the surviving state
+- **WHEN** a request's transcript has been truncated by a rewind so the last assistant message is an earlier one
+- **THEN** the turn SHALL load the `CrossTurnPrepState` from that surviving assistant message and continue, without any special rewind handling
+
+#### Scenario: Edited first message starts fresh
+- **WHEN** the first user message is edited so the request carries no prior assistant message
+- **THEN** the turn SHALL start from a fresh `CrossTurnPrepState`
+
+## ADDED Requirements
+
+### Requirement: Stateless turns persist CrossTurnPrepState and transcript in DIAL custom state
+
+The app SHALL process each turn statelessly, with no checkpointer and no
+`interrupt()`. At the start of a turn it SHALL reconstruct the LangChain message
+history from the DIAL transcript and load `CrossTurnPrepState` from the latest assistant
+message's `custom_content.state` — the `CrossTurnPrepState` fields directly under its
+`preparation` key (a fresh `CrossTurnPrepState` when none is present). At the end of a turn
+it SHALL persist, via `choice.set_state`, the resulting `CrossTurnPrepState` fields under
+`preparation`, next to the turn's preparation agent messages (`agent_messages`) and
+the whole responses of its clarity checks (`query_reviews`) and approval checks
+(`plan_reviews`); a research turn also persists its research record under
+`research` (**research-resume**). A failed turn persists as well, with a failure
+flag. A turn whose research run saved a snapshot persists its preparation agent
+messages and reviews, its `CrossTurnPrepState` with the plan-approved and research-started
+flags reset, and the snapshot. Any other failed turn, and a failed research turn
+whose snapshot cannot be saved, persists only the `CrossTurnPrepState` the request's history
+held when the turn started. A failure while the application properties are fetched
+or validated persists nothing, and a turn never fails once its report is written.
+When the full state of a turn whose report was written cannot be built or encoded,
+the turn persists a closing state instead: its `CrossTurnPrepState` with research started,
+and nothing else (**research-resume**). The app SHALL NOT keep server-side session
+state across requests.
+
+#### Scenario: Turn persists transcript and CrossTurnPrepState
+- **WHEN** a turn completes and its full state can be built and encoded
+- **THEN** the assistant message's `custom_content.state` SHALL contain, under `preparation`, the current `CrossTurnPrepState` fields, the turn's preparation agent messages and its reviews, and the app SHALL hold no other cross-request state for the session
+
+#### Scenario: A delivered report whose state cannot be saved still closes the conversation
+- **WHEN** a turn delivered its report and its full state cannot be built or encoded
+- **THEN** the assistant message's `custom_content.state` SHALL contain the `CrossTurnPrepState` fields with research started and no agent messages, reviews or research record, and the next request SHALL be refused as a conversation whose research has started
+
+#### Scenario: Next turn restores CrossTurnPrepState from the transcript
+- **WHEN** a follow-up request carries a prior assistant message whose `custom_content.state` `preparation` field records a resolved clarification and an unapproved plan
+- **THEN** the preparation agent for the new turn SHALL run with that `CrossTurnPrepState` restored, so the gates reflect the prior turn's progress without re-deriving it from the messages
+
+#### Scenario: The turn after a failed research run restores the plan without approval
+- **WHEN** a follow-up request's latest stateful assistant message was written by a failed research turn that saved a snapshot
+- **THEN** the preparation agent SHALL run with that turn's query, plan and plan id restored, and with the plan-approved and research-started flags false

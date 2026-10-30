@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from langchain_core.runnables import Runnable, RunnableLambda
 
-from dial_deep_research.app.history import Clarification, Plan, PrepState
+from dial_deep_research.app.history import Clarification, CrossTurnPrepState, Plan
 from dial_deep_research.app.preparation import tools as tools_module
 from dial_deep_research.app.preparation.prompts import (
     FAILED_TURN_NOTE,
@@ -55,7 +55,9 @@ async def test_query_clarity_checked_logs_the_message_count(
     monkeypatch.setattr(
         tools_module, "get_chat_model", lambda model_config: _FakeStructuredLLM(parsed)
     )
-    prep_tools = PrepTools(PrepState(), today_date="2026-08-21", data_sources="publications")
+    prep_tools = PrepTools(
+        CrossTurnPrepState(), today_date="2026-08-21", data_sources="publications"
+    )
     update_query = prep_tools.build()[0]
     caplog.set_level(logging.INFO, logger=_LOGGER_NAME)
 
@@ -79,7 +81,7 @@ async def test_plan_approval_checked_logs_the_message_count(
     monkeypatch.setattr(
         tools_module, "get_chat_model", lambda model_config: _FakeStructuredLLM(parsed)
     )
-    state = PrepState(
+    state = CrossTurnPrepState(
         current_query="q", clarification=Clarification(questions=[]), plan=Plan(steps=["step one"])
     )
     prep_tools = PrepTools(state, today_date="2026-08-21", data_sources="publications")
@@ -97,8 +99,8 @@ async def test_plan_approval_checked_logs_the_message_count(
 # --- The plan id ---------------------------------------------------------------------------------
 
 
-def _clear_query_state() -> PrepState:
-    return PrepState(current_query="q", clarification=Clarification(questions=[]))
+def _clear_query_state() -> CrossTurnPrepState:
+    return CrossTurnPrepState(current_query="q", clarification=Clarification(questions=[]))
 
 
 async def test_recording_the_same_steps_again_renews_the_plan_id() -> None:
@@ -223,9 +225,112 @@ async def test_the_approval_check_sees_the_note_and_the_continue_rule(
 async def test_the_clarity_check_sees_the_note(monkeypatch: pytest.MonkeyPatch) -> None:
     llm = _RecordingStructuredLLM(QueryReviewResponse(assessment="Settled.", questions=[]))
     monkeypatch.setattr(tools_module, "get_chat_model", lambda model_config: llm)
-    update_query = PrepTools(PrepState(), today_date="2026-08-21", data_sources="").build()[0]
+    update_query = PrepTools(
+        CrossTurnPrepState(), today_date="2026-08-21", data_sources=""
+    ).build()[0]
 
     await update_query.coroutine(query="q", runtime=_runtime(_conversation_after_a_failed_turn()))
 
     [[_, (_, human)]] = llm.calls
     assert f"System note: {FAILED_TURN_NOTE}\n\nUser: continue" in human
+
+
+# --- The reviews the checks collect ---------------------------------------------------------------
+
+
+class _SequencedStructuredLLM:
+    """A structured-output fake that answers each call with the next scripted response."""
+
+    def __init__(self, responses: list[Any]) -> None:
+        self._responses = responses
+
+    def with_structured_output(
+        self, schema: type[Any], *, include_raw: bool = False
+    ) -> Runnable[Any, Any]:
+        async def call(messages: list[Any]) -> dict[str, Any]:
+            from langchain_core.messages import AIMessage
+
+            parsed = self._responses.pop(0)
+            return {"parsed": parsed, "parsing_error": None, "raw": AIMessage(content="")}
+
+        return RunnableLambda(call)
+
+
+async def test_each_clarity_check_response_is_collected_whole_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = QueryReviewResponse(assessment="Region is missing.", questions=["Which region?"])
+    second = QueryReviewResponse(assessment="Region is settled.", questions=[])
+    llm = _SequencedStructuredLLM([first, second])
+    monkeypatch.setattr(tools_module, "get_chat_model", lambda model_config: llm)
+    prep_tools = PrepTools(CrossTurnPrepState(), today_date="2026-08-21", data_sources="")
+    update_query = prep_tools.build()[0]
+
+    await update_query.coroutine(query="inflation", runtime=_runtime())
+    await update_query.coroutine(query="inflation in ACME", runtime=_runtime())
+
+    assert prep_tools.reviews.query_reviews == [first, second]
+    assert [r.assessment for r in prep_tools.reviews.query_reviews] == [
+        "Region is missing.",
+        "Region is settled.",
+    ]
+    assert prep_tools.reviews.plan_reviews == []
+
+
+async def test_the_approval_check_response_is_collected_whole(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    review = PlanReviewResponse(
+        assessment="The user asked for changes.",
+        recorded_plan_matches=True,
+        user_approved_a_plan=False,
+        failure_reason="Ask the user to confirm the revised plan.",
+    )
+    monkeypatch.setattr(
+        tools_module, "get_chat_model", lambda model_config: _SequencedStructuredLLM([review])
+    )
+    state = _clear_query_state()
+    state.plan = Plan(steps=["one"])
+    prep_tools = PrepTools(state, today_date="2026-08-21", data_sources="")
+    approve_plan = prep_tools.build()[2]
+
+    await approve_plan.coroutine(runtime=_runtime())
+
+    assert prep_tools.reviews.plan_reviews == [review]
+    assert prep_tools.reviews.plan_reviews[0].assessment == "The user asked for changes."
+    assert prep_tools.reviews.query_reviews == []
+
+
+async def test_a_clarity_check_without_structured_output_fails_and_collects_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tools_module, "get_chat_model", lambda model_config: _FakeStructuredLLM(parsed=None)
+    )
+    state = CrossTurnPrepState()
+    prep_tools = PrepTools(state, today_date="2026-08-21", data_sources="")
+    update_query = prep_tools.build()[0]
+
+    with pytest.raises(ValueError, match="query clarity check returned no structured output"):
+        await update_query.coroutine(query="inflation in 2024", runtime=_runtime())
+
+    assert prep_tools.reviews.query_reviews == []
+    assert state.current_query is None
+
+
+async def test_an_approval_check_without_structured_output_fails_and_collects_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        tools_module, "get_chat_model", lambda model_config: _FakeStructuredLLM(parsed=None)
+    )
+    state = _clear_query_state()
+    state.plan = Plan(steps=["one"])
+    prep_tools = PrepTools(state, today_date="2026-08-21", data_sources="")
+    approve_plan = prep_tools.build()[2]
+
+    with pytest.raises(ValueError, match="plan approval check returned no structured output"):
+        await approve_plan.coroutine(runtime=_runtime())
+
+    assert prep_tools.reviews.plan_reviews == []
+    assert state.plan_approved is False

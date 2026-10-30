@@ -93,11 +93,29 @@ ordering is enforced by the tools, not by the agent:
 
 Two of the tools make their own independent structured LLM calls — the clarity check inside
 `update_query`, and the approval reviewer inside `approve_plan`. The agent cannot approve its own
-plan, nor write the readiness flags: only tool code mutates `PrepState`.
+plan, nor write the readiness flags: only tool code mutates `CrossTurnPrepState`.
 
-Turns are stateless. Each turn reconstructs the history and `PrepState` from the request and
-persists both back into the assistant message's `custom_content.state`; the same property is what
-makes a rewind work with no rewind-detection logic.
+Turns are stateless. Each turn rebuilds the preparation agent's history and `CrossTurnPrepState` from the
+request and persists its own state into the assistant message's `custom_content.state`; the same
+property is what makes a rewind work with no rewind-detection logic.
+
+A turn's state keeps the two graphs apart, under two keys of their own:
+
+- **`preparation`** holds every `CrossTurnPrepState` field directly (StatGPT reads
+  `preparation.research_started`), and next to them the preparation agent's model replies and tool
+  results of this turn (`agent_messages`) and the whole response of each clarity check and each
+  approval check it made (`query_reviews`, `plan_reviews`). Nothing in the app reads the two review
+  lists; they show a developer why preparation decided what it did.
+- **`research`** is the research record, saved by every turn whose research graph ran (see
+  [The research record](#the-research-record)).
+
+The preparation agent's history is built from the user messages and each earlier turn's
+`preparation.agent_messages` only. A turn without them, such as one without state, contributes one
+assistant message of its visible text. No research-agent message, draft or image ever enters it,
+so rebuilding the history downloads nothing. See
+[dial-agent-with-mcp](../openspec/specs/dial-agent-with-mcp/spec.md), "Reconstruction of the
+preparation agent's history from DIAL request", and [research-resume](../openspec/specs/research-resume/spec.md), "The
+turn's state keeps preparation and research apart".
 
 ```mermaid
 sequenceDiagram
@@ -110,7 +128,7 @@ sequenceDiagram
 
     loop one turn per exchange, until the query is clear
         U->>C: research request, or an answer to the questions
-        C->>A: turn — history + PrepState
+        C->>A: turn — history + CrossTurnPrepState
         Note over A: every turn starts with the<br/>data-sources fetch, whose string<br/>the agent's prompt carries
         A->>T: update_query "restated or refined query"
         Note over T: a new query discards<br/>any plan and its approval
@@ -130,7 +148,7 @@ sequenceDiagram
         A-->>C: query + plan verbatim + state (plan recorded)
         C-->>U: plan to review
         U->>C: approval, or requested changes
-        C->>A: turn — history + PrepState
+        C->>A: turn — history + CrossTurnPrepState
         alt user signals approval
             A->>T: approve_plan
             Note over T: gate: requires a recorded plan
@@ -151,7 +169,7 @@ sequenceDiagram
     C-->>U: report
 
     U->>C: follow-up in the same conversation
-    C->>A: turn — PrepState says research_started
+    C->>A: turn — CrossTurnPrepState says research_started
     A-->>C: DIAL error: research already handed off
 ```
 
@@ -164,7 +182,7 @@ failed persists `research_started` reset, so its conversation stays open (see
 [When a turn fails](#when-a-turn-fails)).
 
 The hand-off is silent, and by control flow rather than by prompt wording: a `before_model`
-middleware ends the preparation agent's loop as soon as `PrepState` says research has started, so
+middleware ends the preparation agent's loop as soon as `CrossTurnPrepState` says research has started, so
 no model call follows the gate and nothing announces that research is starting. One case stays
 outside that guarantee, knowingly: text the model wrote on the same assistant message that carries
 the `start_research` call was already streamed before the tool ran, and DIAL content cannot be
@@ -188,14 +206,14 @@ one state write falls back in a fixed order" owns the four states and the order:
 ```mermaid
 flowchart TD
     ended{"How did the turn end?"}
-    ended -->|"its report was written"| full["The full state: the whole<br/>transcript and the PrepState"]
-    full -->|"cannot be built<br/>or encoded"| closing["The closing state: an empty<br/>messages, the PrepState with<br/>research started, no failure flag"]
+    ended -->|"its report was written"| full["The full state: the preparation part<br/>and the completed run's research<br/>record, its images as placeholders"]
+    full -->|"cannot be built<br/>or encoded"| closing["The closing state: only the<br/>CrossTurnPrepState with research started,<br/>no research record, no failure flag"]
     full --> closed(["The conversation is closed:<br/>the next request is refused"])
     closing --> closed
-    ended -->|"it completed<br/>without research"| prep_full["The full state"]
+    ended -->|"it completed<br/>without research"| prep_full["The full state: the<br/>preparation part"]
     prep_full -->|"cannot be built or<br/>encoded: the turn fails"| record
-    ended -->|"its research failed after<br/>the graph streamed state"| snapshot["The snapshot state: the preparation<br/>messages, the PrepState with approval<br/>and research-started reset, and the<br/>snapshot, marked not resumable when<br/>a resume would repeat the failure"]
-    snapshot -->|"cannot be built<br/>or encoded"| record["The failure record: an empty<br/>messages and the PrepState the<br/>turn started from"]
+    ended -->|"its research failed after<br/>the graph streamed state"| snapshot["The snapshot state: the preparation<br/>part with approval and research-started<br/>reset, and the snapshot, marked not<br/>resumable when a resume would repeat<br/>the failure or an image was not stored"]
+    snapshot -->|"cannot be built<br/>or encoded"| record["The failure record: only the<br/>CrossTurnPrepState the turn started from"]
     ended -->|"it failed in any other way:<br/>in preparation, before the graph<br/>streamed state, or on a refused snapshot"| record
     snapshot --> flag(["The state carries the failure flag;<br/>then the error is delivered"])
     record --> flag
@@ -211,8 +229,8 @@ flowchart TD
   was delivered.
 - **A turn never fails once its report is written.** Every step after the report loop settled a
   draft absorbs its own failure and logs one WARNING: the citation step, appending the report, the
-  annotations, the citation log record and the final save, which saves an image it cannot upload
-  as a placeholder, and the closing state when the full state cannot be saved.
+  annotations, the citation log record and the final save, which makes no files call and saves the
+  closing state when the full state cannot be saved.
 
 ### Resuming a failed research run
 
@@ -237,32 +255,56 @@ sequenceDiagram
     Note over T: the reviewer reads a request to continue<br/>as approval of the plan approved before the failure
     A->>T: start_research
     T-->>K: research started — same turn
-    K->>K: take the latest snapshot in the history
-    alt its plan id is the current one and it is resumable
+    K->>K: take the latest research record in the history
+    opt its plan id is the current one and it is resumable
+        K->>K: download the snapshot's images
+    end
+    alt every image downloaded
         K-->>C: closed stage "[DEBUG] reusing snapshot"
         K->>G: enter at the snapshot's resume point,<br/>every channel from the snapshot
-    else the plan changed, or it is not resumable
+    else the plan changed, it is not resumable, or an image is gone (404)
         K-->>C: closed stage "[DEBUG] existing snapshot discarded"
-        K->>G: start fresh from the approved plan
+        K->>G: start fresh from the approved plan, in this turn
     end
     G-->>C: report appended once + state (research_started)
 ```
 
-- **Only the latest snapshot counts**, and turns in between do not hide it, failed turns that
-  saved no snapshot included. A snapshot marked not resumable shadows older ones on purpose.
+- **Only the latest research record counts**, and turns in between do not hide it, failed turns
+  that saved no snapshot included. A record marked not resumable hides older ones on purpose,
+  whatever its reason; research then starts fresh, and the new turn's own record becomes the latest.
 - **The plan id ties a snapshot to one query and plan.** `update_plan` sets a fresh id on every
   call, `update_query` clears it with the plan, and `start_research` gives one to a plan an earlier
   release recorded without it. So any change to the query or the plan starts research fresh.
 - **A matching snapshot that cannot be read is refused**, with a non-retryable error that tells
-  the user to start a new conversation. Its images are downloaded before the graph starts, with up
-  to three attempts each; one that still fails fails the turn with a retryable error, and the
-  snapshot stays the latest one.
+  the user to start a new conversation.
+- **Its images are downloaded before the stage**, so the stage says what the turn does. An image
+  whose file is gone discards the snapshot, and research runs fresh in the same turn. An image that
+  still fails to download for another reason fails the turn with a retryable error, before the
+  graph starts, and the snapshot stays the latest one.
 - **A resumed run behaves like any run.** The graph enters at the snapshot's resume point (see
   [Research graph](#research-graph)), the data-query records the failed run captured are
   restored, and its tool calls get no stage again.
 
-See [research-resume](../openspec/specs/research-resume/spec.md), "Research resumes only from the
-latest resumable snapshot of the current plan".
+See [research-resume](../openspec/specs/research-resume/spec.md), "Research resumes only when the
+latest research record is a resumable snapshot of the current plan".
+
+### The research record
+
+Every turn whose research graph streamed state saves a research record under `research`: a header
+(the format version, the plan id current when research started, whether the record may be resumed,
+why not, and the resume point), the research graph's state (see
+[The graph's state](#the-graphs-state)) and the turn's data-query records. A failed run's record is
+the snapshot a later turn resumes. A run that delivered its report saves the same shape, marked not
+resumable with the reason `completed`; the next request is refused before its history is rebuilt,
+so it is kept for observability only. The delivered report itself is the assistant content, and
+the record holds no message of it.
+
+Only a failed run's snapshot keeps its images: each one is uploaded to DIAL files at save time.
+Every image that is not stored, all of a completed run's and any whose upload still fails, becomes
+a placeholder in its own slot, with its MIME type and SHA-256 hash; a snapshot with such a
+placeholder is marked not resumable. See
+[research-resume](../openspec/specs/research-resume/spec.md), "A research record's images are
+uploaded only when the run failed".
 
 ## Research graph
 
@@ -291,7 +333,7 @@ never a model decision:
 ```mermaid
 flowchart TD
     start(["START"]) --> entry{"fresh run, or resumed<br/>from a failed run's snapshot?"}
-    entry -->|"fresh"| seed["Seed state from PrepState:<br/>query + approved plan as the<br/>first iteration's instruction"]
+    entry -->|"fresh"| seed["Seed state from CrossTurnPrepState:<br/>query + approved plan as the<br/>first iteration's instruction"]
     seed --> model
     entry -->|"resumed: every channel<br/>seeded from the snapshot"| resume_point{"the snapshot's<br/>resume point"}
     resume_point -->|"research"| model
@@ -299,7 +341,7 @@ flowchart TD
     resume_point -->|"report"| report
     resume_point -->|"report review"| report_review
 
-    subgraph research_agent_sub["research-agent node — one iteration, a create_agent loop"]
+    subgraph research_agent_sub["research-agent node — one iteration of a create_agent loop,<br/>counted when it returns"]
         model["Model call<br/>tool_choice = any → it must call a tool"]
         model --> which{"which tool<br/>did it call?"}
         which -->|"an MCP tool"| mcp["The tool runs; its result, or an<br/>error result with a retry verdict,<br/>is appended to the transcript"]
@@ -314,7 +356,7 @@ flowchart TD
     itgate -->|yes| research_review["research-review node<br/>independent structured LLM call<br/>→ assessment + next_steps,<br/>and one DIAL stage"]
     itgate -->|"no — a 'continue' verdict could<br/>not be acted on, so the last<br/>iteration is not reviewed,<br/>announced by a closing stage"| report
     research_review --> route{"next_steps non-empty?"}
-    route -->|yes| nextplan["Record the plan and inject it as<br/>the next iteration's instruction"]
+    route -->|yes| nextplan["Inject the next steps as<br/>the next iteration's instruction"]
     nextplan --> model
     route -->|no| report["report node<br/>LLM call over the whole findings<br/>transcript → the first draft, or a<br/>revision when a draft already exists"]
     report --> afterreport{"deliver now,<br/>or review the draft?"}
@@ -351,6 +393,31 @@ state and the snapshot fills every channel. Inside research-agent, a resumed ite
 after its last completed agent turn. See
 [research-resume](../openspec/specs/research-resume/spec.md), "A resumed run re-enters the graph
 at the node that failed".
+
+### The graph's state
+
+Each node appends its model's response to the state whole, and builds what it needs from those
+lists on every run, so a resumed run builds them exactly as a fresh one does:
+
+| Field | What it holds | Written by |
+|---|---|---|
+| `research_query`, `approved_plan` | The query and the plan preparation finalized. | The seed |
+| `research_agent_messages` | Research-agent's conversation, with the instruction for each iteration. | The seed (the first instruction), research-agent (its calls and results), research-review (each next instruction) |
+| `research_iteration` | How many iterations finished. | Research-agent, when an iteration returns |
+| `research_reviews` | Each research-review response, whole. | Research-review |
+| `reports` | Each draft, in order; the last is the latest. | The report node |
+| `report_reviews` | One entry per report-review round: the draft number, the app rules' violations and both reviews' responses (absent when a call failed). | Report-review |
+| `report_revision_failed` | Whether the latest revision's call failed. | The report node |
+
+The plan list research-review and the writer receive is the approved plan followed by each
+review's next steps; the draft number is the length of `reports`; and the writer's revision
+instruction comes from the latest `report_reviews` entry only. Research-agent is a `create_agent`
+graph, whose conversation key is fixed as `messages`, so its node maps `research_agent_messages`
+in and out and passes the research graph's config on, which carries the step budget. See
+[research-execution](../openspec/specs/research-execution/spec.md), "Research runs as a
+deterministic graph launched after plan approval", and
+[research-resume](../openspec/specs/research-resume/spec.md), "The research record holds the
+research graph's state and every model output".
 
 The rest of the loop, in brief — each item is specified in the linked specs:
 
@@ -655,8 +722,10 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   and kept in the one the app persists.
 - **Step budget**: `max_research_graph_steps` (an application property, default 500) is passed as
   LangGraph's `recursion_limit` — the most node executions one graph run may make, counted afresh
-  for each nested run. The research-agent node is a compiled graph, so every iteration gets its own
-  budget, and that loop is what the budget really limits: the outer graph's length is already fixed
+  for each nested run. Research-agent's node runs a compiled agent graph. The node passes its own
+  config to that graph, because `create_agent` sets a `recursion_limit` of its own that only an
+  explicitly passed config overrides. So every iteration gets its own budget of the channel's
+  size, and that loop is what the budget really limits: the outer graph's length is already fixed
   by its own caps, at `2 × max_research_iterations + 2 × max_report_versions − 2` super-steps —
   24 at the default caps; the same formula gives 20 for a version budget of one, where the single
   report call is never reviewed. A research-agent that never calls `finish_iteration` exhausts the budget

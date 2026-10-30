@@ -511,12 +511,14 @@ async def _review(
         client_rules=[QualityRule(name="Client rule", report_writer="Write the client's way.")],
     )
     state = {
-        "messages": _transcript(),
-        "original_query": "q",
-        "plans": [["step"]],
+        "research_agent_messages": _transcript(),
+        "research_query": "q",
+        "approved_plan": ["step"],
         "research_iteration": 1,
-        "report": draft,
-        "report_version": 1,
+        "research_reviews": [],
+        "reports": [draft],
+        "report_reviews": [],
+        "report_revision_failed": False,
     }
     await node(state)  # type: ignore[arg-type]
     (outcome,) = outcomes

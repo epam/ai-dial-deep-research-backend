@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import re
@@ -17,6 +18,7 @@ from typing import Any
 import httpx
 import openai
 import pytest
+from aidial_client import DialException, ResourceNotFoundError
 from aidial_sdk.chat_completion import CustomContent, Message, Request, Role
 from aidial_sdk.utils.merge_chunks import cleanup_indices, merge
 from fastapi.testclient import TestClient
@@ -37,12 +39,19 @@ from dial_deep_research.app.history import (
     FAILURE_STATE_KEY,
     SNAPSHOT_STATE_KEY,
     Clarification,
+    CrossTurnPrepState,
     Plan,
-    PrepState,
-    reconstruct_history,
+    PreparationDialState,
+    create_dial_state,
+    reconstruct_prep_agent_history,
 )
 from dial_deep_research.app.mcp_tools import LoadedMcpTools
-from dial_deep_research.app.preparation.prompts import FAILED_TURN_NOTE
+from dial_deep_research.app.preparation.prompts import (
+    FAILED_TURN_NOTE,
+    PlanReviewResponse,
+    QueryReviewResponse,
+)
+from dial_deep_research.app.preparation.tools import PrepReviews
 from dial_deep_research.app.research import graph as graph_module
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research import runner as runner_module
@@ -52,15 +61,18 @@ from dial_deep_research.app.research.data_queries import (
     DataQueryStore,
 )
 from dial_deep_research.app.research.graph import build_research_graph
+from dial_deep_research.app.research.prompts import ReportReview, ResearchReview
 from dial_deep_research.app.research.runner import ResearchRunner
 from dial_deep_research.app.research.snapshot import (
     SNAPSHOT_VERSION,
     CapturedProgress,
     DiscardedSnapshot,
     DiscardReason,
+    NotResumableReason,
     ResearchSnapshot,
     ResumableSnapshot,
     ResumePoint,
+    build_completed_record,
     build_snapshot,
     decode_data_queries,
     encode_data_queries,
@@ -68,6 +80,7 @@ from dial_deep_research.app.research.snapshot import (
     read_snapshot,
 )
 from dial_deep_research.app.research.state import (
+    ReportReviewRound,
     ResearchState,
     build_initial_state,
     build_resumed_state,
@@ -77,6 +90,8 @@ from dial_deep_research.app.research.tools import (
     build_update_status_tool,
 )
 from dial_deep_research.app_properties import ApplicationProperties, ReportSection
+from dial_deep_research.utils import image_attachments
+from dial_deep_research.utils.image_attachments import download_snapshot_images
 from tests.citation_fakes import no_lookups
 from tests.dial_spies import ChoiceSpy
 from tests.mcp_fakes import BOTH_SOURCE_KINDS
@@ -89,7 +104,7 @@ def _tool_call(call_id: str, name: str = "rag_search") -> dict[str, Any]:
 
 
 def _transcript() -> list[Any]:
-    """The seed instruction and two completed agent turns."""
+    """The seed instruction and two completed model calls with their tool results."""
     return [
         HumanMessage(content="Research the question.", id="h1"),
         AIMessage(content="", tool_calls=[_tool_call("c1")], id="a1"),
@@ -119,19 +134,32 @@ def _records() -> dict[str, DataQueryRecord]:
     }
 
 
+def _review(*next_steps: str) -> ResearchReview:
+    return ResearchReview(assessment="Coverage of the plan so far.", next_steps=list(next_steps))
+
+
+def _review_round(draft_number: int, *rule_violations: str) -> ReportReviewRound:
+    return ReportReviewRound(
+        draft_number=draft_number,
+        rule_violations=list(rule_violations),
+        blind_review=ReportReview(report_violations=["Cut the padding."]),
+        grounded_review="1. Cite the annual rate.",
+    )
+
+
 def _snapshot_dict(**overrides: Any) -> dict[str, Any]:
     snapshot = ResearchSnapshot(
         plan_id=_PLAN_ID,
         resumable=True,
         version=SNAPSHOT_VERSION,
         resume_at=ResumePoint.RESEARCH,
-        messages=messages_to_dict(_transcript()),
-        original_query="How did inflation change in 2024?",
-        plans=[["Find the annual inflation rate."]],
+        research_query="How did inflation change in 2024?",
+        approved_plan=["Find the annual inflation rate."],
+        research_agent_messages=messages_to_dict(_transcript()),
         research_iteration=0,
-        report=None,
-        report_version=0,
-        report_revision_instruction=None,
+        research_reviews=[],
+        reports=[],
+        report_reviews=[],
         report_revision_failed=False,
         data_queries=encode_data_queries(_records()),
     )
@@ -159,9 +187,24 @@ def test_a_field_this_code_does_not_know_is_ignored() -> None:
     assert isinstance(resumed, ResumableSnapshot)
 
 
-def test_the_snapshot_has_a_field_for_every_research_state_channel() -> None:
-    """A channel added without a snapshot field would be missing from every resumed run."""
+def test_the_record_has_a_field_for_every_research_state_channel() -> None:
+    """A channel added without a record field would be missing from every resumed run."""
     assert set(ResearchState.__annotations__) <= set(ResearchSnapshot.model_fields)
+
+
+def test_a_record_reads_its_reviews_back_as_their_models() -> None:
+    raw = _snapshot_dict(
+        resume_at=ResumePoint.REPORT.value,
+        research_reviews=[_review("Find the monthly rate.").model_dump(mode="json")],
+        reports=["Draft one."],
+        report_reviews=[_review_round(1, "The summary is too long.").model_dump(mode="json")],
+    )
+
+    resumed = read_snapshot(raw, current_plan_id=_PLAN_ID)
+
+    assert isinstance(resumed, ResumableSnapshot)
+    assert resumed.snapshot.research_reviews == [_review("Find the monthly rate.")]
+    assert resumed.snapshot.report_reviews == [_review_round(1, "The summary is too long.")]
 
 
 def test_data_query_records_survive_a_clients_chunk_merge() -> None:
@@ -185,7 +228,7 @@ def test_data_query_records_survive_a_clients_chunk_merge() -> None:
 
 
 def test_a_snapshot_of_another_plan_is_discarded_unread() -> None:
-    raw = _snapshot_dict(plan_id="another-plan", version=99, messages="broken")
+    raw = _snapshot_dict(plan_id="another-plan", version=99, research_agent_messages="broken")
 
     discarded = read_snapshot(raw, current_plan_id=_PLAN_ID)
 
@@ -195,12 +238,16 @@ def test_a_snapshot_of_another_plan_is_discarded_unread() -> None:
 
 
 def test_a_snapshot_marked_not_resumable_is_discarded_whatever_its_version() -> None:
-    raw = _snapshot_dict(resumable=False, version=99)
+    raw = _snapshot_dict(resumable=False, not_resumable_reason="repeating_failure", version=99)
 
     discarded = read_snapshot(raw, current_plan_id=_PLAN_ID)
 
     assert isinstance(discarded, DiscardedSnapshot)
     assert discarded.reason is DiscardReason.NOT_RESUMABLE
+    assert discarded.not_resumable_reason is NotResumableReason.REPEATING_FAILURE
+    assert ("not_resumable_reason", "repeating_failure") in discarded.facts(
+        current_plan_id=_PLAN_ID
+    )
 
 
 def test_a_discard_names_the_resume_point_only_when_it_reads_as_one() -> None:
@@ -210,6 +257,28 @@ def test_a_discard_names_the_resume_point_only_when_it_reads_as_one() -> None:
 
     assert isinstance(discarded, DiscardedSnapshot)
     assert discarded.resume_at is None
+
+
+def test_a_record_of_another_plan_names_no_not_resumable_reason() -> None:
+    raw = _snapshot_dict(
+        plan_id="another-plan", resumable=False, not_resumable_reason="repeating_failure"
+    )
+
+    discarded = read_snapshot(raw, current_plan_id=_PLAN_ID)
+
+    assert isinstance(discarded, DiscardedSnapshot)
+    assert discarded.reason is DiscardReason.PLAN_CHANGED
+    assert discarded.not_resumable_reason is None
+
+
+def test_a_discard_names_the_not_resumable_reason_only_when_it_reads_as_one() -> None:
+    raw = _snapshot_dict(resumable=False, not_resumable_reason="a-reason-from-a-later-release")
+
+    discarded = read_snapshot(raw, current_plan_id=_PLAN_ID)
+
+    assert isinstance(discarded, DiscardedSnapshot)
+    assert discarded.not_resumable_reason is None
+    assert "not_resumable_reason" not in dict(discarded.facts(current_plan_id=_PLAN_ID))
 
 
 @pytest.mark.parametrize("raw", ["not a snapshot", {"plan_id": 7}, {"resumable": True}])
@@ -232,8 +301,10 @@ def test_a_matching_snapshot_of_another_version_is_refused() -> None:
     "overrides",
     [
         {"research_iteration": "two"},
-        {"messages": [{"type": "no-such-type", "data": {}}]},
+        {"research_agent_messages": [{"type": "no-such-type", "data": {}}]},
         {"data_queries": "{not json"},
+        {"research_reviews": [{"next_steps": ["no assessment"]}]},
+        {"resume_at": None},
     ],
 )
 def test_a_matching_snapshot_that_fails_to_read_is_unreadable_with_its_cause(
@@ -260,11 +331,11 @@ def test_a_snapshot_two_answers_back_is_found() -> None:
     snapshot = _snapshot_dict()
     messages = [
         _user("go"),
-        _assistant({"messages": [], SNAPSHOT_STATE_KEY: snapshot, FAILURE_STATE_KEY: True}),
+        _assistant({"preparation": {}, SNAPSHOT_STATE_KEY: snapshot, FAILURE_STATE_KEY: True}),
         _user("what happened?"),
-        _assistant({"messages": [], "preparation": {}}, content="It failed."),
+        _assistant({"preparation": {}}, content="It failed."),
         _user("continue"),
-        _assistant({"messages": [], "preparation": {}, FAILURE_STATE_KEY: True}),
+        _assistant({"preparation": {}, FAILURE_STATE_KEY: True}),
         _user("continue"),
     ]
     assert find_latest_snapshot(messages) == snapshot
@@ -282,7 +353,7 @@ def test_a_newer_snapshot_hides_an_older_one() -> None:
 
 
 def test_a_history_without_a_snapshot_has_none() -> None:
-    messages = [_user("hi"), _assistant(None, content="legacy"), _assistant({"messages": []})]
+    messages = [_user("hi"), _assistant(None, content="legacy"), _assistant({"preparation": {}})]
     assert find_latest_snapshot(messages) is None
 
 
@@ -293,10 +364,9 @@ def test_the_resumed_state_fills_every_channel_from_the_snapshot() -> None:
     raw = _snapshot_dict(
         resume_at=ResumePoint.REPORT_REVIEW.value,
         research_iteration=2,
-        plans=[["one"], ["two"]],
-        report="Draft two.",
-        report_version=2,
-        report_revision_instruction="Shorten the summary.",
+        research_reviews=[_review("Find the monthly rate.").model_dump(mode="json")],
+        reports=["Draft one.", "Draft two."],
+        report_reviews=[_review_round(1, "Shorten the summary.").model_dump(mode="json")],
         report_revision_failed=False,
     )
     resumed = read_snapshot(raw, current_plan_id=_PLAN_ID)
@@ -305,29 +375,30 @@ def test_the_resumed_state_fills_every_channel_from_the_snapshot() -> None:
     state = build_resumed_state(resumed)
 
     assert set(state) == set(ResearchState.__annotations__)
+    assert state["research_query"] == "How did inflation change in 2024?"
+    assert state["approved_plan"] == ["Find the annual inflation rate."]
     assert state["research_iteration"] == 2
-    assert state["plans"] == [["one"], ["two"]]
-    assert state["report"] == "Draft two."
-    assert state["report_version"] == 2
-    assert state["report_revision_instruction"] == "Shorten the summary."
-    assert [m.id for m in state["messages"]] == ["h1", "a1", "t1", "a2", "t2"]
+    assert state["research_reviews"] == [_review("Find the monthly rate.")]
+    assert state["reports"] == ["Draft one.", "Draft two."]
+    assert state["report_reviews"] == [_review_round(1, "Shorten the summary.")]
+    assert [m.id for m in state["research_agent_messages"]] == ["h1", "a1", "t1", "a2", "t2"]
 
 
 def test_the_stage_facts_of_a_research_resume_point() -> None:
     resumed = read_snapshot(_snapshot_dict(), current_plan_id=_PLAN_ID)
     assert isinstance(resumed, ResumableSnapshot)
-    assert resumed.agent_turns_completed == 2
+    assert resumed.restored_model_calls_in_iteration == 2
     assert resumed.report_review_round is None
 
 
 def test_the_stage_facts_of_a_report_review_resume_point() -> None:
     raw = _snapshot_dict(
-        resume_at=ResumePoint.REPORT_REVIEW.value, report="Draft.", report_version=3
+        resume_at=ResumePoint.REPORT_REVIEW.value, reports=["One.", "Two.", "Three."]
     )
     resumed = read_snapshot(raw, current_plan_id=_PLAN_ID)
     assert isinstance(resumed, ResumableSnapshot)
     assert resumed.report_review_round == 3
-    assert resumed.agent_turns_completed is None
+    assert resumed.restored_model_calls_in_iteration is None
 
 
 # --- Capturing progress: the stream parts the runner keeps ----------------------------------------
@@ -342,17 +413,17 @@ def _task_start(name: str) -> dict[str, Any]:
 
 
 def _root_values(messages: list[Any]) -> dict[str, Any]:
-    return _part("values", (), {**_channels(), "messages": messages})
+    return _part("values", (), {**_channels(), "research_agent_messages": messages})
 
 
 def _channels() -> dict[str, Any]:
     return {
-        "original_query": "q",
-        "plans": [["one"]],
+        "research_query": "q",
+        "approved_plan": ["one"],
         "research_iteration": 0,
-        "report": None,
-        "report_version": 0,
-        "report_revision_instruction": None,
+        "research_reviews": [],
+        "reports": [],
+        "report_reviews": [],
         "report_revision_failed": False,
     }
 
@@ -491,8 +562,8 @@ def _stub_node(monkeypatch: pytest.MonkeyPatch, factory: str, node: Any) -> None
     monkeypatch.setattr(graph_module, factory, lambda *a, **kw: node)
 
 
-def _prep_state() -> PrepState:
-    return PrepState(
+def _prep_state() -> CrossTurnPrepState:
+    return CrossTurnPrepState(
         current_query="How did inflation change in 2024?",
         plan=Plan(steps=["Find the annual inflation rate."]),
         plan_id=_PLAN_ID,
@@ -515,7 +586,7 @@ async def _run_until_it_fails(
     return runner
 
 
-async def test_a_failure_at_a_model_call_keeps_the_completed_agent_turns(
+async def test_a_failure_at_a_model_call_keeps_the_completed_model_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _use_agent_script(
@@ -564,11 +635,11 @@ async def test_research_review_failing_after_iteration_two(monkeypatch: pytest.M
         if reviews == 2:
             raise RuntimeError("upstream 502")
         return {
-            "plans": [*state["plans"], ["Next step."]],
-            "messages": [HumanMessage(content="Instruction two.")],
+            "research_reviews": [*state["research_reviews"], _review("Next step.")],
+            "research_agent_messages": [HumanMessage(content="Instruction two.")],
         }
 
-    _stub_node(monkeypatch, "build_research_agent", research_agent)
+    _stub_node(monkeypatch, "make_research_agent_node", research_agent)
     _stub_node(monkeypatch, "make_research_review_node", research_review)
 
     runner = await _run_until_it_fails(_compile_research_graph(monkeypatch))
@@ -589,7 +660,7 @@ async def test_the_report_node_failing_on_the_first_draft(monkeypatch: pytest.Mo
     async def report(state: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("quota exhausted")
 
-    _stub_node(monkeypatch, "build_research_agent", research_agent)
+    _stub_node(monkeypatch, "make_research_agent_node", research_agent)
     _stub_node(monkeypatch, "make_research_review_node", research_review)
     _stub_node(monkeypatch, "make_report_node", report)
 
@@ -598,8 +669,7 @@ async def test_the_report_node_failing_on_the_first_draft(monkeypatch: pytest.Mo
     progress = runner.captured_progress()
     assert progress is not None
     assert progress.resume_at is ResumePoint.REPORT
-    assert progress.channels["report"] is None
-    assert progress.channels["report_version"] == 0
+    assert progress.channels["reports"] == []
 
 
 async def test_a_new_iteration_failing_at_once_uses_the_graphs_own_transcript(
@@ -614,8 +684,8 @@ async def test_a_new_iteration_failing_at_once_uses_the_graphs_own_transcript(
 
     async def research_review(state: dict[str, Any]) -> dict[str, Any]:
         return {
-            "plans": [*state["plans"], ["Next step."]],
-            "messages": [HumanMessage(content="Instruction two.", id="h2")],
+            "research_reviews": [*state["research_reviews"], _review("Next step.")],
+            "research_agent_messages": [HumanMessage(content="Instruction two.", id="h2")],
         }
 
     _stub_node(monkeypatch, "make_research_review_node", research_review)
@@ -668,7 +738,7 @@ def _progress_with_an_image() -> CapturedProgress:
             AIMessage(content="", tool_calls=[_tool_call("c1")], id="a1"),
             tool_message,
         ],
-        channels={**_channels(), "messages": []},
+        channels={**_channels(), "research_agent_messages": []},
         data_queries=_records(),
     )
 
@@ -684,12 +754,20 @@ def test_the_captured_progress_carries_the_turns_data_query_records() -> None:
     assert progress.data_queries == _records()
 
 
+_PNG_SHA256 = hashlib.sha256(base64.b64decode(_PNG_B64)).hexdigest()
+
+
 async def test_a_built_snapshot_holds_image_urls_and_reads_back() -> None:
     snapshot = await build_snapshot(
-        _progress_with_an_image(), plan_id=_PLAN_ID, resumable=True, dial=_UploadingDial()  # type: ignore[arg-type]
+        _progress_with_an_image(),
+        plan_id=_PLAN_ID,
+        repeating_failure=False,
+        dial=_UploadingDial(),  # type: ignore[arg-type]
     )
 
-    [block] = snapshot.messages[-1]["data"]["content"]
+    assert snapshot.resumable is True
+    assert snapshot.not_resumable_reason is None
+    [block] = snapshot.research_agent_messages[-1]["data"]["content"]
     assert "base64" not in block
     assert block["url"] == "files/ub/appdata/dial-deep-research/c1-0.png"
     resumed = read_snapshot(snapshot.model_dump(mode="json"), current_plan_id=_PLAN_ID)
@@ -698,17 +776,87 @@ async def test_a_built_snapshot_holds_image_urls_and_reads_back() -> None:
     assert [m.id for m in resumed.messages] == ["h1", "a1", "t1"]
 
 
-async def test_building_a_snapshot_re_raises_a_failed_bucket_lookup() -> None:
-    with pytest.raises(RuntimeError, match="bucket lookup failed"):
-        await build_snapshot(
-            _progress_with_an_image(),
-            plan_id=_PLAN_ID,
-            resumable=True,
-            dial=_UploadingDial(bucket_fails=True),  # type: ignore[arg-type]
-        )
+async def test_a_snapshot_whose_bucket_cannot_be_resolved_is_not_resumable() -> None:
+    snapshot = await build_snapshot(
+        _progress_with_an_image(),
+        plan_id=_PLAN_ID,
+        repeating_failure=False,
+        dial=_UploadingDial(bucket_fails=True),  # type: ignore[arg-type]
+    )
+
+    assert snapshot.resumable is False
+    assert snapshot.not_resumable_reason is NotResumableReason.IMAGE_UPLOAD_FAILED
+    [block] = snapshot.research_agent_messages[-1]["data"]["content"]
+    assert block == {
+        "type": "text",
+        "text": f"[image not stored: upload failed, image/png, sha256={_PNG_SHA256}]",
+    }
 
 
-# --- The resumed run, through `ResearchRunner.run` ------------------------------------------------
+async def test_a_repeating_failure_that_also_loses_an_image_names_the_repeating_failure() -> None:
+    snapshot = await build_snapshot(
+        _progress_with_an_image(),
+        plan_id=_PLAN_ID,
+        repeating_failure=True,
+        dial=_UploadingDial(bucket_fails=True),  # type: ignore[arg-type]
+    )
+
+    assert snapshot.resumable is False
+    assert snapshot.not_resumable_reason is NotResumableReason.REPEATING_FAILURE
+
+
+def test_a_completed_record_holds_placeholders_and_names_no_resume_point() -> None:
+    progress = _progress_with_an_image().model_copy(update={"resume_at": None})
+
+    record = build_completed_record(progress, plan_id=_PLAN_ID)
+
+    assert (record.resumable, record.not_resumable_reason, record.resume_at) == (
+        False,
+        NotResumableReason.COMPLETED,
+        None,
+    )
+    [block] = record.research_agent_messages[-1]["data"]["content"]
+    assert block == {
+        "type": "text",
+        "text": f"[image not stored: successful run, image/png, sha256={_PNG_SHA256}]",
+    }
+
+
+async def test_every_research_state_channel_survives_the_save_and_the_resume() -> None:
+    """A channel the record builder forgets to copy would resume with the record field's default.
+
+    Every value differs from an empty or zero default, so a forgotten copy fails the comparison.
+    """
+    state = ResearchState(
+        research_query="How did inflation change in 2024?",
+        approved_plan=["Find the annual inflation rate."],
+        research_agent_messages=_transcript(),
+        research_iteration=2,
+        research_reviews=[_review("Find the monthly rate.")],
+        reports=["Draft one.", "Draft two."],
+        report_reviews=[_review_round(1, "Shorten the summary.")],
+        report_revision_failed=True,
+    )
+    assert all(state.values()), "every channel needs a value that no default could equal"
+    progress = CapturedProgress(
+        resume_at=ResumePoint.REPORT_REVIEW,
+        messages=list(state["research_agent_messages"]),
+        channels=dict(state),
+        data_queries=_records(),
+    )
+
+    snapshot = await build_snapshot(
+        progress,
+        plan_id=_PLAN_ID,
+        repeating_failure=False,
+        dial=_UploadingDial(),  # type: ignore[arg-type]
+    )
+    stored = json.loads(json.dumps(snapshot.model_dump(mode="json")))
+    resumed = read_snapshot(stored, current_plan_id=_PLAN_ID)
+
+    assert isinstance(resumed, ResumableSnapshot)
+    assert build_resumed_state(resumed) == state
+
 
 _PNG_BYTES = b"\x89PNG\r\n\x1a\n"
 _DRAFT = "## Summary\n\nInflation rose."
@@ -810,7 +958,7 @@ def _report_writer(order: list[str], received: list[dict[str, Any]] | None = Non
         order.append("report")
         if received is not None:
             received.append(dict(state))
-        return {"report": _DRAFT, "report_version": state["report_version"] + 1}
+        return {"reports": [*state["reports"], _DRAFT]}
 
     return report
 
@@ -831,7 +979,6 @@ async def _resume_run(
         properties=_resume_properties(**property_overrides),
         data_sources=DataSources(text="The topics map."),
         resumed=resumed,
-        dial=_DownloadingDial(),  # type: ignore[arg-type]
     )
     return runner, choice
 
@@ -839,7 +986,7 @@ async def _resume_run(
 async def test_a_resumed_iteration_repeats_only_the_failed_model_call(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    # The failed run: two completed agent turns, then the third model call fails.
+    # The failed run: two completed model calls, then the third model call fails.
     _use_agent_script(
         monkeypatch, _calls(_tool_call("c1")), _calls(_tool_call("c2")), RuntimeError("quota")
     )
@@ -847,7 +994,10 @@ async def test_a_resumed_iteration_repeats_only_the_failed_model_call(
     progress = failed.captured_progress()
     assert progress is not None
     snapshot = await build_snapshot(
-        progress, plan_id=_PLAN_ID, resumable=True, dial=_UploadingDial()  # type: ignore[arg-type]
+        progress,
+        plan_id=_PLAN_ID,
+        repeating_failure=False,
+        dial=_UploadingDial(),  # type: ignore[arg-type]
     )
     resumed = read_snapshot(snapshot.model_dump(mode="json"), current_plan_id=_PLAN_ID)
     assert isinstance(resumed, ResumableSnapshot)
@@ -878,7 +1028,6 @@ async def test_a_resumed_iteration_repeats_only_the_failed_model_call(
         properties=_resume_properties(),
         data_sources=DataSources(text="The topics map."),
         resumed=resumed,
-        dial=_DownloadingDial(),  # type: ignore[arg-type]
     )
 
     [only_call] = model.received
@@ -892,11 +1041,13 @@ async def test_a_resumed_iteration_repeats_only_the_failed_model_call(
 
 async def test_resuming_at_research_review_runs_it_first(monkeypatch: pytest.MonkeyPatch) -> None:
     order: list[str] = []
-    _stub_node(monkeypatch, "build_research_agent", _record_order(order, "research-agent"))
+    _stub_node(monkeypatch, "make_research_agent_node", _record_order(order, "research-agent"))
     _stub_node(monkeypatch, "make_research_review_node", _record_order(order, "research-review"))
     _stub_node(monkeypatch, "make_report_node", _report_writer(order))
     resumed = _resumed(
-        resume_at=ResumePoint.RESEARCH_REVIEW.value, research_iteration=2, plans=[["a"], ["b"]]
+        resume_at=ResumePoint.RESEARCH_REVIEW.value,
+        research_iteration=2,
+        research_reviews=[_review("b").model_dump(mode="json")],
     )
 
     await _resume_run(monkeypatch, resumed)
@@ -909,7 +1060,7 @@ async def test_resuming_at_the_report_writes_draft_one_from_the_saved_transcript
 ) -> None:
     order: list[str] = []
     received: list[dict[str, Any]] = []
-    _stub_node(monkeypatch, "build_research_agent", _record_order(order, "research-agent"))
+    _stub_node(monkeypatch, "make_research_agent_node", _record_order(order, "research-agent"))
     _stub_node(monkeypatch, "make_research_review_node", _record_order(order, "research-review"))
     _stub_node(monkeypatch, "make_report_node", _report_writer(order, received))
 
@@ -917,8 +1068,8 @@ async def test_resuming_at_the_report_writes_draft_one_from_the_saved_transcript
 
     assert order == ["report"]
     [state] = received
-    assert (state["report"], state["report_version"]) == (None, 0)
-    assert [m.id for m in state["messages"]] == ["h1", "a1", "t1", "a2", "t2"]
+    assert state["reports"] == []
+    assert [m.id for m in state["research_agent_messages"]] == ["h1", "a1", "t1", "a2", "t2"]
     assert "Inflation rose." in choice.content
 
 
@@ -929,14 +1080,21 @@ async def test_resuming_at_report_review_reviews_the_saved_draft(
     reviewed: list[tuple[str, int]] = []
 
     def review(state: dict[str, Any]) -> dict[str, Any]:
-        reviewed.append((state["report"], state["report_version"]))
-        return {"report_revision_instruction": None}
+        reviewed.append((state["reports"][-1], len(state["reports"])))
+        approval = ReportReviewRound(
+            draft_number=2, rule_violations=[], blind_review=None, grounded_review=None
+        )
+        return {"report_reviews": [*state["report_reviews"], approval]}
 
     _stub_node(monkeypatch, "make_report_node", _report_writer(order))
     _stub_node(
         monkeypatch, "make_report_review_node", _record_order(order, "report-review", review)
     )
-    resumed = _resumed(resume_at=ResumePoint.REPORT_REVIEW.value, report=_DRAFT, report_version=2)
+    resumed = _resumed(
+        resume_at=ResumePoint.REPORT_REVIEW.value,
+        reports=["Draft one.", _DRAFT],
+        report_reviews=[_review_round(1, "Shorten the summary.").model_dump(mode="json")],
+    )
 
     await _resume_run(monkeypatch, resumed, max_report_versions=3)
 
@@ -953,7 +1111,9 @@ async def test_the_iteration_cap_counts_the_iterations_before_the_failure(
         return {"research_iteration": state["research_iteration"] + 1}
 
     _stub_node(
-        monkeypatch, "build_research_agent", _record_order(order, "research-agent", one_iteration)
+        monkeypatch,
+        "make_research_agent_node",
+        _record_order(order, "research-agent", one_iteration),
     )
     _stub_node(monkeypatch, "make_research_review_node", _record_order(order, "research-review"))
     _stub_node(monkeypatch, "make_report_node", _report_writer(order))
@@ -972,9 +1132,11 @@ async def test_the_version_budget_counts_the_drafts_before_the_failure(
     _stub_node(monkeypatch, "make_report_review_node", _record_order(order, "report-review"))
     resumed = _resumed(
         resume_at=ResumePoint.REPORT.value,
-        report=_DRAFT,
-        report_version=2,
-        report_revision_instruction="Shorten the summary.",
+        reports=["Draft one.", _DRAFT],
+        report_reviews=[
+            _review_round(1, "Shorten the summary.").model_dump(mode="json"),
+            _review_round(2, "Shorten the summary.").model_dump(mode="json"),
+        ],
     )
 
     await _resume_run(monkeypatch, resumed, max_report_versions=3)
@@ -1004,7 +1166,10 @@ async def test_the_resumed_agent_call_receives_the_snapshots_transcript_with_its
     _stub_node(monkeypatch, "make_research_review_node", _record_order(order, "research-review"))
     _stub_node(monkeypatch, "make_report_node", _report_writer(order))
 
-    await _resume_run(monkeypatch, _resumed(messages=messages_to_dict(transcript)))
+    resumed = _resumed(research_agent_messages=messages_to_dict(transcript))
+    # The coordinator downloads the images before the run starts.
+    assert await download_snapshot_images(resumed.messages, _DownloadingDial()) == 0  # type: ignore[arg-type]
+    await _resume_run(monkeypatch, resumed)
 
     [first_call, *_] = model.received
     assert [m.type for m in first_call] == ["system", "human", "ai", "tool", "ai", "tool"]
@@ -1021,7 +1186,7 @@ async def test_a_query_captured_before_the_failure_resolves_after_the_resume(
 
     async def report(state: dict[str, Any]) -> dict[str, Any]:
         order.append("report")
-        return {"report": f"{_DRAFT} [data_query dq_0123abcd45]", "report_version": 1}
+        return {"reports": [f"{_DRAFT} [data_query dq_0123abcd45]"]}
 
     _stub_node(monkeypatch, "make_report_node", report)
     store = DataQueryStore()
@@ -1171,14 +1336,15 @@ def _prep_runner(behave: Any) -> type:
 
         def __init__(self, choice: Any) -> None:
             self._choice = choice
+            self.reviews = PrepReviews()
 
-        async def run(self, *, prep_state: PrepState, **_kwargs: Any) -> list[Any]:
+        async def run(self, *, prep_state: CrossTurnPrepState, **_kwargs: Any) -> list[Any]:
             return behave(prep_state)
 
     return _Prep
 
 
-def _hand_off(prep_state: PrepState) -> list[Any]:
+def _hand_off(prep_state: CrossTurnPrepState) -> list[Any]:
     """The preparation agent approves the recorded plan and starts research."""
     prep_state.plan_approved = True
     if prep_state.plan_id is None:
@@ -1201,7 +1367,7 @@ class _ResearchSpy:
     def __init__(self, choice: Any, **_kwargs: Any) -> None:
         self._choice = choice
 
-    async def run(self, prep_state: PrepState, **kwargs: Any) -> list[Any]:
+    async def run(self, prep_state: CrossTurnPrepState, **kwargs: Any) -> list[Any]:
         type(self).runs.append({"prep_state": prep_state.model_copy(), **kwargs})
         # The real runner's first activity stage, so the order of stages can be checked.
         with self._choice.create_stage("Starting research"):
@@ -1214,6 +1380,14 @@ class _ResearchSpy:
     def captured_progress(self) -> CapturedProgress | None:
         return type(self).progress
 
+    def completed_progress(self) -> CapturedProgress:
+        return CapturedProgress(
+            resume_at=None,
+            messages=list(type(self).messages),
+            channels={**_channels(), "reports": [_DRAFT]},
+            data_queries={},
+        )
+
 
 @pytest.fixture
 def research(monkeypatch: pytest.MonkeyPatch) -> type[_ResearchSpy]:
@@ -1224,14 +1398,14 @@ def research(monkeypatch: pytest.MonkeyPatch) -> type[_ResearchSpy]:
 
 
 def _recorded_plan_state(**overrides: Any) -> dict[str, Any]:
-    prep = PrepState(
+    prep = CrossTurnPrepState(
         current_query="How did inflation change in 2024?",
         clarification=Clarification(questions=[]),
         plan=Plan(steps=["Find the annual inflation rate."]),
         plan_id=_PLAN_ID,
         **overrides,
     )
-    return {"messages": [], "preparation": prep.model_dump(mode="json")}
+    return create_dial_state(PreparationDialState(prep_state=prep))
 
 
 def _conversation(*turns: tuple[str, dict[str, Any] | None]) -> list[dict[str, Any]]:
@@ -1257,34 +1431,59 @@ def _image_tool_message() -> ToolMessage:
     )
 
 
-def test_a_bucket_that_cannot_be_resolved_after_the_report_still_closes_the_conversation(
+class _NoFilesDial:
+    """A DIAL client that fails the test on any bucket or files call."""
+
+    class _Refuse:
+        def __getattr__(self, name: str) -> Any:
+            raise AssertionError(f"unexpected files call: {name}")
+
+    bucket = _Refuse()
+    files = _Refuse()
+
+
+def test_a_completed_research_turn_saves_its_record_with_placeholders_and_no_files_call(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     turn_dial: _TurnDial,
     research: type[_ResearchSpy],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    turn_dial.bucket = _UploadingDial._Bucket(True)
-    research.messages = [_image_tool_message(), AIMessage(content=_DRAFT)]
+    monkeypatch.setattr(completion_module, "AsyncDial", lambda **_kwargs: _NoFilesDial())
+    research.messages = [HumanMessage(content="Research the question.", id="h1")]
+    research.messages.append(_image_tool_message())
     monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
     caplog.set_level(logging.INFO)
 
     result = _post_turn(client, _conversation(("yes, go", _recorded_plan_state()), ("go", None)))
 
     assert result.errors == []
-    assert result.state["preparation"]["research_started"] is True
-    tool_entry = next(m for m in result.state["messages"] if m["data"].get("tool_call_id") == "c1")
-    [block] = tool_entry["data"]["content"]
-    assert block["type"] == "text" and "upload failed" in block["text"]
-    assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
-    assert sum(1 for r in caplog.records if r.levelno == logging.WARNING) == 1
+    state = result.state
+    assert FAILURE_STATE_KEY not in state
+    assert state["preparation"]["research_started"] is True
+    assert [m["data"]["id"] for m in state["preparation"]["agent_messages"]] == ["p1", "p2"]
+    record = state[SNAPSHOT_STATE_KEY]
+    assert (record["resumable"], record["not_resumable_reason"], record["resume_at"]) == (
+        False,
+        "completed",
+        None,
+    )
+    assert record["reports"] == [_DRAFT]
+    assert not any(m["type"] == "ai" for m in record["research_agent_messages"])
+    tool_entry = record["research_agent_messages"][-1]
+    assert tool_entry["data"]["content"] == [
+        {
+            "type": "text",
+            "text": f"[image not stored: successful run, image/png, sha256={_PNG_SHA256}]",
+        }
+    ]
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
     assert any("outcome=completed" in r.getMessage() for r in caplog.records)
 
 
 def _closing_state() -> dict[str, Any]:
     """The state a turn whose report was written saves when its full state cannot be saved."""
-    preparation = _recorded_plan_state(plan_approved=True, research_started=True)["preparation"]
-    return {"messages": [], "preparation": preparation}
+    return _recorded_plan_state(plan_approved=True, research_started=True)
 
 
 class _StateWriteRecorder:
@@ -1308,11 +1507,11 @@ class _StateWriteRecorder:
     ids=["value json cannot encode", "nan", "lone surrogate"],
 )
 def test_a_state_that_cannot_be_encoded_leaves_the_write_unused(unencodable: Any) -> None:
-    turn = completion_module._TurnProgress(prep_state=PrepState())
+    turn = completion_module._TurnProgress(prep_state=CrossTurnPrepState())
     choice = _StateWriteRecorder()
 
     with pytest.raises((TypeError, ValueError)):
-        turn.save_state(choice, {"messages": [unencodable]})  # type: ignore[arg-type]
+        turn.save_state(choice, {"preparation": {"agent_messages": [unencodable]}})  # type: ignore[arg-type]
 
     assert choice.calls == 0
     assert turn.state_saved is False
@@ -1325,7 +1524,8 @@ def test_a_full_state_that_cannot_be_encoded_after_the_report_saves_the_closing_
     research: type[_ResearchSpy],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    research.messages = [AIMessage(content=_DRAFT, additional_kwargs={"unserializable": {1, 2}})]
+    # A lone surrogate from a tool result: the record's JSON dump keeps it, and UTF-8 refuses it.
+    research.messages = [ToolMessage(content="\ud800", tool_call_id="c1", id="t1")]
     monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
     caplog.set_level(logging.INFO)
 
@@ -1335,7 +1535,7 @@ def test_a_full_state_that_cannot_be_encoded_after_the_report_saves_the_closing_
     assert result.state == _closing_state()
     assert [r for r in caplog.records if r.levelno >= logging.ERROR] == []
     [warning] = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-    assert "step=save_state error=TypeError saved=closing_state" in warning
+    assert "step=save_state error=UnicodeEncodeError saved=closing_state" in warning
     assert any("outcome=completed" in r.getMessage() for r in caplog.records)
 
 
@@ -1346,11 +1546,10 @@ def test_a_full_state_that_cannot_be_built_after_the_report_saves_the_closing_st
     research: type[_ResearchSpy],
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    async def fail(**_kwargs: Any) -> dict[str, Any]:
+    def fail(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         raise RuntimeError("state unbuildable")
 
-    research.messages = [AIMessage(content=_DRAFT)]
-    monkeypatch.setattr(completion_module, "create_dial_state", fail)
+    monkeypatch.setattr(completion_module, "build_completed_record", fail)
     monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
     caplog.set_level(logging.INFO)
 
@@ -1370,7 +1569,7 @@ def test_after_a_closing_state_the_same_research_never_runs_again(
 ) -> None:
     # A resumed run delivers its report, but its full state cannot be encoded. The older
     # resumable snapshot stays in the history, and must not be resumed again.
-    research.messages = [AIMessage(content=_DRAFT, additional_kwargs={"unserializable": {1, 2}})]
+    research.messages = [ToolMessage(content="\ud800", tool_call_id="c1", id="t1")]
     monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
     failed = ("yes", _failed_research_state())
 
@@ -1388,16 +1587,12 @@ def test_after_a_closing_state_the_same_research_never_runs_again(
 async def test_a_state_write_that_raises_after_the_report_saves_nothing(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    async def full_state(**_kwargs: Any) -> dict[str, Any]:
-        return {"messages": [], "preparation": {}}
-
-    monkeypatch.setattr(completion_module, "create_dial_state", full_state)
-    turn = completion_module._TurnProgress(prep_state=PrepState(research_started=True))
+    turn = completion_module._TurnProgress(prep_state=CrossTurnPrepState(research_started=True))
     choice = _StateWriteRecorder(fail=True)
     caplog.set_level(logging.INFO)
 
-    await completion_module.DeepResearchCompletion()._persist(
-        turn, choice, [], _TurnDial(), report_written=True  # type: ignore[arg-type]
+    completion_module.DeepResearchCompletion._persist(
+        turn, choice, report_written=True  # type: ignore[arg-type]
     )
 
     # The refused write is the only one: no closing state is tried after it.
@@ -1430,13 +1625,13 @@ def _research_progress(**channel_overrides: Any) -> CapturedProgress:
     return CapturedProgress(
         resume_at=ResumePoint.RESEARCH,
         messages=_transcript(),
-        channels={**_channels(), **channel_overrides, "messages": []},
+        channels={**_channels(), **channel_overrides, "research_agent_messages": []},
         data_queries=_records(),
     )
 
 
 def _failing(error: Exception) -> Any:
-    def behave(prep_state: PrepState) -> list[Any]:
+    def behave(prep_state: CrossTurnPrepState) -> list[Any]:
         raise error
 
     return behave
@@ -1444,6 +1639,12 @@ def _failing(error: Exception) -> Any:
 
 def _started_prep() -> dict[str, Any]:
     return _recorded_plan_state()["preparation"]
+
+
+def _failure_record() -> dict[str, Any]:
+    """The failure record: the `CrossTurnPrepState` the turn started from, nothing beside it, and
+    the flag."""
+    return {**_recorded_plan_state(), FAILURE_STATE_KEY: True}
 
 
 def test_a_failed_properties_fetch_persists_nothing(
@@ -1463,7 +1664,7 @@ def test_a_failed_properties_fetch_persists_nothing(
 def test_a_preparation_failure_persists_the_state_the_turn_started_from(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, turn_dial: _TurnDial
 ) -> None:
-    def record_a_new_plan_then_fail(prep_state: PrepState) -> list[Any]:
+    def record_a_new_plan_then_fail(prep_state: CrossTurnPrepState) -> list[Any]:
         prep_state.plan = Plan(steps=["A plan this failed turn recorded."])
         prep_state.plan_id = "0000ffff0000ffff0000ffff0000ffff"
         raise _quota_error()
@@ -1474,7 +1675,7 @@ def test_a_preparation_failure_persists_the_state_the_turn_started_from(
 
     result = _post_turn(client, _conversation(("yes", _recorded_plan_state()), ("go", None)))
 
-    assert result.state == {"messages": [], "preparation": _started_prep(), FAILURE_STATE_KEY: True}
+    assert result.state == _failure_record()
     assert result.position_of_state() < result.position_of_error()
     assert _QUOTA_MESSAGE in result.errors[0]["display_message"]
 
@@ -1490,7 +1691,7 @@ def test_research_tools_that_cannot_load_persist_the_failure_record(
 
     result = _post_turn(client, _conversation(("yes", _recorded_plan_state()), ("go", None)))
 
-    assert result.state == {"messages": [], "preparation": _started_prep(), FAILURE_STATE_KEY: True}
+    assert result.state == _failure_record()
 
 
 async def test_a_cancelled_turn_persists_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1508,7 +1709,7 @@ async def test_a_cancelled_turn_persists_nothing(monkeypatch: pytest.MonkeyPatch
     async def fetch(properties: ApplicationProperties, **_kwargs: Any) -> DataSources:
         return DataSources(text="The topics map.")
 
-    def cancel(prep_state: PrepState) -> list[Any]:
+    def cancel(prep_state: CrossTurnPrepState) -> list[Any]:
         raise asyncio.CancelledError()
 
     monkeypatch.setattr(completion_module, "load_application_properties", properties)
@@ -1536,7 +1737,7 @@ def test_a_quota_error_in_research_saves_the_snapshot_ahead_of_the_error(
     result = _post_turn(client, _conversation(("yes", _recorded_plan_state()), ("go", None)))
 
     state = result.state
-    assert [m["data"]["id"] for m in state["messages"]] == ["p1", "p2"]
+    assert [m["data"]["id"] for m in state["preparation"]["agent_messages"]] == ["p1", "p2"]
     preparation = state["preparation"]
     assert (preparation["plan_approved"], preparation["research_started"]) == (False, False)
     assert preparation["plan_id"] == _PLAN_ID
@@ -1564,7 +1765,7 @@ def test_a_context_overflow_saves_a_snapshot_that_is_not_resumable(
     assert result.state[SNAPSHOT_STATE_KEY]["resumable"] is False
 
 
-def test_a_snapshot_that_cannot_be_saved_falls_back_to_the_failure_record(
+def test_a_bucket_that_cannot_be_resolved_saves_a_snapshot_that_is_not_resumable(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
     turn_dial: _TurnDial,
@@ -1580,7 +1781,46 @@ def test_a_snapshot_that_cannot_be_saved_falls_back_to_the_failure_record(
 
     result = _post_turn(client, _conversation(("yes", _recorded_plan_state()), ("go", None)))
 
-    assert result.state == {"messages": [], "preparation": _started_prep(), FAILURE_STATE_KEY: True}
+    snapshot = result.state[SNAPSHOT_STATE_KEY]
+    assert (snapshot["resumable"], snapshot["not_resumable_reason"]) == (
+        False,
+        "image_upload_failed",
+    )
+    assert snapshot["research_agent_messages"][-1]["data"]["content"] == [
+        {
+            "type": "text",
+            "text": f"[image not stored: upload failed, image/png, sha256={_PNG_SHA256}]",
+        }
+    ]
+    assert result.state[FAILURE_STATE_KEY] is True
+    assert _QUOTA_MESSAGE in result.errors[0]["display_message"]
+    messages = [(r.levelno, r.getMessage()) for r in caplog.records]
+    warnings = [text for level, text in messages if level == logging.WARNING]
+    assert len(warnings) == 1 and "Files bucket lookup failed" in warnings[0]
+    [saved] = [text for _, text in messages if "Snapshot saved" in text]
+    assert "resumable=False not_resumable_reason=image_upload_failed resume_at=" in saved
+    assert sum(1 for level, _ in messages if level >= logging.ERROR) == 1
+
+
+def test_a_snapshot_that_cannot_be_built_falls_back_to_the_failure_record(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def unbuildable(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("snapshot unbuildable")
+
+    monkeypatch.setattr(completion_module, "build_snapshot", unbuildable)
+    research.fail_with = _quota_error()
+    research.progress = _research_progress()
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
+    caplog.set_level(logging.INFO)
+
+    result = _post_turn(client, _conversation(("yes", _recorded_plan_state()), ("go", None)))
+
+    assert result.state == _failure_record()
     assert _QUOTA_MESSAGE in result.errors[0]["display_message"]
     messages = [(r.levelno, r.getMessage()) for r in caplog.records]
     warnings = [text for level, text in messages if level == logging.WARNING]
@@ -1601,7 +1841,7 @@ def test_a_failure_record_that_cannot_be_saved_still_delivers_the_original_error
     loads = 0
     real_load = completion_module.load_last_prep_state
 
-    def load_once(request: Any) -> PrepState:
+    def load_once(request: Any) -> CrossTurnPrepState:
         nonlocal loads
         loads += 1
         if loads > 1:
@@ -1622,7 +1862,7 @@ def test_a_failure_record_that_cannot_be_saved_still_delivers_the_original_error
     assert warnings == ["Failure record could not be saved: error=RuntimeError"]
 
 
-def _hand_off_with_a_nan(prep_state: PrepState) -> list[Any]:
+def _hand_off_with_a_nan(prep_state: CrossTurnPrepState) -> list[Any]:
     """`_hand_off`, with a preparation message holding a `NaN`, which the state check refuses."""
     messages = _hand_off(prep_state)
     messages[0].additional_kwargs["score"] = float("nan")
@@ -1643,7 +1883,7 @@ def test_a_snapshot_state_that_cannot_be_encoded_falls_back_to_the_failure_recor
 
     result = _post_turn(client, _conversation(("yes", _recorded_plan_state()), ("go", None)))
 
-    assert result.state == {"messages": [], "preparation": _started_prep(), FAILURE_STATE_KEY: True}
+    assert result.state == _failure_record()
     assert _QUOTA_MESSAGE in result.errors[0]["display_message"]
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert warnings == [
@@ -1664,7 +1904,7 @@ def test_a_failure_record_that_cannot_be_encoded_saves_nothing(
         def to_dict(self) -> dict[str, Any]:
             return {"messages": [float("nan")]}
 
-    monkeypatch.setattr(completion_module, "DialState", _UnencodableState)
+    monkeypatch.setattr(completion_module, "PreparationDialState", _UnencodableState)
     monkeypatch.setattr(
         completion_module, "PrepAgentRunner", _prep_runner(_failing(_quota_error()))
     )
@@ -1686,10 +1926,17 @@ def test_a_preparation_only_turn_whose_own_save_fails_saves_the_failure_record(
     caplog: pytest.LogCaptureFixture,
     failure: str,
 ) -> None:
-    async def unbuildable(**_kwargs: Any) -> dict[str, Any]:
-        raise RuntimeError("state unbuildable")
+    builds = 0
 
-    def present_a_plan(prep_state: PrepState) -> list[Any]:
+    def unbuildable(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        # The full state fails; the failure record that follows it is built as usual.
+        nonlocal builds
+        builds += 1
+        if builds == 1:
+            raise RuntimeError("state unbuildable")
+        return create_dial_state(*args, **kwargs)
+
+    def present_a_plan(prep_state: CrossTurnPrepState) -> list[Any]:
         # Preparation itself succeeds; only the turn's own save fails.
         score = float("nan") if failure == "encode" else 1.0
         return [AIMessage(content="Here is the plan.", additional_kwargs={"score": score})]
@@ -1701,7 +1948,7 @@ def test_a_preparation_only_turn_whose_own_save_fails_saves_the_failure_record(
 
     result = _post_turn(client, _conversation(("yes", _recorded_plan_state()), ("go", None)))
 
-    assert result.state == {"messages": [], "preparation": _started_prep(), FAILURE_STATE_KEY: True}
+    assert result.state == _failure_record()
     # The save's failure is the turn's only failure, so it is the one error delivered.
     assert len(result.errors) == 1
     expected = RuntimeError if failure == "build" else ValueError
@@ -1763,8 +2010,11 @@ def test_a_saved_snapshot_is_logged_with_its_facts_and_no_content(
         (i, text) for i, (_, text) in enumerate(records) if "Snapshot saved" in text
     ]
     assert f"plan_id={_PLAN_ID}" in saved
-    assert "resumable=False failure_class=input_rejected" in saved
-    assert "resume_at=research research_iteration=1 messages=5 report_version=0" in saved
+    assert (
+        "resumable=False not_resumable_reason=repeating_failure failure_class=input_rejected"
+        in saved
+    )
+    assert "resume_at=research research_iteration=1 messages=5 draft_number=0" in saved
     assert "data_queries=1" in saved
     assert re.search(r"snapshot_bytes=\d+ state_bytes=\d+", saved)
     errors = [i for i, (level, _) in enumerate(records) if level >= logging.ERROR]
@@ -1786,13 +2036,15 @@ def test_a_saved_snapshot_is_logged_with_its_facts_and_no_content(
 
 def _failed_research_state(*, resumable: bool = True) -> dict[str, Any]:
     """The state a failed research turn persisted: its preparation messages, the reset
-    `PrepState`, the snapshot and the failure flag."""
-    return {
-        "messages": messages_to_dict(_hand_off(PrepState())),
-        "preparation": _started_prep(),
-        SNAPSHOT_STATE_KEY: _snapshot_dict(resumable=resumable),
-        FAILURE_STATE_KEY: True,
-    }
+    `CrossTurnPrepState`, the snapshot and the failure flag."""
+    preparation = PreparationDialState(
+        prep_state=CrossTurnPrepState.model_validate(_started_prep()),
+        agent_messages=_hand_off(CrossTurnPrepState()),
+    )
+    snapshot = _snapshot_dict(resumable=resumable)
+    if not resumable:
+        snapshot["not_resumable_reason"] = "repeating_failure"
+    return create_dial_state(preparation, research=snapshot, turn_failed=True)
 
 
 def test_the_turn_after_a_failed_research_turn_runs_preparation_on_its_history(
@@ -1805,11 +2057,10 @@ def test_the_turn_after_a_failed_research_turn_runs_preparation_on_its_history(
 
         def __init__(self, choice: Any) -> None:
             self._choice = choice
+            self.reviews = PrepReviews()
 
-        async def run(
-            self, *, request: Any, dial: Any, prep_state: PrepState, **_: Any
-        ) -> list[Any]:
-            histories.append(await reconstruct_history(request, dial))
+        async def run(self, *, request: Any, prep_state: CrossTurnPrepState, **_: Any) -> list[Any]:
+            histories.append(reconstruct_prep_agent_history(request))
             self._choice.append_content("It failed with an error.")
             return [AIMessage(content="It failed with an error.")]
 
@@ -1830,7 +2081,7 @@ def test_the_turn_after_a_failed_research_turn_runs_preparation_on_its_history(
     assert history[-2].content == FAILED_TURN_NOTE
     assert not any(getattr(m, "tool_call_id", None) in {"c1", "c2"} for m in history)
     # A completed turn after a failed one carries neither a snapshot nor the flag.
-    assert set(result.state) == {"messages", "preparation"}
+    assert set(result.state) == {"preparation"}
 
 
 def test_a_conversation_whose_report_was_delivered_is_still_refused(
@@ -1848,7 +2099,7 @@ def test_a_conversation_whose_report_was_delivered_is_still_refused(
 # --- The turn: resuming from the latest snapshot -----------------------------------------------------
 
 
-def _with_new_plan(prep_state: PrepState) -> list[Any]:
+def _with_new_plan(prep_state: CrossTurnPrepState) -> list[Any]:
     """The user changed the plan: `update_plan` renewed its id, and the new plan was approved."""
     prep_state.plan = Plan(steps=["A different first step."])
     prep_state.plan_id = "ffff0000ffff0000ffff0000ffff0000"
@@ -1873,7 +2124,7 @@ def test_continue_with_an_unchanged_plan_resumes_from_the_snapshot(
     assert isinstance(resumed, ResumableSnapshot)
     assert resumed.snapshot.plan_id == _PLAN_ID
     assert resumed.data_queries == _records()
-    assert run["dial"] is turn_dial
+    assert "dial" not in run
 
 
 @pytest.mark.parametrize(
@@ -1923,7 +2174,7 @@ def test_a_refused_snapshot_is_refused_again_on_the_next_request(
     first = _post_turn(client, _conversation(("yes, go", unreadable), ("continue", None)))
 
     assert "different version" in first.errors[0]["display_message"]
-    assert first.state == {"messages": [], "preparation": _started_prep(), FAILURE_STATE_KEY: True}
+    assert first.state == _failure_record()
 
     second = _post_turn(
         client,
@@ -2009,8 +2260,8 @@ def test_a_reused_snapshot_is_shown_before_research_starts_and_logged(
         ("resume_at", "research"),
         ("research_iteration", "0"),
         ("messages", "5"),
-        ("report_version", "0"),
-        ("agent_turns_completed", "2"),
+        ("draft_number", "0"),
+        ("restored_model_calls_in_iteration", "2"),
     ]
     assert body == "\n\n".join(f"**{key}** {value}" for key, value in expected)
     [record] = [r.getMessage() for r in caplog.records if "Snapshot reused" in r.getMessage()]
@@ -2025,7 +2276,7 @@ def test_a_reused_snapshot_at_report_review_shows_the_round(
 ) -> None:
     state = _failed_research_state()
     state[SNAPSHOT_STATE_KEY] = _snapshot_dict(
-        resume_at=ResumePoint.REPORT_REVIEW.value, report=_DRAFT, report_version=2
+        resume_at=ResumePoint.REPORT_REVIEW.value, reports=["Draft one.", _DRAFT]
     )
     monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
 
@@ -2033,7 +2284,7 @@ def test_a_reused_snapshot_at_report_review_shows_the_round(
 
     (_, body), *_ = result.stages()
     assert "**report_review_round** 2" in body
-    assert "agent_turns_completed" not in body
+    assert "restored_model_calls_in_iteration" not in body
 
 
 def test_a_discarded_snapshot_names_its_resume_point_only_when_known(
@@ -2065,3 +2316,285 @@ def test_no_snapshot_stage_without_a_snapshot(
 
     assert [title for title, _ in result.stages()] == ["Starting research"]
     assert research.runs[0]["resumed"] is None
+
+
+# --- The turn: a snapshot's images are downloaded before its stage ----------------------------------
+
+_IMAGE_URL = "files/ub/dial-deep-research/c1-0.png"
+_OTHER_IMAGE_URL = "files/ub/dial-deep-research/c1-1.png"
+
+
+def _status_error(status: int) -> DialException:
+    return DialException(message=f"HTTP {status}", status_code=status)
+
+
+class _ScriptedDownloads:
+    """A files API whose downloads fail as scripted per URL, then succeed."""
+
+    def __init__(self, failures: dict[str, list[Exception]]) -> None:
+        self._failures = {url: list(errors) for url, errors in failures.items()}
+        self.requests: list[str] = []
+
+    async def download(self, url: str) -> Any:
+        self.requests.append(url)
+        if self._failures.get(url):
+            raise self._failures[url].pop(0)
+
+        class _Downloaded:
+            async def aget_content(self) -> bytes:
+                return _PNG_BYTES
+
+        return _Downloaded()
+
+
+def _failed_research_state_with_images(*urls: str) -> dict[str, Any]:
+    transcript = _transcript()
+    transcript[2] = ToolMessage(
+        content=[{"type": "image", "url": url, "mime_type": "image/png"} for url in urls],
+        tool_call_id="c1",
+        id="t1",
+    )
+    state = _failed_research_state()
+    state[SNAPSHOT_STATE_KEY] = _snapshot_dict(research_agent_messages=messages_to_dict(transcript))
+    return state
+
+
+@pytest.fixture
+def no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    sleeps: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(image_attachments.asyncio, "sleep", sleep)
+    return sleeps
+
+
+def test_a_snapshot_whose_images_download_is_resumed_with_them(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+    no_sleep: list[float],
+) -> None:
+    files = _ScriptedDownloads({_IMAGE_URL: [_status_error(502)]})
+    turn_dial.files = files  # type: ignore[assignment]
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
+
+    result = _post_turn(
+        client,
+        _conversation(
+            ("yes, go", _failed_research_state_with_images(_IMAGE_URL)), ("continue", None)
+        ),
+    )
+
+    assert result.errors == []
+    [run] = research.runs
+    [image] = run["resumed"].messages[2].content
+    assert image["base64"] == base64.b64encode(_PNG_BYTES).decode()
+    assert files.requests == [_IMAGE_URL, _IMAGE_URL]
+    assert result.stages()[0][0] == "[DEBUG] reusing snapshot"
+
+
+@pytest.mark.parametrize(
+    "failures",
+    [
+        {_IMAGE_URL: [ResourceNotFoundError(message="gone")]},
+        {
+            _IMAGE_URL: [ResourceNotFoundError(message="gone")],
+            _OTHER_IMAGE_URL: [_status_error(503)] * 3,
+        },
+    ],
+    ids=["one image gone", "one image gone and another keeps failing"],
+)
+def test_a_snapshot_whose_image_is_gone_is_discarded_and_research_runs_fresh(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+    caplog: pytest.LogCaptureFixture,
+    no_sleep: list[float],
+    failures: dict[str, list[Exception]],
+) -> None:
+    files = _ScriptedDownloads(failures)
+    turn_dial.files = files  # type: ignore[assignment]
+    research.fail_with = _quota_error()
+    research.progress = _research_progress(research_iteration=1)
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
+    caplog.set_level(logging.INFO)
+    failed = ("yes, go", _failed_research_state_with_images(_IMAGE_URL, _OTHER_IMAGE_URL))
+
+    result = _post_turn(client, _conversation(failed, ("continue", None)))
+
+    [run] = research.runs
+    assert run["resumed"] is None
+    (title, body), (next_title, _) = result.stages()[:2]
+    assert (title, next_title) == ("[DEBUG] existing snapshot discarded", "Starting research")
+    assert "**reason** image_missing" in body
+    assert "**resume_at** research" in body
+    assert files.requests.count(_IMAGE_URL) == 1
+    gone = [r.getMessage() for r in caplog.records if "Snapshot image is gone" in r.getMessage()]
+    assert gone == [f"Snapshot image is gone: url={_IMAGE_URL}"]
+    [record] = [r.getMessage() for r in caplog.records if "Snapshot discarded" in r.getMessage()]
+    assert "reason=image_missing" in record
+    # The fresh run's own snapshot is the one a later request finds.
+    later = _conversation(failed, ("continue", result.state), ("continue", None))
+    assert (
+        find_latest_snapshot([Message.model_validate(m) for m in later])
+        == result.state[SNAPSHOT_STATE_KEY]
+    )
+    assert result.state[SNAPSHOT_STATE_KEY]["research_iteration"] == 1
+
+
+def test_a_snapshot_image_that_keeps_failing_fails_the_turn_as_no_graph_state(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+    caplog: pytest.LogCaptureFixture,
+    no_sleep: list[float],
+) -> None:
+    files = _ScriptedDownloads({_IMAGE_URL: [_status_error(503)] * 3})
+    turn_dial.files = files  # type: ignore[assignment]
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
+    caplog.set_level(logging.INFO)
+
+    result = _post_turn(
+        client,
+        _conversation(
+            ("yes, go", _failed_research_state_with_images(_IMAGE_URL)), ("continue", None)
+        ),
+    )
+
+    assert research.runs == []
+    assert files.requests == [_IMAGE_URL] * 3
+    assert no_sleep == [1.0, 2.0]
+    [error] = result.errors
+    assert "could not be loaded" in error["display_message"]
+    assert result.state == _failure_record()
+    assert result.stages() == []
+    records = _records_in_order(caplog)
+    recorded = [text for _, text in records if "Failure recorded" in text]
+    assert recorded == ["Failure recorded: reason=no_graph_state"]
+    assert sum(1 for level, _ in records if level >= logging.ERROR) == 1
+
+
+# --- The turn: a record that is not resumable starts research fresh ----------------------------------
+
+
+@pytest.mark.parametrize("reason", ["completed", "repeating_failure", "image_upload_failed"])
+def test_a_record_that_is_not_resumable_starts_research_fresh_and_is_replaced(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+    reason: str,
+) -> None:
+    state = _failed_research_state()
+    state[SNAPSHOT_STATE_KEY] = _snapshot_dict(
+        resumable=False,
+        not_resumable_reason=reason,
+        resume_at=None if reason == "completed" else "research",
+        research_iteration=3,
+        reports=["A draft of the earlier run."],
+    )
+    research.fail_with = _quota_error()
+    research.progress = _research_progress(research_iteration=1)
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
+
+    first = _post_turn(client, _conversation(("yes, go", state), ("continue", None)))
+
+    [run] = research.runs
+    assert run["resumed"] is None
+    (title, body), *_ = first.stages()
+    assert title == "[DEBUG] existing snapshot discarded"
+    assert f"**not_resumable_reason** {reason}" in body
+    own_record = first.state[SNAPSHOT_STATE_KEY]
+    assert own_record["resumable"] is True
+    assert own_record["reports"] == []
+
+    research.fail_with, research.progress = None, None
+    _post_turn(
+        client, _conversation(("yes, go", state), ("continue", first.state), ("continue", None))
+    )
+
+    assert research.runs[-1]["resumed"].snapshot.research_iteration == 1
+
+
+# --- The turn: preparation's reviews --------------------------------------------------------------
+
+
+def _prep_runner_with_reviews(behave: Any) -> type:
+    """`_prep_runner`, whose checks each made one review this turn."""
+    base = _prep_runner(behave)
+
+    class _ReviewingPrep(base):  # type: ignore[misc, valid-type]
+        def __init__(self, choice: Any) -> None:
+            super().__init__(choice)
+            self.reviews = PrepReviews(
+                query_reviews=[
+                    QueryReviewResponse(assessment="The query names its period.", questions=[])
+                ],
+                plan_reviews=[
+                    PlanReviewResponse(
+                        assessment="The user approved the plan.",
+                        recorded_plan_matches=True,
+                        user_approved_a_plan=True,
+                        failure_reason="",
+                    )
+                ],
+            )
+
+    return _ReviewingPrep
+
+
+def _saved_reviews(state: dict[str, Any]) -> tuple[list[Any], list[Any]]:
+    preparation = state["preparation"]
+    return preparation["query_reviews"], preparation["plan_reviews"]
+
+
+def test_preparations_reviews_are_saved_whole_on_success(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+) -> None:
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner_with_reviews(_hand_off))
+
+    result = _post_turn(client, _conversation(("yes, go", _recorded_plan_state()), ("go", None)))
+
+    query_reviews, plan_reviews = _saved_reviews(result.state)
+    assert query_reviews == [{"assessment": "The query names its period.", "questions": []}]
+    assert plan_reviews[0]["assessment"] == "The user approved the plan."
+
+
+def test_preparations_reviews_are_saved_with_a_failed_research_turns_snapshot(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+) -> None:
+    research.fail_with = _quota_error()
+    research.progress = _research_progress()
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner_with_reviews(_hand_off))
+
+    result = _post_turn(client, _conversation(("yes, go", _recorded_plan_state()), ("go", None)))
+
+    query_reviews, plan_reviews = _saved_reviews(result.state)
+    assert len(query_reviews) == 1 and len(plan_reviews) == 1
+    assert result.state[FAILURE_STATE_KEY] is True
+
+
+def test_the_failure_record_saves_no_reviews(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+) -> None:
+    research.fail_with = httpx.ConnectError("mcp unreachable", request=_REQUEST)
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner_with_reviews(_hand_off))
+
+    result = _post_turn(client, _conversation(("yes, go", _recorded_plan_state()), ("go", None)))
+
+    assert _saved_reviews(result.state) == ([], [])
+    assert result.state["preparation"]["agent_messages"] == []

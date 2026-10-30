@@ -1,8 +1,8 @@
 """The preparation control tools.
 
-Each tool mutates a shared per-turn `PrepState` holder as a side effect and
+Each tool mutates the turn's shared `CrossTurnPrepState` holder as a side effect and
 returns a plain string to the agent. The agent can only call the tools — it has
-no path to write `PrepState` directly, so the readiness gates cannot be bypassed
+no path to write `CrossTurnPrepState` directly, so the readiness gates cannot be bypassed
 by the model. Gate violations raise `ToolException` (the tools are marked
 `handle_tool_error=True`), which reaches the agent as an error `ToolMessage`.
 """
@@ -12,13 +12,19 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from dataclasses import dataclass, field
 from typing import Any
 
 from langchain.tools import ToolRuntime
 from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool, ToolException, tool
 
-from dial_deep_research.app.history import Clarification, Plan, PrepState, is_failed_turn_note
+from dial_deep_research.app.history import (
+    Clarification,
+    CrossTurnPrepState,
+    Plan,
+    is_failed_turn_note,
+)
 from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.llm import (
     LLMModelConfig,
@@ -64,7 +70,7 @@ def _new_plan_id() -> str:
     return uuid.uuid4().hex
 
 
-def _query_failure_reason(state: PrepState) -> str:
+def _query_failure_reason(state: CrossTurnPrepState) -> str:
     if state.current_query is None:
         return prompts.QUERY_GATE_NO_QUERY
     if state.clarification is None:
@@ -74,15 +80,34 @@ def _query_failure_reason(state: PrepState) -> str:
     return ""
 
 
-class PrepTools:
-    """Builds the four control tools over a shared per-turn `PrepState`.
+@dataclass
+class PrepReviews:
+    """The whole response of every clarity check and approval check of one turn, in order.
 
-    `state` is the live holder the tools mutate; the runner reads it back after the
-    agent run to persist it.
+    Kept for the turn's state, where only a developer reads them; the agent receives only the
+    part of a response its tool returns.
     """
 
-    def __init__(self, state: PrepState, today_date: str, data_sources: str) -> None:
+    query_reviews: list[QueryReviewResponse] = field(default_factory=list)
+    plan_reviews: list[PlanReviewResponse] = field(default_factory=list)
+
+
+class PrepTools:
+    """Builds the four control tools over the turn's shared `CrossTurnPrepState`.
+
+    `state` is the live holder the tools mutate, and `reviews` collects each check's response;
+    the runner reads both back after the agent run to persist them.
+    """
+
+    def __init__(
+        self,
+        state: CrossTurnPrepState,
+        today_date: str,
+        data_sources: str,
+        reviews: PrepReviews | None = None,
+    ) -> None:
         self.state = state
+        self.reviews = reviews if reviews is not None else PrepReviews()
         self._today = today_date
         self._data_sources = data_sources
 
@@ -137,7 +162,11 @@ class PrepTools:
             duration = time.monotonic() - start
             if result["parsing_error"] is not None:
                 raise result["parsing_error"]
+            if result["parsed"] is None:
+                # An answer with no structured output checked nothing.
+                raise ValueError("the query clarity check returned no structured output")
             check: QueryReviewResponse = result["parsed"]
+            self.reviews.query_reviews.append(check)
             logger.info(
                 "Query clarity checked: duration=%.1fs messages=%d questions=%d tokens=%s",
                 duration,
@@ -217,7 +246,11 @@ class PrepTools:
             duration = time.monotonic() - start
             if result["parsing_error"] is not None:
                 raise result["parsing_error"]
+            if result["parsed"] is None:
+                # An answer with no structured output checked nothing.
+                raise ValueError("the plan approval check returned no structured output")
             check: PlanReviewResponse = result["parsed"]
+            self.reviews.plan_reviews.append(check)
             logger.info(
                 "Plan approval checked: duration=%.1fs messages=%d approved=%s tokens=%s",
                 duration,

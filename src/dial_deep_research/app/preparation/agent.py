@@ -7,7 +7,7 @@ from typing import Any
 from langchain.agents import create_agent
 
 from dial_deep_research.app.data_sources import DataSources
-from dial_deep_research.app.history import PrepState
+from dial_deep_research.app.history import CrossTurnPrepState
 from dial_deep_research.app_properties import Prompts
 from dial_deep_research.utils.agent_logging import agent_logging_middleware
 from dial_deep_research.utils.llm import (
@@ -18,7 +18,7 @@ from dial_deep_research.utils.llm import (
 
 from .middleware import StopAfterResearchStartMiddleware
 from .prompts import DATASET_LIST_FAILED_INSTRUCTION, PREP_AGENT_SYSTEM
-from .tools import PrepTools
+from .tools import PrepReviews, PrepTools
 
 
 def render_prep_agent_system(*, agent_name: str, today_date: str, data_sources: DataSources) -> str:
@@ -35,21 +35,27 @@ def render_prep_agent_system(*, agent_name: str, today_date: str, data_sources: 
 
 
 def build_prep_agent(
-    state: PrepState, today_date: str, prompts: Prompts, data_sources: DataSources
+    state: CrossTurnPrepState,
+    today_date: str,
+    prompts: Prompts,
+    data_sources: DataSources,
+    reviews: PrepReviews | None = None,
 ) -> Any:
-    """Build a preparation agent over the given per-turn `PrepState` holder.
+    """Build a preparation agent over the turn's `CrossTurnPrepState` holder.
 
-    The agent drives clarify → plan → approve → launch via the `PrepTools`; it has
-    no MCP tools and no checkpointer; its middleware is the logging pair, the transient
-    stream-drop retry, and the hook that ends the run once research has started. `PrepState` is mutated only by the tools (which
-    close over `state`), never by the model. `prompts` is the instance's per-request
-    prompt content, and `data_sources` the turn's data-sources fetch, whose string the agent and
-    the query clarity check receive as the description of the channel's data sources.
+    The agent drives clarify → plan → approve → launch via the `PrepTools`; it has no MCP tools and
+    no checkpointer; its middleware is the logging pair, the transient stream-drop retry, and the
+    hook that ends the run once research has started. `CrossTurnPrepState` is mutated only by the
+    tools (which close over `state`), never by the model. `prompts` is the instance's per-request
+    prompt content, and `data_sources` the turn's data-sources fetch, whose string the agent and the
+    query clarity check receive as the description of the channel's data sources.
+    `reviews`, when given, collects the whole response of each check for the turn's state.
     """
     tools = PrepTools(
         state=state,
         today_date=today_date,
         data_sources=data_sources.text,
+        reviews=reviews,
     ).build()
     return create_agent(
         model=get_chat_model(LLMModelConfig()),

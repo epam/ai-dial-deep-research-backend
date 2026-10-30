@@ -1,128 +1,98 @@
-## MODIFIED Requirements
+## REMOVED Requirements
 
 ### Requirement: Tool messages persisted via DIAL custom_content state
-
-For every chat completion request, the app SHALL accumulate the ordered sequence of
-`AIMessage`, `ToolMessage`, and injected `HumanMessage` instances observed during
-the turn — for a research turn this is the research graph's slice: every research-agent
-`AIMessage` carrying `tool_calls`, every `ToolMessage` returned by a tool, every
-next-iteration plan `HumanMessage` injected by the research-review node, and the final
-report `AIMessage` — and SHALL persist that sequence by serializing it via
-`langchain_core.messages.messages_to_dict` and writing it under
-`assistant.custom_content.state` (the `messages` field of the unified `DialState`).
-The injected next-iteration plan `HumanMessage`s SHALL be captured in run order so
-the persisted slice interleaves them at the positions research-agent saw them; they
-SHALL NOT be appended to the user-visible assistant `content`. Before serialization,
-the app SHALL traverse every message's `content` and, for every LangChain v1
-`ImageContentBlock` carrying a `base64` field, replace the inline data with a `url`
-reference per the **Tool-message image content uploaded to DIAL files before
-persistence** requirement, so the persisted state SHALL NOT contain image byte
-payloads. The DIAL `assistant.tool_calls` / `assistant.tool_call_id` native fields
-SHALL NOT be populated by the app; the `custom_content.state["messages"]` blob is the
-sole authoritative carrier of tool-call structure across turns.
-
-The **final report** `AIMessage` SHALL be persisted into this slice too — not just
-the intermediate tool-call messages — because the native `assistant.content` field
-is a display-only concatenation of streamed text and carries no boundaries from
-which the original message structure could be recovered.
-
-A research turn that **fails** after its graph streamed state writes its research
-slice elsewhere. Its `messages` field SHALL carry only the turn's preparation
-messages, and the research slice SHALL be written into the turn's snapshot instead,
-with its images uploaded the same way (**research-resume**). Any other failed turn
-persists an empty `messages`. History reconstruction never reads the snapshot, so a
-failed run's research transcript never reaches a later turn's preparation agent.
-When a turn's state cannot be built or encoded, the turn saves the state that
-**research-resume** ("A turn's one state write falls back in a fixed order") names
-instead: after a written report, a closing state with an empty `messages`.
-
-#### Scenario: Research turn slice is fully persisted
-
-- **WHEN** a research turn produces `AIMessage(tool_calls=[X]) → ToolMessage(X_result) → AIMessage(tool_calls=[finish_iteration]) → ToolMessage(finish_iteration) → [injected next-plan HumanMessage] → … → AIMessage(report)`
-- **THEN** `custom_content.state["messages"]` SHALL carry those entries in run order, each encoded with its matching `messages_to_dict` `type` discriminator, the injected next-plan `HumanMessage` appearing at the position research-agent saw it, and the report `AIMessage` last
-
-#### Scenario: Multimodal tool loop persists with image URLs, not image bytes
-
-- **WHEN** a research turn produces a `ToolMessage` whose `content` includes one or more `{type: "image", base64, mime_type}` blocks
-- **THEN** the persisted entry for that `ToolMessage` SHALL contain the same blocks rewritten to `{type: "image", url, mime_type}` (with `base64` absent), and the serialized state blob SHALL NOT include the original image byte payload
-
-#### Scenario: A failed research turn keeps its research slice in the snapshot
-
-- **WHEN** research-agent fails with a quota error after several tool calls
-- **THEN** the turn's `custom_content.state["messages"]` SHALL carry only the turn's preparation messages, and the research-agent messages SHALL be in the turn's snapshot
+**Reason**: This change drops scenarios of this requirement that describe behavior it removes,
+and a modified requirement cannot drop a scenario. The requirement is therefore removed and added
+again under a new title.
+**Migration**: See "Each graph's messages persisted in its own part of the DIAL state" under ADDED Requirements in this delta.
 
 ### Requirement: Reconstruction of LangChain history from DIAL request
-
-On each incoming chat completion request, the app SHALL reconstruct the LangChain message history fed to the agent by walking `request.messages` in order and, for each message:
-- if `role == user`, emitting a `HumanMessage` whose content is taken from the DIAL message's native `content` field;
-- if `role == assistant` AND `custom_content.state["messages"]` is present and non-empty, emitting `messages_from_dict(custom_content.state["messages"])` (the full intermediate-plus-final slice) instead of consulting the native `content` or `tool_calls` fields, then traversing the reconstructed messages and re-inlining every LangChain v1 `ImageContentBlock` carrying a `url` (and no `base64`) by downloading the file from DIAL and replacing the block with the same `ImageContentBlock` populated with `base64` and `mime_type` (so the rehydrated block satisfies the in-flight contract from `multimodal-tool-output`);
-- if `role == assistant` AND `custom_content.state["messages"]` is absent (legacy turn produced before this change), emitting a single `AIMessage(content=msg.content)` as a fallback so legacy conversations continue to work without a migration step.
-
-This asymmetry — user turns read from native `content`, assistant turns read from `custom_content.state["messages"]` — exists because the assistant's native `content` is a display-only concatenation of every streamed text segment (intermediate reasoning plus `"\n\n"` separators plus the final answer; see **Assistant message content contains only model text**) and cannot be decomposed back into the `AIMessage` / `ToolMessage` / `tool_call` interleaving the agent needs. The persisted state slice — which includes the final `AIMessage`, per **Tool messages persisted via DIAL custom_content state** — is the only structurally faithful source for assistant turns, so the native assistant `content` and `tool_calls` fields SHALL NOT be consulted when a usable state slice is present. User turns carry no such structure, so their flat native `content` is sufficient.
-
-The system message provided by the DIAL request SHALL continue to be ignored on reconstruction; the app's own system prompt is supplied to `create_agent` directly.
-
-An assistant message whose `custom_content.state` carries the failure flag — one written by a failed turn — SHALL be reconstructed like any other: from its `messages` when they are non-empty, otherwise from its native `content`. It SHALL be followed in the history by one fixed failed-turn note as a `SystemMessage` (**research-resume**). These notes are the only system messages the reconstructed history contains. Reconstruction SHALL read nothing of a snapshot: its research transcript and images never enter the history, and an image of it that cannot be downloaded never costs the preparation agent anything.
-
-#### Scenario: Assistant turn with state replays the full slice
-- **WHEN** a request includes an assistant message whose `custom_content.state["messages"]` carries the encoded sequence `[ai(tool_calls=[X]), tool(X_result), ai(content="final")]`
-- **THEN** the reconstructed LangChain history at that position SHALL contain exactly those three messages decoded via `messages_from_dict`, in order, and SHALL NOT contain any `AIMessage` derived from the DIAL message's native `content` or `tool_calls` fields
-
-#### Scenario: Legacy assistant turn falls back to native content
-- **WHEN** a request includes an assistant message with no `custom_content.state` field set, or with `state["messages"]` missing or empty
-- **THEN** the reconstructed history at that position SHALL contain a single `AIMessage` whose content equals the DIAL message's native `content` field, and the agent SHALL run successfully without error
-
-#### Scenario: Mixed legacy and new turns in one conversation
-- **WHEN** a request's history alternates legacy assistant turns (no state) with new assistant turns (state populated)
-- **THEN** the reconstructed history SHALL mix degraded `AIMessage(content=str)` entries (for legacy turns) with full `messages_from_dict(...)`-decoded slices (for new turns), in the original turn order, without raising
-
-#### Scenario: Multimodal tool slice is rehydrated from URL to base64 before reaching the agent
-- **WHEN** a request includes an assistant message whose `custom_content.state["messages"]` carries an encoded `ToolMessage` containing a `{type: "image", url, mime_type}` block (a previously uploaded image)
-- **THEN** the reconstructed `ToolMessage` passed into the agent's input SHALL contain a `{type: "image", base64, mime_type}` block whose `base64` is the result of downloading the referenced DIAL file and whose `mime_type` is preserved unchanged; and the block SHALL NOT carry the `url` field
-
-#### Scenario: Rehydration failure does not abort the turn
-- **WHEN** a request includes an assistant message whose `custom_content.state["messages"]` references a DIAL file that cannot be downloaded (404, network error, or auth failure)
-- **THEN** the reconstructed `ToolMessage` SHALL have the offending image block replaced by a `TextContentBlock` placeholder describing the loss, the failure SHALL be logged server-side, and the turn SHALL proceed normally rather than being delivered as a turn-aborting protocol error
-
-#### Scenario: A failed research turn is followed by the failed-turn note
-- **WHEN** a request includes an assistant message whose state carries preparation messages, a snapshot and the failure flag, followed by a user message
-- **THEN** the reconstructed history at that position SHALL contain the decoded preparation messages, then the failed-turn note as a `SystemMessage`, then the user's `HumanMessage`, and SHALL contain nothing of the snapshot's transcript
-
-#### Scenario: A failed turn without a snapshot is followed by the failed-turn note
-- **WHEN** a request includes an assistant message whose state carries the failure flag and an empty `messages`, followed by a user message
-- **THEN** the reconstructed history at that position SHALL contain a single `AIMessage` with the message's native `content`, then the failed-turn note as a `SystemMessage`, then the user's `HumanMessage`
+**Reason**: This change drops scenarios of this requirement that describe behavior it removes,
+and a modified requirement cannot drop a scenario. The requirement is therefore removed and added
+again under a new title.
+**Migration**: See "Reconstruction of the preparation agent's history from DIAL request" under ADDED Requirements in this delta.
 
 ### Requirement: Tool-message image content uploaded to DIAL files before persistence
+**Reason**: This change drops scenarios of this requirement that describe behavior it removes,
+and a modified requirement cannot drop a scenario. The requirement is therefore removed and added
+again under a new title.
+**Migration**: See "Snapshot image content uploaded to DIAL files before persistence" under ADDED Requirements in this delta.
 
-Before calling `choice.set_state(...)` at the end of each turn, the app SHALL upload every LangChain v1 `ImageContentBlock` carrying a `base64` field — wherever it appears in the buffered `AIMessage` / `ToolMessage` slice, or in the research transcript of a failed research turn's snapshot — to the DIAL files API and replace the block's `base64` field with a `url` field pointing at the resulting file object. The upload SHALL use the `aidial-client` `AsyncDial` interface. The target bucket SHALL be resolved per turn from `AsyncDial.bucket.get_raw()`, preferring the `appdata` value and falling back to `bucket` when `appdata` is unset. The target path SHALL include a fixed `dial-deep-research/` prefix to namespace the app within a shared bucket. The block's `mime_type` field SHALL be preserved unchanged; the block's `type: "image"` discriminator SHALL remain `"image"` (no custom block type).
+## MODIFIED Requirements
 
-#### Scenario: Image block in a ToolMessage is uploaded and rewritten
-- **WHEN** an MCP tool returns a `ToolMessage` whose `content` includes `{type: "image", base64: "<...>", mime_type: "image/png"}` and the turn is about to write `set_state`
-- **THEN** the app SHALL upload the decoded bytes to `files/{appdata-or-bucket}/dial-deep-research/<deterministic-name>.png` via `AsyncDial.files.upload`, replace the block in the buffered `ToolMessage.content` with `{type: "image", url: "<returned url>", mime_type: "image/png"}` (no `base64` field), and only then proceed with `messages_to_dict` and `set_state`
+### Requirement: Assistant message content contains only model text
+The DIAL response message content SHALL, in chronological order, contain only the
+natural-language assistant text that each component is specified below to forward — never tool
+calls, tool results, or structured non-text content blocks (e.g. Anthropic-style `thinking`
+blocks, image blocks); those are conveyed via stages (for tool execution UI display) and via
+the turn's persisted state (for observability, and for cross-turn replay of the preparation
+agent's messages). Coverage differs by
+component: preparation forwards its own text, while the research graph forwards none of
+research-agent's, research-review's, or report-review's text — only the settled report — as the
+next paragraph specifies.
 
-#### Scenario: Multiple image blocks in a single ToolMessage are all uploaded
-- **WHEN** an MCP tool returns a `ToolMessage` whose `content` contains two or more image blocks
-- **THEN** each image block SHALL be uploaded as a distinct file, each block SHALL be rewritten to its own `url` form, and the order of blocks within `content` SHALL be preserved
+**Preparation and research populate this content by entirely different means.** Preparation
+streams its own `AIMessage` text token-by-token as the model produces it, including text on an
+intermediate `AIMessage` that also carries `tool_calls` — not just the final text-only
+`AIMessage` — and each of its tool calls becomes a DIAL stage alongside that streamed text. The
+research graph SHALL NOT stream, or otherwise forward, any `AIMessage`'s text into
+`message.content`: research-agent's own reasoning is discarded, whatever text accompanies its
+tool calls, and its tool calls become DIAL stages only, as does each report review (see
+**report-composition**). The research graph's sole contribution to `message.content` is the one
+report the review loop settles on, appended once the loop ends (see **Streaming response path**
+for the append-once cadence) — never streamed, and no other text of its own.
 
-#### Scenario: Non-image content blocks pass through unchanged
-- **WHEN** a `ToolMessage` carries a mix of `{type: "text", ...}` and `{type: "image", base64, ...}` blocks
-- **THEN** only the image blocks SHALL be uploaded and rewritten; text blocks SHALL be left bit-for-bit unchanged in the persisted state
+Text streamed from **distinct assistant messages** SHALL be separated by a `"\n\n"` in
+`message.content`, so the segments render as separate paragraphs rather than running together;
+the tokens of one message SHALL be concatenated untouched. The boundary is the message, not the
+tool round: two segments SHALL be separated whether or not a tool ran between them — including
+the same model call re-streamed after a transient failure, whose already-streamed fragment cannot
+be retracted. The first segment of a turn SHALL take no leading separator. A streamed chunk
+carries the id of the message it belongs to (the provider's response id, or one langchain_core
+stamps per LLM run), which is what makes the boundary observable.
 
-#### Scenario: Image block in an AIMessage is uploaded by the same path
-- **WHEN** a model emits an `AIMessage` whose `content` contains an `{type: "image", base64, mime_type}` block (e.g. a vision-capable model that returns image output)
-- **THEN** that block SHALL be uploaded and rewritten by the same walker that handles `ToolMessage` images, with no separate code path
+#### Scenario: Preparation's tool-using turn streams intermediate text alongside the final answer
+- **WHEN** the preparation agent produces an intermediate `AIMessage` carrying both
+  natural-language text (e.g. `"Plan: ..."`) and `tool_calls`, the tool call returns a result,
+  and the agent then produces a final `AIMessage` with the answer
+- **THEN** the DIAL response `message.content` SHALL contain the intermediate text followed by
+  the final text, in that order, with a `"\n\n"` separator between them; tool stages SHALL still
+  render between the two segments via the stage channel; the response content SHALL NOT contain
+  serialized tool calls, tool result payloads, or `messages_to_dict` blobs
 
-#### Scenario: Upload failure is fail-closed
-- **WHEN** the DIAL files upload for an image block raises an exception (network error, DIAL Core 5xx, auth failure, etc.)
-- **THEN** the offending block SHALL be removed from the buffered message and replaced in place with a `TextContentBlock` whose text describes the loss (e.g. `"[image upload failed: image/png, ~340 KB]"`), the exception SHALL be logged server-side, and `set_state` SHALL proceed with the rewritten slice — never with inline `base64` left in place
+#### Scenario: Preparation's text-only turn (no tool calls)
+- **WHEN** the preparation agent answers without invoking any tool, producing a single
+  text-only final `AIMessage`
+- **THEN** the DIAL response `message.content` SHALL equal that message's text, with no leading
+  or trailing separator, streamed token-by-token
 
-#### Scenario: A files bucket that cannot be resolved is handled like a failed upload
-- **WHEN** resolving the DIAL files bucket raises while a turn's `messages` are about to be persisted
-- **THEN** every image block in them SHALL be replaced by the same placeholder a failed upload gets, the failure SHALL be logged server-side, and `set_state` SHALL proceed; a failed research turn's snapshot is handled by **research-resume** instead, which drops it
+#### Scenario: Research-agent's tool-calling text never reaches content
+- **WHEN** research-agent produces an `AIMessage` carrying both natural-language text and
+  `tool_calls`
+- **THEN** the tool call SHALL become a DIAL stage as usual, and the message's text SHALL NOT
+  appear in `message.content` at any point in the turn — not streamed, not appended later
 
-#### Scenario: Persisted state stays below the DIAL request-body limit on multimodal turns
-- **WHEN** a turn produces one or more tool messages carrying image content totalling several MB of base64 in aggregate
-- **THEN** the serialized state produced for that turn, its `messages` and any snapshot, SHALL contain only URL references for those images (no `base64` fields). Every later request carries the states of all earlier turns, and DIAL Core rejects a request above its size limit (64 MiB by default) with 413, so image bytes left in a state would bring the conversation closer to a request that can no longer be sent
+#### Scenario: A research turn's content is the report alone
+- **WHEN** a turn hands off to research and the review loop settles on a report
+- **THEN** `message.content` SHALL gain exactly one addition from the research phase — that
+  report, appended once — and no text from research-agent, research-review, or report-review
+  SHALL appear in it at any point
+
+#### Scenario: Structured content blocks flattened to text
+- **WHEN** an `AIMessageChunk` carries `content` as a list of content blocks (e.g. `[{type: "text", text: "..."}, {type: "thinking", thinking: "..."}, {type: "image", ...}]`) instead of a bare string
+- **THEN** the app SHALL append the concatenation of every `text`-typed block's `text` payload to `choice` and SHALL silently skip every non-text block (no append, no error, no stage)
+
+#### Scenario: Cross-turn replay of tool messages
+- **WHEN** a follow-up chat completion request arrives after an earlier turn in which the preparation agent called tools
+- **THEN** the second turn's preparation agent SHALL receive the prior turn's preparation agent `AIMessage(tool_calls=…, content=…)` and `ToolMessage(...)` messages plus its final `AIMessage` as conversation history, reconstructed from the prior assistant message's `preparation.agent_messages` field, in the original order, instead of being limited to prior assistant text
+
+#### Scenario: A new assistant message starts a new paragraph with no tool round between
+- **WHEN** two text segments from distinct assistant messages reach the choice with no tool result between them
+- **THEN** the app SHALL still insert a `"\n\n"` between them, because the boundary is the change of message
+
+#### Scenario: Tokens of one message are not separated
+- **WHEN** one assistant message streams as many chunks
+- **THEN** the app SHALL append them with nothing inserted between, producing one paragraph
 
 ### Requirement: Failures delivered as DIAL protocol errors
 
@@ -181,7 +151,7 @@ content: its call is not streamed, and a completed draft reaches the choice only
 loop settles. The app SHALL NOT append the
 error as ordinary assistant `content`. A turn that aborts SHALL persist a state that records the
 failure, and only then raise the error (**research-resume**): with its snapshot when its research
-run saved one, otherwise only the failure flag and the `PrepState` the turn started from. A
+run saved one, otherwise only the failure flag and the `CrossTurnPrepState` the turn started from. A
 failure while the application properties are fetched or validated, and the refusal of a
 conversation whose report was delivered, SHALL persist no state. A turn does not abort at all once
 its report is written (**research-resume**). On a streaming request the SDK sends a state set
@@ -212,8 +182,8 @@ non-retryable message saying the research was saved by a different version of De
 cannot be resumed, so the user should start a new conversation (outgoing 409). A resumable snapshot
 whose plan id matches but which cannot be read for any other reason SHALL resolve to a
 non-retryable message saying an error on our side prevents resuming the research, so the user
-should start a new conversation (outgoing 500); a snapshot image whose download answers 404
-counts as such a snapshot. A snapshot image that still cannot be downloaded after its attempts,
+should start a new conversation (outgoing 500). A snapshot image whose download answers 404 is not
+a refusal: the snapshot is discarded and research starts fresh. A snapshot image that still cannot be downloaded after its attempts,
 for another reason, SHALL resolve to a retryable message saying the saved research progress could
 not be loaded (outgoing 500, "try again later" appended).
 
@@ -222,10 +192,9 @@ turn SHALL NOT trigger this path: a failing tool call, which the **tool-call-fau
 capability retries where that helps and otherwise delivers to the agent as an error result
 (surfaced as a stage marked ❌), a failed report-review call and a failed report revision once a
 draft exists (both absorbed by the report loop, which delivers a draft instead), Opik-tracing
-failures, image-rehydration failures during history reconstruction, and every failure after the
-report loop has settled a draft (**research-resume**). These continue to let the turn complete
-normally. A snapshot image that cannot be downloaded for a resumed run is not one of them: it fails
-the turn (**research-resume**).
+failures, and every failure after the report loop has settled a draft (**research-resume**). These continue to let the turn complete
+normally. A snapshot image that cannot be downloaded for a reason other than a 404 is not one of
+them: it fails the turn (**research-resume**).
 
 #### Scenario: Upstream failure carrying a display message
 - **WHEN** an LLM call fails with an error whose DIAL body carries a `display_message`
@@ -297,11 +266,11 @@ the turn (**research-resume**).
 - **THEN** the app SHALL NOT write the error text into assistant `content` or into any persisted
   state, so a subsequent turn (e.g. after DIAL Chat regenerates) does not replay the error text to
   the model
-- **AND** a turn whose research run saved a snapshot SHALL persist only its preparation messages,
-  its reset `PrepState`, its snapshot and the failure flag; a failure while the application
-  properties are fetched or validated, and the refusal of a conversation whose report was
-  delivered, SHALL persist no state; any other failed turn SHALL persist only an empty `messages`,
-  the `PrepState` it started from and the failure flag; and a later turn learns of the failure from
+- **AND** a turn whose research run saved a snapshot SHALL persist only its preparation agent
+  messages and reviews, its reset `CrossTurnPrepState`, its snapshot and the failure flag; a failure while
+  the application properties are fetched or validated, and the refusal of a conversation whose
+  report was delivered, SHALL persist no state; any other failed turn SHALL persist only the
+  `CrossTurnPrepState` it started from and the failure flag; and a later turn learns of the failure from
   the fixed failed-turn note alone
 
 #### Scenario: A failed research turn persists its state ahead of the error
@@ -317,7 +286,7 @@ the turn (**research-resume**).
   no snapshot
 
 #### Scenario: A snapshot image that cannot be downloaded right now
-- **WHEN** a resumed run cannot download a snapshot image in three attempts, and no attempt answered 404
+- **WHEN** a resumed run cannot download a snapshot image, and no attempt answered 404
 - **THEN** the app SHALL deliver a retryable protocol error (outgoing HTTP 500) whose text says the
   saved research progress could not be loaded, followed by the "try again later" sentence and an
   error reference, and SHALL persist only the turn's failure record, so the snapshot the turn
@@ -349,3 +318,151 @@ the turn (**research-resume**).
 - **THEN** the failure SHALL propagate to the top-level handler and resolve through the status/type
   map to a service message with the appropriate retryability, rather than being reported as "not
   configured"
+
+## ADDED Requirements
+
+### Requirement: Each graph's messages persisted in its own part of the DIAL state
+
+For every chat completion request, the app SHALL accumulate the messages each graph produced
+during the turn and SHALL persist them under `assistant.custom_content.state`, serialized via
+`langchain_core.messages.messages_to_dict`, in two places that are never mixed:
+
+- **The preparation agent's messages** go to `preparation.agent_messages`: every `AIMessage` the
+  preparation agent produced in this turn, with or without `tool_calls`, and every `ToolMessage`
+  returned by its tools, in run order.
+- **The research graph's messages** go to the research record under `research`
+  (**research-resume**), as `research_agent_messages`: the first research instruction, every
+  research-agent `AIMessage` and `ToolMessage`, and every next-iteration plan `HumanMessage` that
+  research-review injected, in run order, at the positions research-agent saw them. The injected
+  next-iteration plan `HumanMessage`s SHALL NOT be appended to the user-visible assistant `content`.
+  No report message is added: the delivered report is the assistant `content` alone
+  (**report-citations**), and the record's drafts hold the writer's outputs.
+
+The DIAL `assistant.tool_calls` / `assistant.tool_call_id` native fields SHALL NOT be populated by
+the app; `preparation.agent_messages` is the sole carrier of the preparation agent's tool-call
+structure across turns. Research-agent's messages are never replayed to a later turn
+(**Reconstruction of the preparation agent's history from DIAL request**).
+
+No persisted state SHALL contain image bytes. The preparation agent has no MCP tools, so its
+messages carry no images. A research record's images are uploaded to DIAL files when the run failed
+and replaced by placeholders when it completed (**Snapshot image content uploaded to DIAL files before persistence**).
+
+When a turn's state cannot be built or encoded, the turn saves the state that **research-resume**
+("A turn's one state write falls back in a fixed order") names instead: after a written report, a
+closing state with no agent messages and no research record.
+
+#### Scenario: Research turn slice is persisted in the research record
+
+- **WHEN** a research turn produces `AIMessage(tool_calls=[X]) → ToolMessage(X_result) → AIMessage(tool_calls=[finish_iteration]) → ToolMessage(finish_iteration) → [injected next-plan HumanMessage] → …` and then delivers its report
+- **THEN** the research record's `research_agent_messages` SHALL carry those entries in run order, each encoded with its matching `messages_to_dict` `type` discriminator, the injected next-plan `HumanMessage` appearing at the position research-agent saw it, and the record SHALL hold no report `AIMessage`
+
+#### Scenario: Preparation's messages are persisted apart
+
+- **WHEN** a turn's preparation agent calls `update_query` and `update_plan` and then answers
+- **THEN** `preparation.agent_messages` SHALL carry the agent's `AIMessage`s and `ToolMessage`s in run order, and SHALL hold no research-agent message
+
+#### Scenario: A failed research turn keeps its research slice in the snapshot
+
+- **WHEN** research-agent fails with a quota error after several tool calls
+- **THEN** the turn's `preparation.agent_messages` SHALL carry only the preparation agent's messages, and research-agent's messages SHALL be in the snapshot under `research`
+
+### Requirement: Reconstruction of the preparation agent's history from DIAL request
+
+On each incoming chat completion request, the app SHALL reconstruct the preparation agent's
+LangChain message history (`reconstruct_prep_agent_history`) by walking `request.messages` in order
+and, for each message:
+- if `role == user`, emitting a `HumanMessage` whose content is taken from the DIAL message's native `content` field;
+- if `role == assistant` AND `custom_content.state["preparation"]["agent_messages"]` is present and non-empty, emitting `messages_from_dict(...)` of it instead of consulting the native `content` or `tool_calls` fields;
+- otherwise — no state, a state without `preparation.agent_messages`, such as one saved before the two graphs' messages were kept apart, or a state that fails validation — emitting a single `AIMessage(content=msg.content)` as a fallback, so such conversations continue to work without a migration step.
+
+This asymmetry — user turns read from native `content`, assistant turns read from the persisted
+agent messages — exists because the assistant's native `content` is a display-only concatenation of
+every streamed text segment (see **Assistant message content contains only model text**) and
+cannot be decomposed back into the `AIMessage` / `ToolMessage` / `tool_call` interleaving the agent
+needs. User turns carry no such structure, so their flat native `content` is sufficient.
+
+The history SHALL be built from the preparation agent's messages only. It SHALL read nothing of a
+research record, and nothing of an older state's `messages` field: research-agent's messages, the
+report drafts and their images never enter it. The history SHALL contain no image, so
+reconstruction downloads no file.
+
+The system message provided by the DIAL request SHALL continue to be ignored on reconstruction; the
+app's own system prompt is supplied to `create_agent` directly.
+
+An assistant message whose `custom_content.state` carries the failure flag — one written by a failed
+turn — SHALL be reconstructed like any other: from its agent messages when they are non-empty,
+otherwise from its native `content`. It SHALL be followed in the history by one fixed failed-turn
+note as a `SystemMessage` (**research-resume**). These notes are the only system messages the
+reconstructed history contains.
+
+#### Scenario: Assistant turn with state replays the preparation agent's messages
+- **WHEN** a request includes an assistant message whose `preparation.agent_messages` carries the encoded sequence `[ai(tool_calls=[X]), tool(X_result), ai(content="final")]`
+- **THEN** the reconstructed LangChain history at that position SHALL contain exactly those three messages decoded via `messages_from_dict`, in order, and SHALL NOT contain any `AIMessage` derived from the DIAL message's native `content` or `tool_calls` fields
+
+#### Scenario: Legacy assistant turn falls back to native content
+- **WHEN** a request includes an assistant message with no `custom_content.state` field set, or with `preparation.agent_messages` missing or empty
+- **THEN** the reconstructed history at that position SHALL contain a single `AIMessage` whose content equals the DIAL message's native `content` field, and the agent SHALL run successfully without error
+
+#### Scenario: A state saved before the split is read as a turn without state
+- **WHEN** a request includes an assistant message whose state carries a `messages` field and no `preparation.agent_messages`
+- **THEN** the reconstructed history at that position SHALL contain a single `AIMessage` with the native `content`, and nothing of the `messages` field
+
+#### Scenario: Mixed legacy and new turns in one conversation
+- **WHEN** a request's history alternates legacy assistant turns (no state) with new assistant turns (state populated)
+- **THEN** the reconstructed history SHALL mix degraded `AIMessage(content=str)` entries (for legacy turns) with `messages_from_dict(...)`-decoded agent messages (for new turns), in the original turn order, without raising
+
+#### Scenario: A research turn contributes only its preparation messages
+- **WHEN** a request includes an assistant message written by a research turn, whose research record holds research-agent messages with page images
+- **THEN** the reconstructed history at that position SHALL contain only that turn's preparation agent messages, with no image and no research-agent message, and no file SHALL be downloaded
+
+#### Scenario: A failed research turn is followed by the failed-turn note
+- **WHEN** a request includes an assistant message whose state carries preparation agent messages, a snapshot and the failure flag, followed by a user message
+- **THEN** the reconstructed history at that position SHALL contain the decoded preparation agent messages, then the failed-turn note as a `SystemMessage`, then the user's `HumanMessage`, and SHALL contain nothing of the snapshot
+
+#### Scenario: A failed turn without a snapshot is followed by the failed-turn note
+- **WHEN** a request includes an assistant message whose state carries the failure flag and no preparation agent messages, followed by a user message
+- **THEN** the reconstructed history at that position SHALL contain a single `AIMessage` with the message's native `content`, then the failed-turn note as a `SystemMessage`, then the user's `HumanMessage`
+
+### Requirement: Snapshot image content uploaded to DIAL files before persistence
+
+Before calling `choice.set_state(...)` for a failed research turn's snapshot, the app SHALL upload
+every LangChain v1 `ImageContentBlock` carrying a `base64` field in the snapshot's research-agent
+messages to the DIAL files API, and replace the block's `base64` field with a `url` field pointing
+at the resulting file object. The upload SHALL use the `aidial-client` `AsyncDial` interface. The
+target bucket SHALL be resolved per turn from `AsyncDial.bucket.get_raw()`, preferring the `appdata`
+value and falling back to `bucket` when `appdata` is unset. The target path SHALL include a fixed
+`dial-deep-research/` prefix to namespace the app within a shared bucket. The block's `mime_type`
+field SHALL be preserved unchanged; the block's `type: "image"` discriminator SHALL remain
+`"image"` (no custom block type). The uploads of one save SHALL run concurrently. **research-resume**
+owns the retries, what an upload that still fails does to the snapshot, and the placeholder format.
+
+A completed research run's record SHALL upload nothing: each of its image blocks is replaced by a
+placeholder (**research-resume**). No other state carries images.
+
+#### Scenario: Image block in a ToolMessage is uploaded and rewritten
+- **WHEN** an MCP tool returned a `ToolMessage` whose `content` includes `{type: "image", base64: "<...>", mime_type: "image/png"}`, and the research run then fails and its snapshot is about to be written
+- **THEN** the app SHALL upload the decoded bytes to `files/{appdata-or-bucket}/dial-deep-research/<deterministic-name>.png` via `AsyncDial.files.upload`, replace the block in the snapshot's research-agent messages with `{type: "image", url: "<returned url>", mime_type: "image/png"}` (no `base64` field), and only then proceed with `messages_to_dict` and `set_state`
+
+#### Scenario: Multiple image blocks in a single ToolMessage are all uploaded
+- **WHEN** a snapshot's `ToolMessage` contains two or more image blocks
+- **THEN** each image block SHALL be uploaded as a distinct file, each block SHALL be rewritten to its own `url` form, and the order of blocks within `content` SHALL be preserved
+
+#### Scenario: Non-image content blocks pass through unchanged
+- **WHEN** a `ToolMessage` carries a mix of `{type: "text", ...}` and `{type: "image", base64, ...}` blocks
+- **THEN** only the image blocks SHALL be uploaded and rewritten, or replaced by placeholders; text blocks SHALL be left bit-for-bit unchanged in the persisted state
+
+#### Scenario: Image block in an AIMessage is handled by the same path
+- **WHEN** a model emits an `AIMessage` whose `content` contains an `{type: "image", base64, mime_type}` block (e.g. a vision-capable model that returns image output)
+- **THEN** that block SHALL be uploaded or replaced by the same walker that handles `ToolMessage` images, with no separate code path
+
+#### Scenario: Upload failure is fail-closed
+- **WHEN** the DIAL files upload for a snapshot image still fails after its attempts
+- **THEN** the offending block SHALL be replaced in place by its placeholder, the failure SHALL be logged server-side, the snapshot SHALL be marked not resumable (**research-resume**), and `set_state` SHALL proceed with the rewritten slice — never with inline `base64` left in place
+
+#### Scenario: A completed run makes no files call
+- **WHEN** a research run that fetched page images delivers its report
+- **THEN** the app SHALL neither resolve the files bucket nor upload any file for that turn, and every image block of its record SHALL be a placeholder
+
+#### Scenario: Persisted state stays below the DIAL request-body limit on multimodal turns
+- **WHEN** a turn produces one or more tool messages carrying image content totalling several MB of base64 in aggregate
+- **THEN** the serialized state produced for that turn SHALL contain no `base64` fields: URL references in a snapshot, placeholders in a completed run's record. Every later request carries the states of all earlier turns, and DIAL Core rejects a request above its size limit (64 MiB by default) with 413, so image bytes left in a state would bring the conversation closer to a request that can no longer be sent

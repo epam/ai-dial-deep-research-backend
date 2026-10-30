@@ -1,3 +1,11 @@
+## REMOVED Requirements
+
+### Requirement: A citation step runs after the report loop settles and before delivery
+**Reason**: This change drops scenarios of this requirement that describe behavior it removes,
+and a modified requirement cannot drop a scenario. The requirement is therefore removed and added
+again under a new title.
+**Migration**: See "A citation step runs on the settled report before delivery" under ADDED Requirements in this delta.
+
 ## MODIFIED Requirements
 
 ### Requirement: Data-query records are captured from the turn's tool results
@@ -205,3 +213,316 @@ parts are in hand.
 - **WHEN** research starts fresh after the user changed the plan, and the history holds a snapshot
   with data-query records for the old plan
 - **THEN** the run SHALL start with no records, and a query id from the old run SHALL NOT resolve
+
+### Requirement: The References section is built by the app from the cited sources' metadata
+
+The app SHALL write the report's References section itself as part of the citation step of every
+turn that delivers a report, and the report writer SHALL NOT write it. Only a failure earlier in
+that step leaves a delivery without the section (see the citation-failure requirement). The section is no part of the
+configured report structure: its heading comes from `references_section_name` and its cited-nothing
+text from `references_section_empty_text` (**application-config-schema**), and what the writer is
+given and checked against is owned by **report-composition**. Every row SHALL be built from what a
+server reported about a cited source, never from what a model recalled about it — which is the whole
+reason the section moves into the app.
+
+**What the section contains.** The section SHALL open with a `##` heading carrying
+`references_section_name`. It SHALL then carry **one table per configured MCP server whose sources the delivered
+report cites**, in a fixed order by the kind of source a table lists: the **dataset** table first,
+then the **document** table, whatever order the servers are configured in. Each table SHALL open with a `###`
+sub-heading carrying that server's configured table title, and its header row SHALL be the columns
+that server's `references_table` configures, in the configured order. After the server tables, the
+section SHALL carry the **glossary table** when the channel configures a glossary and the delivered
+report cites at least one glossary term (see the requirement on listing cited glossary terms).
+
+A server whose sources the report does not cite SHALL contribute no table at all. A glossary
+citation counts as a cited source here. Where the report cites no source of any kind, the section
+SHALL carry no table and SHALL carry
+`references_section_empty_text` instead, so a report with nothing to cite says so rather than
+showing a bare heading.
+
+**One row per cited source.** Each table SHALL carry one row for each distinct source of its kind the
+delivered report cites, ordered by where that source is first cited in the report. A source SHALL be
+listed **whether or not its metadata resolved, and whether or not its citations became pills**. The
+row is what tells a reader which source a citation names, so a source that lost its pill is the one
+whose reader needs the row most.
+
+Two citations of one document on different pages are one source and therefore one row: a References
+row names the source, never the cited location.
+
+**How a cell is filled.** Each cell SHALL carry the value the row's source reported under that
+column's configured key — for a document, that key in the document's metadata object; for a dataset,
+that field of the dataset's catalogue record. A value SHALL be rendered by these rules, so what the
+channel stores decides the cell rather than the app's ability to interpret it:
+
+- a string carrying something other than whitespace, as written but stripped of the whitespace
+  around it;
+- a number or a boolean, as its text;
+- a list, as its items joined with `, `, each item rendered by these same rules;
+- anything else, and any absent, empty or whitespace-only value, as an empty cell.
+
+A rendered value SHALL be escaped so that it cannot break the table it sits in: a `|` SHALL be
+escaped, and a line break SHALL become a space.
+
+**The first column names the source, and it is the column that degrades.** Where the first column's
+key resolves nothing — including a value that is present but carries only whitespace, which is
+nothing a reader can identify a source by — that cell SHALL carry the source's identifier instead — `doc <id>` for a
+document, the URN as the marker carried it for a dataset — which is the fallback a citation pill's
+label already uses. Every other column SHALL be left empty when its key resolves nothing. Nothing in
+a row SHALL mark it as degraded, for the reason no pill label does: which lookup failed is the
+application's problem, and a reader shown it is only invited to trust one real source less than
+another.
+
+**A row whose source can be opened carries a pill in its first cell.** A row SHALL be openable on
+exactly the condition an inline citation of its source is converted: a document row when the
+file-sharing tool returned a PDF URL for that document, and a dataset row when the list-datasets
+tool reported a URL a browser can open for that dataset. The first cell of an openable row SHALL
+carry one empty marker tag, `<cit data-id="…"></cit>`, **in place of** the text it would otherwise
+carry, and one annotation of its own SHALL claim that tag, so the client renders the source's name as
+a pill inside the cell. The tag's id SHALL be unique across the message, like every other tag's, and
+exactly one annotation SHALL claim it. Every other cell of the row SHALL be filled as for any row. A
+row whose source is not openable SHALL keep its first cell as text, with no tag, and no annotation
+SHALL be emitted for it.
+
+A row is opened through an annotation rather than a link because a document's shared URL is
+storage-relative, so an ordinary Markdown link to it opens nothing. The annotation is the one
+mechanism that opens both kinds of source, and a row reusing it opens exactly what an inline pill of
+the same source opens.
+
+**A row's annotation is an inline citation's annotation with its own labels and page.** It SHALL
+carry the attachment type and the URL that a converted citation of the same source carries (the
+requirement "A converted citation is a marker tag in the text and an annotation that names it"),
+and, like that citation, no `body.quote`. It SHALL differ from it in two things:
+
+- **The label is the row's name alone.** `body.title` SHALL carry the text the first cell would have
+  carried: the value under the first column's key, rendered by the cell rules above, or the source's
+  identifier where that key resolves nothing. The `|` escape SHALL NOT be applied, because the label
+  is not table text and a reader would see the backslash; a line break still becomes a space. The
+  label SHALL carry **no trailing part** — no `, page <ix>`, no ` dataset` and no
+  ` - last update <date>` — because the row already sits under a sub-heading naming its kind of
+  source, a References row names the source, never the cited location, and a row's other cells
+  carry whatever else the channel configured, a last-update column among them. A dataset row's
+  pill and card therefore both read the dataset's title alone, such as `World Economic Outlook`. `body.source.attachment.title` SHALL carry the same text,
+  shortened to the channel's pill budget exactly as an inline pill's leading part is, or whole where
+  the channel names no budget (**application-config-schema** owns the field). A document row labelled
+  `doc <id>` SHALL NOT be shortened, for the reason an unresolved inline document label is not: it is
+  short by construction, and a cut could eat the id.
+- **A document row opens its document at page 1.** Its `pdf_bbox` selector SHALL carry page 1,
+  whichever pages the report cites. A row names the whole document rather than a location in it, so
+  it opens where the document begins; the selector is still sent, because the document viewer needs
+  a page to open at. A dataset row carries no selector, like a dataset citation.
+
+**Row annotations share the array with the inline ones.** They SHALL be emitted in the same
+`custom_content.annotations` array as the conversion's annotations, **after** all of them, in the
+order the rows are written, with `index` values continuing the array's sequence. The array is still
+emitted once, after the content.
+
+A marker tag is not a hyperlink, so an openable row does not breach the no-hyperlink guarantee
+(**report-composition**): no cell SHALL carry a Markdown link, an HTML anchor, a URL, or any markup
+other than the marker tag. The no-hyperlink rule governs what the report writer writes, and the app
+writes no link of its own, so the rule needs no exemption for an app-written section.
+
+**Where it is appended.** The built section SHALL be appended to the text the citation conversion
+produced — after the link-removal pass and after the conversion — and SHALL therefore reach the
+assistant message content. It SHALL NOT be searched for citation
+markers or for hyperlinks: the app wrote it, and it carries neither — its only markup is the marker
+tags of its openable rows, which the build writes together with their annotations.
+
+**A section the draft wrote anyway is left where it is.** The app SHALL NOT remove text from a
+draft to make room for the built section. A draft that writes its own references section carries an
+extra `##` heading, which the structure check reports on every reviewed draft and the revision acts
+on (**report-composition**), so the loop is what removes it while a version remains; its words count
+toward the ceiling like any other, because a violation must not earn length budget. A draft that
+exhausts the version budget still carrying one SHALL be delivered with that section followed by the
+built one.
+
+The duplication is deliberate, and it is the cheaper failure: removing a heading and the text after
+it removes whatever the writer put below that heading, which a reader cannot see has happened,
+while two References sections are visible and cost a reader nothing. It also keeps the rows true —
+the cited ids are read before the section is appended and nothing is removed after, so every source
+a row lists is one the delivered report cites.
+
+#### Scenario: Every cited source gets a row
+
+- **WHEN** a delivered report cites three documents and two datasets, and the file-sharing tool
+  resolved URLs for two of the three documents
+- **THEN** the built section SHALL carry a documents table of three rows and a datasets table of two
+  rows, each row ordered by where its source is first cited
+
+#### Scenario: The tables follow a fixed order
+
+- **WHEN** the channel configures its document server before its dataset server, configures a
+  glossary, and the report cites a document, a dataset and a glossary term
+- **THEN** the section SHALL carry the dataset table first, the document table second and the
+  glossary table last
+
+#### Scenario: A source whose metadata did not resolve keeps its row
+
+- **WHEN** the metadata answer omits one cited document, and the catalogue omits one cited dataset
+- **THEN** each SHALL still have a row, the document's named `doc <id>` and the dataset's named by
+  the URN the marker carried, its other cells empty, and nothing in either row SHALL mark it as
+  incomplete. The name SHALL be the first cell's text where the row is not openable, and its pill's
+  label where it is
+
+#### Scenario: A server with nothing cited contributes no table
+
+- **WHEN** a channel configures a document server and a dataset server, and the delivered report
+  cites documents only
+- **THEN** the section SHALL carry the documents table alone, and no datasets sub-heading and no
+  empty datasets table SHALL appear
+
+#### Scenario: A report citing nothing carries the configured text
+
+- **WHEN** a delivered report cites no document, no dataset and no glossary term
+- **THEN** the section SHALL be present, SHALL carry no table, and SHALL carry
+  `references_section_empty_text`
+
+#### Scenario: A draft that wrote the section anyway keeps every section it wrote
+
+- **WHEN** a draft that exhausted its version budget carries a `## References` heading with rows the
+  model wrote, followed by a `## Conclusion` section
+- **THEN** the delivered text SHALL still carry that Conclusion, the model's references heading and
+  rows SHALL still be there, and the built section SHALL follow them
+
+#### Scenario: A source cited only inside the draft's own references section still gets a row
+
+- **WHEN** a draft cites one document in its body and a second document only inside the references
+  section it wrote itself
+- **THEN** both documents SHALL have a row, both citations SHALL be converted where their
+  conditions hold, and no row SHALL name a source the delivered text does not cite
+
+#### Scenario: A value that only looks filled leaves its cell empty
+
+- **WHEN** a cited document that resolved no URL has a first-column key holding a string of spaces,
+  and its other column holds a value padded with spaces
+- **THEN** the first cell SHALL carry the source's identifier rather than the spaces, and the other
+  cell SHALL carry its value with the padding gone
+
+#### Scenario: A value that would break the table is escaped
+
+- **WHEN** a cited document that resolved no URL has a title containing a `|` and a publication date
+  field holding a value spanning two lines
+- **THEN** the `|` SHALL be escaped and the line break SHALL be rendered as a space, so the table
+  keeps its columns
+
+#### Scenario: A document row with a PDF URL opens at page 1
+
+- **WHEN** a delivered report cites document 12 first at page 13 and later at page 4, the
+  file-sharing tool returned a PDF URL for it, and the documents table's first column reads the
+  title `Market Outlook 2025`
+- **THEN** that row's first cell SHALL carry one marker tag and no other text, and exactly one
+  annotation SHALL claim the tag, with type `application/pdf`, that URL, a `pdf_bbox` selector on
+  page 1, no `body.quote`, and both `body.title` and `body.source.attachment.title` reading
+  `Market Outlook 2025` with no page
+
+#### Scenario: A dataset row with a portal URL opens its page
+
+- **WHEN** a delivered report cites `IMF:WEO(1.0.0)`, and the list-datasets tool reported the name
+  `World Economic Outlook` and the URL `https://portal.example.org/datasets/imf-weo`
+- **THEN** that row's first cell SHALL carry one marker tag, and its annotation SHALL carry type
+  `text/html`, that URL unchanged, no `body.quote`, no selector, and both labels reading
+  `World Economic Outlook` with no ` dataset` and no last-update part, even when the catalogue
+  reported a last-update date
+
+#### Scenario: A row whose source cannot be opened stays text
+
+- **WHEN** a delivered report cites a document the file-sharing tool returned no URL for, and a
+  dataset whose catalogue record carries no URL
+- **THEN** both rows SHALL carry their first cell as text, neither SHALL carry a marker tag, and no
+  annotation SHALL be emitted for either row
+
+#### Scenario: A row named by its identifier is labelled with it
+
+- **WHEN** a cited document resolved a PDF URL and no metadata, and the channel sets a pill budget
+  of 10
+- **THEN** its row's pill and card SHALL both read `doc <id>`, unshortened
+
+#### Scenario: The pill budget shortens a row's pill and not its card
+
+- **WHEN** the channel sets a pill budget and an openable row's name is longer than it
+- **THEN** `body.source.attachment.title` SHALL carry the name shortened to that budget with an
+  ellipsis, and `body.title` SHALL carry it whole
+
+#### Scenario: A row's label is not escaped for the table
+
+- **WHEN** an openable document row's title contains a `|` and a line break
+- **THEN** both labels SHALL carry the `|` without a backslash and the line break as a space, and the
+  cell SHALL carry the marker tag alone, so the table keeps its columns
+
+#### Scenario: Row annotations follow the inline ones
+
+- **WHEN** the conversion emitted five annotations, and the section makes two rows openable
+- **THEN** the array SHALL carry the two row annotations at indices 5 and 6, in the order their rows
+  are written, and each row's tag id SHALL differ from every inline tag id
+
+#### Scenario: The built section carries no hyperlink
+
+- **WHEN** the section is built for a report citing a document whose URL resolved and a dataset whose
+  catalogue record carries an absolute portal URL
+- **THEN** neither row SHALL carry a Markdown link, an HTML anchor, a URL, or any markup other than
+  its marker tag, and the delivered text SHALL still satisfy the no-hyperlink guarantee
+
+## ADDED Requirements
+
+### Requirement: A citation step runs on the settled report before delivery
+
+The app SHALL run one citation step per turn, after the report review loop has settled on the draft
+to deliver (see **report-composition**) and before that draft's text is appended to the assistant
+message content. The step SHALL NOT run at all on a turn that delivers no report.
+
+The step SHALL be the only thing that alters the settled draft, and it SHALL make exactly three
+kinds of alteration, in this order:
+
+1. **Remove everything that points the reader outward** — every hyperlink form the
+   **report-composition** capability enumerates, each repaired the way that capability states: the
+   label kept where the form has one, the construct deleted whole where it has none. That capability
+   owns which forms count and how each is repaired; this step owns only that they go first.
+2. **Replace each convertible citation marker** with that citation's marker tag.
+3. **Append the References section** the app builds from the cited sources' metadata (see the
+   References-section requirement below). It is an addition only: this step removes no text the
+   writer wrote, including a references section the writer wrote itself.
+
+The order is fixed so the outcome is deterministic. The first two do not repair each other's input:
+link removal runs first, and citation conversion then reads the text it produced, making no
+distinction about where a marker came from. The third is ordered last for a stronger reason than
+determinism — it writes text the two passes before it would otherwise act on, and the app's own
+markup is not the writer's output to be repaired. Nothing else about the draft SHALL be rewritten,
+reordered, shortened or reformatted, and the step SHALL NOT call a model.
+
+The text the step produces SHALL be the text appended to the assistant content, and the assistant
+content is the one place the delivered report is kept. The research record keeps each draft as the
+writer wrote it (**research-resume**), not the delivered text, and no later turn reads a delivered
+report back. That text carries the marker tags, which are markup only this feature's reader understands: a renderer
+that knows them replaces each tag with a pill, and one that does not either drops the tag or shows
+it. This is a property of the delivered report, not an accident, and the failure modes it creates
+are covered by the delivery-failure requirement below and by the **research-execution** capability.
+
+#### Scenario: The step runs once on the settled draft
+
+- **WHEN** the report review loop settles on a draft and the turn is about to deliver it
+- **THEN** the citation step SHALL run once on that draft, before any of its text reaches the
+  assistant message content, and the loop SHALL NOT be re-entered
+
+#### Scenario: An unreviewed draft still gets the deterministic edits
+
+- **WHEN** an instance configures `max_report_versions` as 1, so the first draft is delivered with
+  no review call at all, and that draft carries a bare URL beside a convertible citation
+- **THEN** the step SHALL still run on it: the URL SHALL be gone from the delivered text, the
+  citation SHALL be converted and the References section SHALL be built, because the step is gated
+  on a report being delivered and never on a review having judged it
+
+#### Scenario: A turn with no report runs no citation step
+
+- **WHEN** a turn ends without a delivered report — the preparation agent asked a clarifying
+  question, or the turn failed
+- **THEN** no citation step SHALL run, no annotations SHALL be emitted and no References section
+  SHALL be built
+
+#### Scenario: The delivered text is the assistant content
+
+- **WHEN** the citation step converts citations in the settled draft and builds its References
+  section
+- **THEN** the text appended to the assistant content SHALL carry the marker tags of the converted
+  citations and the built section, and SHALL be the post-processed text rather than the draft the
+  review judged
+- **AND** the turn's research record SHALL hold the draft the review judged, unchanged, as the last
+  of its drafts, and SHALL hold no copy of the delivered text

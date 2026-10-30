@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from aidial_sdk.chat_completion import Status
 from langchain_core.documents.base import Blob
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool, StructuredTool
 from langgraph.types import ValuesStreamPart
 from mcp.types import CallToolResult
@@ -71,8 +71,10 @@ def _settle(runner: ResearchRunner, report: str, *, transcript: list[Any] | None
             type="values",
             ns=(),
             data={
-                "messages": transcript if transcript is not None else [HumanMessage(content="q")],
-                "report": report,
+                "research_agent_messages": (
+                    transcript if transcript is not None else [HumanMessage(content="q")]
+                ),
+                "reports": [report],
             },
             interrupts=(),
         )
@@ -267,16 +269,16 @@ async def test_a_convertible_citation_is_delivered_as_a_marker_tag() -> None:
     assert annotations[0]["body"]["source"]["attachment"]["url"] == _URL
 
 
-async def test_the_delivered_text_is_what_gets_persisted() -> None:
-    """A later turn reads back what the user saw, marker tags included."""
+async def test_the_delivered_text_goes_to_the_assistant_content_alone() -> None:
+    """The run's messages, which the research record stores, gain no message of the report."""
     runner, choice = _make_runner()
-    _settle(runner, "Defaults rise. [doc 442, page 3]")
+    transcript = [HumanMessage(content="q")]
+    _settle(runner, "Defaults rise. [doc 442, page 3]", transcript=transcript)
 
     await _deliver(runner, tool=_sharing_tool(urls={"442": _URL}))
 
-    report_message = runner._messages[-1]
-    assert isinstance(report_message, AIMessage)
-    assert report_message.content == choice.content
+    assert '<cit data-id="' in choice.content
+    assert runner._messages == transcript
 
 
 async def test_a_hyperlink_is_removed_even_with_no_file_sharing_tool() -> None:
@@ -1565,8 +1567,6 @@ async def test_a_report_that_cannot_be_appended_is_one_warning(
         "step=append_report error=RuntimeError"
     ]
     assert _errors(caplog) == []
-    # The persisted slice still ends with the report, so the saved state closes the conversation.
-    assert isinstance(runner._messages[-1], AIMessage)
 
 
 async def test_a_citation_log_record_that_fails_is_one_warning(

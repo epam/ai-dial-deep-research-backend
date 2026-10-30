@@ -2,14 +2,14 @@
 
 What is protected here:
 
-- The report node branches on whether a draft already exists, records each successful draft's
-  1-based version in `report_version` (a failed write records nothing), and never lets a failed
-  revision discard the draft it already had.
+- The report node branches on whether a draft already exists, appends each successful draft to
+  `reports` (a failed write appends nothing), and never lets a failed revision discard the draft
+  it already had.
 - A revision's request keeps the first draft's message prefix and appends the revision request
   last, so the provider's prompt cache can still serve the prefix.
-- The report-review node absorbs its own failures, routes on the app-measured word count whatever
-  the model said, emits one stage per review, and sees neither the findings nor a plan
-  research-review authored.
+- The report-review node absorbs its own failures, stores each round whole in `report_reviews`,
+  revises on the app-measured word count whatever the model said, emits one stage per review, and
+  sees neither the findings nor a plan research-review authored.
 - The configured report structure reaches both prompts verbatim.
 
 Routing itself lives in `test_research_routing.py`; the stage's rendering in `test_dial_stages.py`.
@@ -38,9 +38,10 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.citation_lookups import CitationLookups
 from dial_deep_research.app.research.data_queries import DataQueryStore
-from dial_deep_research.app.research.nodes import ReportReviewOutcome
+from dial_deep_research.app.research.nodes import ReportReviewOutcome, revision_instruction
 from dial_deep_research.app.research.prompts import (
     ReportReview,
+    ResearchReview,
     render_protected_section_names,
     render_report_structure,
     render_report_system_prompt,
@@ -50,6 +51,7 @@ from dial_deep_research.app.research.report_rules import (
     build_report_rules,
     render_writer_instructions,
 )
+from dial_deep_research.app.research.state import ReportReviewRound
 from dial_deep_research.app_properties import (
     DEFAULT_REPORT_STRUCTURE,
     DocumentMetadataSource,
@@ -86,16 +88,31 @@ def _conforming_draft(body: str, sections: list[ReportSection] | None = None) ->
 def _state(**overrides: Any) -> Any:
     """A post-research graph state: research done, no draft yet."""
     state: dict[str, Any] = {
-        "messages": [HumanMessage(content="Research question:\nq\n\n1. step one")],
-        "original_query": "what happened to inflation?",
-        "plans": [["step one"]],
+        "research_agent_messages": [HumanMessage(content="Research question:\nq\n\n1. step one")],
+        "research_query": "what happened to inflation?",
+        "approved_plan": ["step one"],
         "research_iteration": 1,
-        "report": None,
-        "report_revision_instruction": None,
-        "report_version": 0,
+        "research_reviews": [],
+        "reports": [],
+        "report_reviews": [],
         "report_revision_failed": False,
     }
     return {**state, **overrides}
+
+
+def _round(*rule_violations: str, draft_number: int = 1) -> ReportReviewRound:
+    """A review round whose only violations are the app's own rules' `rule_violations`."""
+    return ReportReviewRound(
+        draft_number=draft_number,
+        rule_violations=list(rule_violations),
+        blind_review=None,
+        grounded_review=None,
+    )
+
+
+def _instruction_after(state: dict[str, Any], result: dict[str, Any]) -> str | None:
+    """The revision instruction the state holds once the node's `result` is applied."""
+    return revision_instruction({**state, **result})
 
 
 # --- the report node ----------------------------------------------------------------------------
@@ -156,7 +173,7 @@ async def test_first_draft_asks_for_the_report_over_the_transcript(
 
     result = await node(_state())
 
-    assert result == {"report": "the report", "report_version": 1}
+    assert result == {"reports": ["the report"]}
     [messages] = llm.calls
     # System prompt, the research transcript, then the report request — and nothing else.
     assert len(messages) == 3
@@ -206,7 +223,7 @@ async def test_first_draft_is_version_one(monkeypatch: pytest.MonkeyPatch) -> No
 
     result = await node(_state())
 
-    assert result["report_version"] == 1
+    assert len(result["reports"]) == 1
 
 
 async def test_a_revision_is_written_whenever_a_draft_exists(
@@ -217,21 +234,17 @@ async def test_a_revision_is_written_whenever_a_draft_exists(
     node = _report_node(llm, monkeypatch)
 
     result = await node(
-        _state(
-            report=previous,
-            report_revision_instruction="- Restore the References section.",
-            report_version=1,
-        )
+        _state(reports=[previous], report_reviews=[_round("Restore the References section.")])
     )
 
     [messages] = llm.calls
     assert len(messages) == 4
     revision_request = messages[-1].content
-    assert "- Restore the References section." in revision_request
+    assert "1. Restore the References section." in revision_request
     assert previous in revision_request
     assert f"{count_words(previous)} words" in revision_request
     assert "2750" in revision_request
-    assert result == {"report": "the revised report", "report_version": 2}
+    assert result == {"reports": [previous, "the revised report"]}
 
 
 async def test_a_revision_keeps_the_first_draft_message_prefix(
@@ -241,7 +254,7 @@ async def test_a_revision_keeps_the_first_draft_message_prefix(
     node = _report_node(llm, monkeypatch)
 
     await node(_state())
-    await node(_state(report="draft one", report_revision_instruction="- Shorten it."))
+    await node(_state(reports=["draft one"], report_reviews=[_round("Shorten it.")]))
 
     first_draft_messages, revision_messages = llm.calls
     # The revision request is appended, never inserted before the transcript, so the byte prefix
@@ -250,7 +263,7 @@ async def test_a_revision_keeps_the_first_draft_message_prefix(
     assert len(revision_messages) == 4
 
 
-async def test_each_draft_records_the_next_version(
+async def test_each_draft_is_appended_after_the_previous_ones(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     llm = _RecordingReportLLM("the second revision")
@@ -258,11 +271,12 @@ async def test_each_draft_records_the_next_version(
 
     result = await node(
         _state(
-            report="the first revision", report_revision_instruction="- Again.", report_version=2
+            reports=["the first draft", "the first revision"],
+            report_reviews=[_round("Again.", draft_number=1), _round("Again.", draft_number=2)],
         )
     )
 
-    assert result["report_version"] == 3
+    assert result == {"reports": ["the first draft", "the first revision", "the second revision"]}
 
 
 async def test_a_failed_revision_keeps_the_previous_draft(
@@ -273,12 +287,9 @@ async def test_a_failed_revision_keeps_the_previous_draft(
     node = _report_node(llm, monkeypatch, failures=failures)
     caplog.set_level(logging.WARNING, logger=nodes.__name__)
 
-    # `report_version` counts the draft that exists, as it does when the graph reaches a revision.
-    result = await node(
-        _state(report="draft one", report_version=1, report_revision_instruction="- Shorten it.")
-    )
+    result = await node(_state(reports=["draft one"], report_reviews=[_round("Shorten it.")]))
 
-    # Nothing overwrites `report`, so the previous draft stays the one that is delivered.
+    # Nothing is appended to `reports`, so the previous draft stays the one that is delivered.
     assert result == {"report_revision_failed": True}
     assert llm.calls == 1
     # Without this the run would end on a review stage asking for a revision that never arrives.
@@ -313,11 +324,15 @@ class _FakeReviewLLM:
     """A structured-output LLM returning one canned result, or raising it.
 
     Records the messages of each call so the request's own contract can be checked. The
-    grounded review, a plain call on the same model, approves and is not recorded.
+    grounded review, a plain call on the same model, answers `grounded_answer` and is not
+    recorded.
     """
 
-    def __init__(self, result: dict[str, Any] | Exception) -> None:
+    def __init__(
+        self, result: dict[str, Any] | Exception, *, grounded_answer: str = "No violations."
+    ) -> None:
         self._result = result
+        self._grounded_answer = grounded_answer
         self.calls: list[list[BaseMessage]] = []
         self.grounded_review_calls = 0
 
@@ -326,7 +341,7 @@ class _FakeReviewLLM:
 
     async def ainvoke(self, messages: list[BaseMessage]) -> AIMessage:
         self.grounded_review_calls += 1
-        return AIMessage(content="No violations.")
+        return AIMessage(content=self._grounded_answer)
 
     def with_structured_output(
         self, schema: type[Any], *, include_raw: bool = False
@@ -385,9 +400,18 @@ async def test_an_approved_draft_within_the_ceiling_is_delivered(
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
 
-    result = await node(_state(report=_conforming_draft("a short draft"), report_version=1))
+    state = _state(reports=[_conforming_draft("a short draft")])
+    result = await node(state)
 
-    assert result == {"report_revision_instruction": None}
+    assert _instruction_after(state, result) is None
+    # The round is stored whole: each review's response, beside the app's own rules' findings.
+    [review_round] = result["report_reviews"]
+    assert review_round == ReportReviewRound(
+        draft_number=1,
+        rule_violations=[],
+        blind_review=ReportReview(report_violations=[]),
+        grounded_review="No violations.",
+    )
     [outcome] = stages
     assert outcome.violations == []
     assert outcome.blind_review_error is None
@@ -418,7 +442,7 @@ async def test_the_review_looks_up_cited_documents_before_checking_them(
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION, lookups=lookups)
 
-    await node(_state(report=_conforming_draft("A [doc 207, page 1]. B [doc 999, page 2].")))
+    await node(_state(reports=[_conforming_draft("A [doc 207, page 1]. B [doc 999, page 2].")]))
 
     [outcome] = stages
     [violation] = outcome.violations
@@ -432,10 +456,10 @@ async def test_violations_become_the_revision_instruction_and_reach_the_stage(
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[violation])))
     node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
 
-    result = await node(_state(report=_conforming_draft("a short draft")))
+    state = _state(reports=[_conforming_draft("a short draft")])
+    result = await node(state)
 
-    assert result["report_revision_instruction"] is not None
-    assert violation in result["report_revision_instruction"]
+    assert _instruction_after(state, result) == f"1. {violation}"
     [outcome] = stages
     assert outcome.violations == [violation]
     assert outcome.blind_review_error is None
@@ -447,9 +471,10 @@ async def test_an_approving_review_cannot_pass_an_over_ceiling_draft(
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION, max_words=3)
 
-    result = await node(_state(report=_conforming_draft("one two three four five")))
+    state = _state(reports=[_conforming_draft("one two three four five")])
+    result = await node(state)
 
-    assert result["report_revision_instruction"] is not None
+    assert _instruction_after(state, result) is not None
     [outcome] = stages
     # The count is the app's: the length violation joins the list even though the model
     # reported none, so the stage shows why the revision happens.
@@ -469,9 +494,10 @@ async def test_citations_do_not_push_a_draft_over_the_ceiling(
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, stages = _review_node(llm, monkeypatch, sections=sections, max_words=6)
 
-    result = await node(_state(report=draft))
+    state = _state(reports=[draft])
+    result = await node(state)
 
-    assert result["report_revision_instruction"] is None
+    assert _instruction_after(state, result) is None
     [outcome] = stages
     assert outcome.word_count == 6
     assert outcome.violations == []
@@ -488,12 +514,13 @@ async def test_a_references_section_the_writer_wrote_is_a_violation_and_is_count
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION, max_words=6)
 
-    result = await node(_state(report=draft))
+    state = _state(reports=[draft])
+    result = await node(state)
 
     [outcome] = stages
     # The section's own words are counted, so the draft is over a ceiling it would otherwise meet.
     assert outcome.word_count > 6
-    assert result["report_revision_instruction"] is not None
+    assert _instruction_after(state, result) is not None
     # It is reported as the extra `##` heading it is, the configured structure naming no such
     # section.
     assert any("References" in violation for violation in outcome.violations)
@@ -507,9 +534,10 @@ async def test_a_rule_violation_survives_an_approving_review(
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
 
-    result = await node(_state(report="## Overview\n\nThe answer."))
+    state = _state(reports=["## Overview\n\nThe answer."])
+    result = await node(state)
 
-    assert result["report_revision_instruction"] is not None
+    assert _instruction_after(state, result) is not None
     [outcome] = stages
     # One violation, naming the section the structure requires and the one the draft wrote.
     [violation] = outcome.violations
@@ -524,9 +552,10 @@ async def test_a_failed_review_call_still_shortens_an_over_long_draft(
     llm = _FakeReviewLLM(RuntimeError("provider is down"))
     node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION, max_words=3)
 
-    result = await node(_state(report=_conforming_draft("one two three four five")))
+    state = _state(reports=[_conforming_draft("one two three four five")])
+    result = await node(state)
 
-    assert result["report_revision_instruction"] is not None
+    assert _instruction_after(state, result) is not None
     [outcome] = stages
     # The failure and the length violation are separate facts, and both stay visible.
     assert outcome.blind_review_error == "RuntimeError"
@@ -540,13 +569,61 @@ async def test_a_failed_review_call_delivers_a_draft_within_the_ceiling(
     llm = _FakeReviewLLM(RuntimeError("provider is down"))
     node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
 
-    result = await node(_state(report=_conforming_draft("a short draft")))
+    state = _state(reports=[_conforming_draft("a short draft")])
+    result = await node(state)
 
-    assert result == {"report_revision_instruction": None}
+    assert _instruction_after(state, result) is None
+    # The failed call is stored as an absent response, never as an approval.
+    [review_round] = result["report_reviews"]
+    assert review_round.blind_review is None
     # The failure is visible as a stage of its own, with nothing to revise against.
     [outcome] = stages
     assert outcome.blind_review_error == "RuntimeError"
     assert outcome.violations == []
+
+
+async def test_a_failed_blind_review_leaves_the_rules_and_the_grounded_items_to_revise_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grounded_item = "The 2025 figure appears on no page the research retrieved."
+    llm = _FakeReviewLLM(RuntimeError("provider is down"), grounded_answer=f"1. {grounded_item}")
+    node, _ = _review_node(llm, monkeypatch, sections=_ONE_SECTION, max_words=3)
+
+    state = _state(reports=[_conforming_draft("one two three four five")])
+    result = await node(state)
+
+    [review_round] = result["report_reviews"]
+    assert review_round.blind_review is None
+    [length_violation] = review_round.rule_violations
+    assert _instruction_after(state, result) == f"1. {length_violation}\n2. {grounded_item}"
+
+
+async def test_an_empty_grounded_answer_is_stored_as_absent_and_the_round_stays_readable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty answer checked nothing: it is stored as no response, so the router and the writer
+    read the round without parsing it again."""
+    violation = "Drop 'Confidence: High' from the summary."
+    llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[violation])), grounded_answer="")
+    review_node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
+
+    draft = _conforming_draft("a short draft")
+    state = _state(reports=[draft])
+    state = {**state, **await review_node(state)}
+
+    [review_round] = state["report_reviews"]
+    assert review_round.grounded_review is None
+    [outcome] = stages
+    assert outcome.grounded_review_error == "EmptyReviewAnswerError"
+    assert nodes.route_after_report_review()(state) == "report"
+
+    writer = _RecordingReportLLM("the revised report")
+    report_node = _report_node(writer, monkeypatch, sections=_ONE_SECTION)
+    result = await report_node(state)
+
+    assert result == {"reports": [draft, "the revised report"]}
+    revision_request = writer.calls[0][-1].content
+    assert f"1. {violation}" in revision_request
 
 
 async def test_an_unparseable_verdict_is_absorbed_like_a_failed_call(
@@ -555,12 +632,38 @@ async def test_an_unparseable_verdict_is_absorbed_like_a_failed_call(
     llm = _FakeReviewLLM(_UNPARSEABLE)
     node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
 
-    result = await node(_state(report=_conforming_draft("a short draft")))
+    state = _state(reports=[_conforming_draft("a short draft")])
+    result = await node(state)
 
-    assert result == {"report_revision_instruction": None}
+    assert _instruction_after(state, result) is None
+    assert result["report_reviews"][0].blind_review is None
     [outcome] = stages
     assert outcome.blind_review_error == "ValueError"
     assert outcome.violations == []
+
+
+async def test_a_verdict_with_no_structured_output_is_a_failed_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An answer without a tool call parses to nothing without a parsing error; it checked
+    nothing, so it is reported as a failed call, never as an approval."""
+    llm = _FakeReviewLLM({"parsed": None, "parsing_error": None, "raw": AIMessage(content="")})
+    node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
+
+    result = await node(_state(reports=[_conforming_draft("a short draft")]))
+
+    assert result["report_reviews"][0].blind_review is None
+    [outcome] = stages
+    assert outcome.blind_review_error == "ValueError"
+
+
+@pytest.mark.parametrize("answer", ["", "   "])
+def test_a_blank_stored_grounded_review_contributes_nothing(answer: str) -> None:
+    review_round = ReportReviewRound(
+        draft_number=1, rule_violations=["Shorten it."], blind_review=None, grounded_review=answer
+    )
+
+    assert nodes.review_violations(review_round) == ["Shorten it."]
 
 
 async def test_the_logged_duration_is_the_call_only_not_the_whole_node(
@@ -578,7 +681,7 @@ async def test_the_logged_duration_is_the_call_only_not_the_whole_node(
     monkeypatch.setattr(nodes.time, "monotonic", lambda: next(tick) * 1.0)
     caplog.set_level(logging.INFO, logger=nodes.__name__)
 
-    await node(_state(report=_conforming_draft("a short draft")))
+    await node(_state(reports=[_conforming_draft("a short draft")]))
 
     [stage] = stages
     records = [record.getMessage() for record in caplog.records]
@@ -599,7 +702,7 @@ async def test_violations_reach_the_stage_but_never_a_log_record(
     node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION)
     caplog.set_level(logging.DEBUG, logger=nodes.__name__)
 
-    await node(_state(report=_conforming_draft("a short draft")))
+    await node(_state(reports=[_conforming_draft("a short draft")]))
 
     assert stages[0].violations == [violation]
     records = [record.getMessage() for record in caplog.records]
@@ -616,10 +719,10 @@ async def test_the_stage_reports_the_draft_being_reviewed(
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, stages = _review_node(llm, monkeypatch, sections=_ONE_SECTION, max_words=1200)
 
-    await node(_state(report=_conforming_draft("a short draft"), report_version=2))
+    await node(_state(reports=["the first draft", _conforming_draft("a short draft")]))
 
     [outcome] = stages
-    # The stage reports the state's version index as-is: this is the second draft.
+    # The draft number is the count of drafts written: this is the second one.
     assert outcome.draft_number == 2
     assert outcome.max_words == 1200
 
@@ -633,8 +736,8 @@ async def test_the_review_request_carries_neither_findings_nor_a_research_review
 
     await node(
         _state(
-            report=draft,
-            messages=[
+            reports=[draft],
+            research_agent_messages=[
                 HumanMessage(content="Research question:\nq\n\n1. the approved plan step"),
                 AIMessage(
                     content="",
@@ -645,7 +748,13 @@ async def test_the_review_request_carries_neither_findings_nor_a_research_review
                     tool_call_id="call_1",
                 ),
             ],
-            plans=[["the approved plan step"], ["a step research-review authored"]],
+            approved_plan=["the approved plan step"],
+            research_reviews=[
+                ResearchReview(
+                    assessment="One step is open.",
+                    next_steps=["a step research-review authored"],
+                )
+            ],
         )
     )
 
@@ -686,7 +795,7 @@ async def test_the_review_system_prompt_makes_a_written_references_section_a_vio
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, _ = _review_node(llm, monkeypatch, sections=_CUSTOM_SECTIONS)
 
-    await node(_state(report="one two three"))
+    await node(_state(reports=["one two three"]))
 
     [system, request] = llm.calls[0]
     assert isinstance(system.content, str)
@@ -720,7 +829,7 @@ async def test_the_review_system_prompt_can_decide_the_dataset_citation_check(
     llm = _FakeReviewLLM(_parsed(ReportReview(report_violations=[])))
     node, _ = _review_node(llm, monkeypatch, sections=_CUSTOM_SECTIONS)
 
-    await node(_state(report="one two three"))
+    await node(_state(reports=["one two three"]))
 
     [system, request] = llm.calls[0]
     assert isinstance(system.content, str)

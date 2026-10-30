@@ -10,14 +10,26 @@ from typing import Any
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage, HumanMessage, messages_to_dict
 
 import dial_deep_research.app.completion as completion_module
 import dial_deep_research.app.playground.runner as playground_runner_module
 from dial_deep_research.app.data_sources import DataSources
-from dial_deep_research.app.history import PrepState
+from dial_deep_research.app.history import (
+    CrossTurnPrepState,
+    Plan,
+    PreparationDialState,
+    create_dial_state,
+)
 from dial_deep_research.app.mcp_tools import LoadedMcpTools
 from dial_deep_research.app.playground.runner import PlaygroundRunner
+from dial_deep_research.app.preparation.tools import PrepReviews
 from dial_deep_research.app.research.data_queries import DataQueryStore
+from dial_deep_research.app.research.snapshot import (
+    SNAPSHOT_VERSION,
+    ResearchSnapshot,
+    ResumePoint,
+)
 from dial_deep_research.app_properties import ApplicationProperties
 
 COMPLETIONS_URL = "/openai/deployments/deep-research/chat/completions"
@@ -73,7 +85,9 @@ def test_a_handed_off_conversation_makes_no_data_sources_call(
     fetches: list[ApplicationProperties],
 ) -> None:
     monkeypatch.setattr(
-        completion_module, "load_last_prep_state", lambda request: PrepState(research_started=True)
+        completion_module,
+        "load_last_prep_state",
+        lambda request: CrossTurnPrepState(research_started=True),
     )
 
     response = _post(client)
@@ -93,9 +107,11 @@ def test_one_fetch_reaches_both_preparation_and_research(
         appended_content = False
 
         def __init__(self, choice: Any) -> None:
-            pass
+            self.reviews = PrepReviews()
 
-        async def run(self, *, prep_state: PrepState, data_sources: DataSources, **_: Any) -> list:
+        async def run(
+            self, *, prep_state: CrossTurnPrepState, data_sources: DataSources, **_: Any
+        ) -> list:
             received["prep"] = data_sources
             prep_state.research_started = True
             return []
@@ -104,11 +120,13 @@ def test_one_fetch_reaches_both_preparation_and_research(
         def __init__(self, choice: Any, **_: Any) -> None:
             pass
 
-        async def run(self, _prep_state: PrepState, *, data_sources: DataSources, **_: Any) -> list:
+        async def run(
+            self, _prep_state: CrossTurnPrepState, *, data_sources: DataSources, **_: Any
+        ) -> list:
             received["research"] = data_sources
             return []
 
-    async def no_persist(*_args: Any, **_kwargs: Any) -> None:
+    def no_persist(*_args: Any, **_kwargs: Any) -> None:
         return None
 
     monkeypatch.setattr(completion_module, "PrepAgentRunner", _Prep)
@@ -174,23 +192,47 @@ def test_a_conversation_whose_research_failed_fetches_the_data_sources(
         appended_content = False
 
         def __init__(self, choice: Any) -> None:
-            pass
+            self.reviews = PrepReviews()
 
         async def run(self, **_: Any) -> list:
             return []
 
-    async def no_persist(*_args: Any, **_kwargs: Any) -> None:
+    def no_persist(*_args: Any, **_kwargs: Any) -> None:
         return None
 
-    failed_research_state = {
-        "messages": [],
-        "preparation": PrepState(
-            current_query="How did inflation change in 2024?",
-            plan_id="0123abcd0123abcd0123abcd0123abcd",
-        ).model_dump(mode="json"),
-        "research_snapshot": {"plan_id": "0123abcd0123abcd0123abcd0123abcd", "resumable": True},
-        "turn_failed": True,
-    }
+    query = "How did inflation change in 2024?"
+    plan_id = "0123abcd0123abcd0123abcd0123abcd"
+    research = ResearchSnapshot(
+        plan_id=plan_id,
+        resumable=True,
+        version=SNAPSHOT_VERSION,
+        resume_at=ResumePoint.RESEARCH,
+        research_query=query,
+        approved_plan=["Find the IMF:WEO inflation series."],
+        research_agent_messages=messages_to_dict([HumanMessage(content="Research the query.")]),
+        research_iteration=0,
+        research_reviews=[],
+        reports=[],
+        report_reviews=[],
+        report_revision_failed=False,
+        data_queries="{}",
+    )
+    # The preparation part as a failed research run saves it: approval and research-started
+    # reset, beside the preparation agent's messages.
+    failed_research_state = create_dial_state(
+        PreparationDialState(
+            prep_state=CrossTurnPrepState(
+                current_query=query,
+                plan=Plan(steps=["Find the IMF:WEO inflation series."]),
+                plan_id=plan_id,
+                plan_approved=False,
+                research_started=False,
+            ),
+            agent_messages=[HumanMessage(content="yes, go"), AIMessage(content="Starting.")],
+        ),
+        research=research.model_dump(mode="json"),
+        turn_failed=True,
+    )
     monkeypatch.setattr(completion_module, "PrepAgentRunner", _Prep)
     monkeypatch.setattr(completion_module.DeepResearchCompletion, "_persist", no_persist)
 

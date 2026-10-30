@@ -30,6 +30,7 @@ from .nodes import (
     build_research_agent,
     make_report_node,
     make_report_review_node,
+    make_research_agent_node,
     make_research_review_node,
     route_after_report,
     route_after_report_review,
@@ -115,9 +116,12 @@ def build_research_graph(
     )
 
     builder = StateGraph(ResearchState)
-    builder.add_node(node="research-agent", action=research_agent)
     # mypy can't infer the node's TypedDict state param from an async callable; the
     # plain-function node form is the documented one and works at runtime.
+    builder.add_node(
+        node="research-agent",
+        action=make_research_agent_node(research_agent),  # type: ignore[call-overload]
+    )
     builder.add_node(
         node="research-review",
         action=make_research_review_node(  # type: ignore[call-overload]

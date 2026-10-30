@@ -17,26 +17,28 @@ from dial_deep_research.app.error_resolution import (
     repeating_failure,
 )
 from dial_deep_research.app.history import (
-    FAILURE_STATE_KEY,
-    SNAPSHOT_STATE_KEY,
-    DialState,
-    PrepState,
+    CrossTurnPrepState,
+    PreparationDialState,
     create_dial_state,
     load_last_prep_state,
 )
 from dial_deep_research.app.preparation.runner import PrepAgentRunner
+from dial_deep_research.app.preparation.tools import PrepReviews
 from dial_deep_research.app.properties import load_application_properties
 from dial_deep_research.app.research.runner import ResearchRunner
 from dial_deep_research.app.research.snapshot import (
     DiscardedSnapshot,
     ResumableSnapshot,
+    build_completed_record,
     build_snapshot,
+    discard_for_missing_image,
     find_latest_snapshot,
     read_snapshot,
 )
 from dial_deep_research.app.turn_lifecycle import run_logged_turn
 from dial_deep_research.app_properties import DEPLOYMENT_NAME
 from dial_deep_research.settings import PLACEHOLDER_API_KEY, settings
+from dial_deep_research.utils.image_attachments import download_snapshot_images
 from dial_deep_research.utils.llm import LLMModelConfig
 from dial_deep_research.utils.tracing import build_opik_tracer, extract_thread_id
 
@@ -81,11 +83,22 @@ class _SavedInstead(StrEnum):
 class _TurnProgress:
     """How far a turn got, which decides what it persists if it fails."""
 
-    prep_state: PrepState
+    prep_state: CrossTurnPrepState
     prep_messages: list[BaseMessage] | None = None
+    prep_reviews: PrepReviews | None = None
     research: ResearchRunner | None = None
     # The SDK allows one state write per turn and has no accessor that says whether one was made.
     state_saved: bool = False
+
+    def preparation(self, prep_state: CrossTurnPrepState) -> PreparationDialState:
+        """The turn's preparation part with `prep_state`: its agent messages and reviews."""
+        reviews = self.prep_reviews or PrepReviews()
+        return PreparationDialState(
+            prep_state=prep_state,
+            agent_messages=list(self.prep_messages or []),
+            query_reviews=reviews.query_reviews,
+            plan_reviews=reviews.plan_reviews,
+        )
 
     def save_state(self, choice: Choice, state: dict[str, Any]) -> bytes:
         """Encode `state` as JSON, then make the turn's one state write; return the encoding.
@@ -111,13 +124,16 @@ def _encode_strictly(value: Any) -> bytes:
 
 
 def _save_closing_state(turn: _TurnProgress, choice: Choice) -> _SavedInstead:
-    """Save the turn's `PrepState` with research started and no transcript, after its report.
+    """Save the turn's `CrossTurnPrepState` with research started and nothing else, after its
+    report.
 
     It closes the conversation as the full state would: the next request is refused before its
-    history is rebuilt, so no later turn reads the transcript it lacks.
+    history is rebuilt, so no later turn reads the agent messages or the research record it lacks.
     """
     try:
-        turn.save_state(choice, DialState(messages=[], preparation=turn.prep_state).to_dict())
+        turn.save_state(
+            choice, create_dial_state(preparation=PreparationDialState(prep_state=turn.prep_state))
+        )
     except Exception:
         return _SavedInstead.NOTHING
     return _SavedInstead.CLOSING_STATE
@@ -126,11 +142,12 @@ def _save_closing_state(turn: _TurnProgress, choice: Choice) -> _SavedInstead:
 class DeepResearchCompletion(ChatCompletion):
     """DIAL chat completion: a preparation agent that hands off to the research graph.
 
-    One turn runs the preparation agent; if it approves the plan (`start_research`),
-    the research graph runs in the same turn and streams the report. The whole turn's
-    transcript plus the final `PrepState` are persisted once, and once the report is written
-    nothing fails the turn. Every state is encoded before that one write, and a state that cannot
-    be built or encoded falls back to a smaller one (see the research-resume spec).
+    One turn runs the preparation agent; if it approves the plan (`start_research`), the research
+    graph runs in the same turn and streams the report. The turn's state is persisted once: its
+    preparation part (the final `CrossTurnPrepState`, the preparation agent's messages and its
+    checks' responses) and, when research ran, its research record. Once the report is written
+    nothing fails the turn. Every state is encoded before that one write, and a state that cannot be
+    built or encoded falls back to a smaller one (see the research-resume spec).
 
     Any turn-aborting failure — an exception, an unconfigured instance, or a conversation whose
     report was already delivered — is resolved to a user-safe message and delivered through the
@@ -181,14 +198,13 @@ class DeepResearchCompletion(ChatCompletion):
             prep_runner = PrepAgentRunner(choice)
             prep_messages = await prep_runner.run(
                 request=request,
-                dial=dial,
                 prep_state=prep_state,
                 prompts=properties.prompts,
                 data_sources=data_sources,
                 opik_tracer=opik_tracer,
             )
             turn.prep_messages = list(prep_messages)
-            messages: list[BaseMessage] = list(prep_messages)
+            turn.prep_reviews = prep_runner.reviews
             _log.info(
                 "Preparation completed: duration=%.1fs research_started=%s plan_steps=%d "
                 "outstanding_questions=%d",
@@ -201,25 +217,23 @@ class DeepResearchCompletion(ChatCompletion):
             if prep_state.research_started:
                 # start_research fired this turn — run the research graph on the same choice.
                 # The per-request bearer token (when present) is forwarded to the RAG MCP for
-                # per-user access; the api-key is handled by header propagation.
-                resumed = self._find_resumable_snapshot(request, choice, prep_state)
+                # per-user access; the api-key is handled by header propagation. The runner
+                # exists before the snapshot lookup, so a failure there, such as an image that
+                # cannot be downloaded, is a research failure before the graph streamed state.
                 turn.research = ResearchRunner(
                     choice, content_already_streamed=prep_runner.appended_content
                 )
-                research_messages = await turn.research.run(
+                resumed = await self._find_resumable_snapshot(request, choice, prep_state, dial)
+                await turn.research.run(
                     prep_state,
                     properties=properties,
                     data_sources=data_sources,
                     opik_tracer=opik_tracer,
                     bearer_token=request.bearer_token,
                     resumed=resumed,
-                    dial=dial,
                 )
-                messages.extend(research_messages)
 
-            await self._persist(
-                turn, choice, messages, dial, report_written=prep_state.research_started
-            )
+            self._persist(turn, choice, report_written=prep_state.research_started)
         except Exception as failure:
             await self._persist_failure(
                 request=request, choice=choice, dial=dial, turn=turn, failure=failure
@@ -227,20 +241,30 @@ class DeepResearchCompletion(ChatCompletion):
             raise
 
     @staticmethod
-    def _find_resumable_snapshot(
-        request: Request, choice: Choice, prep_state: PrepState
+    async def _find_resumable_snapshot(
+        request: Request, choice: Choice, prep_state: CrossTurnPrepState, dial: AsyncDial
     ) -> ResumableSnapshot | None:
-        """The latest snapshot in the history, when it is a resumable one of the current plan.
+        """The latest research record in the history, when it is a resumable snapshot of the
+        current plan, with its images downloaded.
 
-        When a snapshot is found, a closed stage says whether it is reused or discarded, and one
-        INFO record carries the same facts. A snapshot that cannot be read raises its refusal.
+        When a record is found, a closed stage says whether it is reused or discarded, and one
+        INFO record carries the same facts. The images are downloaded before the stage, so the
+        stage says what the turn does: an image that is gone discards the snapshot, and research
+        runs fresh. A record that cannot be read raises its refusal, and an image that still
+        cannot be downloaded raises `SnapshotImageUnavailableError`.
         """
         raw = find_latest_snapshot(request.messages)
         if raw is None:
             return None
         if prep_state.plan_id is None:
             raise ValueError("Research started without a plan id")
-        outcome = read_snapshot(raw, current_plan_id=prep_state.plan_id)
+        outcome: ResumableSnapshot | DiscardedSnapshot = read_snapshot(
+            raw, current_plan_id=prep_state.plan_id
+        )
+        if isinstance(outcome, ResumableSnapshot) and await download_snapshot_images(
+            messages=outcome.messages, dial=dial
+        ):
+            outcome = discard_for_missing_image(outcome)
         if isinstance(outcome, DiscardedSnapshot):
             facts = outcome.facts(current_plan_id=prep_state.plan_id)
             _show_snapshot_stage(choice, title=_SNAPSHOT_DISCARDED_STAGE, facts=facts)
@@ -251,25 +275,27 @@ class DeepResearchCompletion(ChatCompletion):
         _log.info("Snapshot reused: %s", _render_facts(facts))
         return outcome
 
-    async def _persist(
-        self,
-        turn: _TurnProgress,
-        choice: Choice,
-        messages: list[BaseMessage],
-        dial: AsyncDial,
-        *,
-        report_written: bool,
-    ) -> None:
-        """Save the completed turn's state.
+    @staticmethod
+    def _persist(turn: _TurnProgress, choice: Choice, *, report_written: bool) -> None:
+        """Save the completed turn's full state.
 
-        An image that cannot be uploaded, the files bucket that cannot be resolved included, is
-        saved as a placeholder. Once the report is written, a state that cannot be built or
-        encoded is replaced by the closing state, and the turn completes with one WARNING: a
-        report costs a whole research run, and failing the turn would cost the user the report.
+        When research ran, the state carries the run's research record, marked not resumable
+        with the reason `completed`, every image a placeholder, so no files call is made. Once
+        the report is written, a state that cannot be built or encoded is replaced by the closing
+        state, and the turn completes with one WARNING: a report costs a whole research run, and
+        failing the turn would cost the user the report.
         """
         try:
-            state = await create_dial_state(
-                messages=messages, preparation=turn.prep_state, dial=dial
+            research = None
+            if turn.research is not None:
+                if turn.prep_state.plan_id is None:
+                    raise ValueError("Research started without a plan id")
+                record = build_completed_record(
+                    progress=turn.research.completed_progress(), plan_id=turn.prep_state.plan_id
+                )
+                research = record.model_dump(mode="json")
+            state = create_dial_state(
+                preparation=turn.preparation(prep_state=turn.prep_state), research=research
             )
             turn.save_state(choice, state)
         except Exception as error:
@@ -325,7 +351,8 @@ class DeepResearchCompletion(ChatCompletion):
         failure: Exception,
     ) -> _FailureRecordReason | None:
         """Save the failed research run's snapshot beside the turn's preparation messages and its
-        `PrepState` with approval and research-started reset, so the conversation stays open.
+        `CrossTurnPrepState` with approval and research-started reset, so the conversation stays
+        open.
 
         Returns `None` when nothing is left to save, else why the failure record is saved instead.
         """
@@ -338,17 +365,20 @@ class DeepResearchCompletion(ChatCompletion):
             if plan_id is None:
                 raise ValueError("Research started without a plan id")
             snapshot = await build_snapshot(
-                progress, plan_id=plan_id, resumable=failure_class is None, dial=dial
+                progress=progress,
+                plan_id=plan_id,
+                repeating_failure=failure_class is not None,
+                dial=dial,
             )
             saved_prep = turn.prep_state.model_copy(
                 update={"plan_approved": False, "research_started": False}
             )
-            state = await create_dial_state(
-                messages=list(turn.prep_messages or []), preparation=saved_prep, dial=dial
-            )
             snapshot_dict = snapshot.model_dump(mode="json")
-            state[SNAPSHOT_STATE_KEY] = snapshot_dict
-            state[FAILURE_STATE_KEY] = True
+            state = create_dial_state(
+                preparation=turn.preparation(prep_state=saved_prep),
+                research=snapshot_dict,
+                turn_failed=True,
+            )
             encoded_state = turn.save_state(choice, state)
         except Exception as error:
             _log.warning(
@@ -357,16 +387,21 @@ class DeepResearchCompletion(ChatCompletion):
             )
             # A state write that raised still counts as made, so no failure record can follow.
             return None if turn.state_saved else _FailureRecordReason.SNAPSHOT_FAILED
+        not_resumable = ""
+        if snapshot.not_resumable_reason is not None:
+            not_resumable = f" not_resumable_reason={snapshot.not_resumable_reason}"
+            if failure_class is not None:
+                not_resumable += f" failure_class={failure_class}"
         _log.info(
             "Snapshot saved: plan_id=%s resumable=%s%s resume_at=%s research_iteration=%d "
-            "messages=%d report_version=%d data_queries=%d snapshot_bytes=%d state_bytes=%d",
+            "messages=%d draft_number=%d data_queries=%d snapshot_bytes=%d state_bytes=%d",
             plan_id,
             snapshot.resumable,
-            f" failure_class={failure_class}" if failure_class is not None else "",
+            not_resumable,
             snapshot.resume_at,
             snapshot.research_iteration,
-            len(snapshot.messages),
-            snapshot.report_version,
+            len(snapshot.research_agent_messages),
+            len(snapshot.reports),
             len(progress.data_queries),
             len(_encode_strictly(snapshot_dict)),
             len(encoded_state),
@@ -377,16 +412,16 @@ class DeepResearchCompletion(ChatCompletion):
     def _persist_failure_record(
         *, request: Request, choice: Choice, turn: _TurnProgress, reason: _FailureRecordReason
     ) -> None:
-        """Save an empty `messages`, the failure flag, and the `PrepState` the turn started from.
+        """Save the `CrossTurnPrepState` the turn started from with nothing beside it, and the
+        failure flag.
 
-        The `PrepState` is read again from the request because preparation mutates the loaded one
-        in place, and a tool call of a turn that failed must not survive into the next turn.
+        The `CrossTurnPrepState` is read again from the request because preparation mutates the
+        loaded one in place, and a tool call of a turn that failed must not survive into the next
+        turn.
         """
         try:
-            preparation = load_last_prep_state(request)
-            state = DialState(messages=[], preparation=preparation).to_dict()
-            state[FAILURE_STATE_KEY] = True
-            turn.save_state(choice, state)
+            preparation = PreparationDialState(prep_state=load_last_prep_state(request))
+            turn.save_state(choice, create_dial_state(preparation=preparation, turn_failed=True))
         except Exception as error:
             _log.warning("Failure record could not be saved: error=%s", type(error).__name__)
             return

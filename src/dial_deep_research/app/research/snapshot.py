@@ -1,10 +1,11 @@
-"""The snapshot a failed research run saves, so a later turn can resume it.
+"""The research record every research turn saves, and the snapshot a later turn resumes.
 
-A snapshot is the app's own versioned JSON, stored under its own key of the failed turn's state
-(`history.SNAPSHOT_STATE_KEY`). It names its resume point in the app's own terms, never by graph
-node, so renaming a node does not break a pending resume: `RESUME_POINT_NODES` is the one place
-the two meet. `read_snapshot` decides, header first, whether a snapshot found in the history is
-resumed, discarded or refused (see the research-resume spec).
+A record is the app's own versioned JSON, stored under its own key of the turn's state
+(`history.SNAPSHOT_STATE_KEY`). A failed run's record is its snapshot; a completed run's record
+has the same shape and is never resumed. A record names its resume point in the app's own terms,
+never by graph node, so renaming a node does not break a pending resume: `RESUME_POINT_NODES` is
+the one place the two meet. `read_snapshot` decides, header first, whether the latest record in
+the history is resumed, discarded or refused (see the research-resume spec).
 """
 
 from __future__ import annotations
@@ -30,9 +31,14 @@ from dial_deep_research.app.error_resolution import (
     SnapshotVersionUnsupportedError,
 )
 from dial_deep_research.app.history import SNAPSHOT_STATE_KEY, raw_dial_state
-from dial_deep_research.utils.image_attachments import upload_image_blocks
+from dial_deep_research.utils.image_attachments import (
+    replace_images_with_placeholders,
+    upload_snapshot_images,
+)
 
 from .data_queries import DataQueryRecord
+from .prompts import ResearchReview
+from .state import ReportReviewRound
 
 SNAPSHOT_VERSION = 1
 """Bumped by a format change that a reader of the current version could not read. A change that
@@ -57,28 +63,39 @@ RESUME_POINT_NODES: dict[ResumePoint, str] = {
 """The research graph's node for each resume point."""
 
 
+class NotResumableReason(StrEnum):
+    """Why a research record will not be resumed."""
+
+    COMPLETED = "completed"
+    REPEATING_FAILURE = "repeating_failure"
+    IMAGE_UPLOAD_FAILED = "image_upload_failed"
+
+
 class ResearchSnapshot(BaseModel):
-    """A failed run's progress, as persisted.
+    """A research record, as persisted: a failed run's snapshot, or a completed run's record.
 
     `plan_id`, `resumable` and `version` are the stable header: every format version keeps their
-    names and meaning, so any release can tell whether a snapshot is to be resumed before it reads
-    the rest. The channels mirror `ResearchState`, the transcript under `messages` as
-    `messages_to_dict` writes it.
+    names and meaning, so any release can tell whether a record is to be resumed before it reads
+    the rest. `not_resumable_reason` is set exactly when `resumable` is false, and `resume_at` is
+    `None` only on a completed run's record. The other fields mirror `ResearchState`, field for
+    field, the research-agent messages as `messages_to_dict` writes them; the reviews are declared
+    with their models, so a resumed run holds the same types as a fresh one.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     plan_id: str
     resumable: bool
+    not_resumable_reason: NotResumableReason | None = None
     version: int
-    resume_at: ResumePoint
-    messages: list[dict[str, Any]]
-    original_query: str
-    plans: list[list[str]]
+    resume_at: ResumePoint | None
+    research_query: str
+    approved_plan: list[str]
+    research_agent_messages: list[dict[str, Any]]
     research_iteration: int
-    report: str | None
-    report_version: int
-    report_revision_instruction: str | None
+    research_reviews: list[ResearchReview]
+    reports: list[str]
+    report_reviews: list[ReportReviewRound]
     report_revision_failed: bool
     data_queries: str
     """The turn's data-query records as one JSON string (`encode_data_queries`). A client may
@@ -88,40 +105,65 @@ class ResearchSnapshot(BaseModel):
 
 
 class CapturedProgress(BaseModel):
-    """What the research runner had seen of a run when it failed, before it becomes a snapshot."""
+    """What the research runner had seen of a run, before it becomes a research record."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    resume_at: ResumePoint
+    resume_at: ResumePoint | None
+    """The node that was running when the run failed; `None` for a run that completed."""
     messages: list[BaseMessage]
+    """Research-agent's messages to store."""
     channels: dict[str, Any]
-    """The research graph's root state as the running node received it."""
+    """The research graph's root state: as the running node received it, or as the run ended."""
     data_queries: dict[str, DataQueryRecord]
 
 
 async def build_snapshot(
-    progress: CapturedProgress, *, plan_id: str, resumable: bool, dial: AsyncDial
+    progress: CapturedProgress, *, plan_id: str, repeating_failure: bool, dial: AsyncDial
 ) -> ResearchSnapshot:
-    """Upload the transcript's images to DIAL files, then build the snapshot to persist.
+    """Upload the transcript's images to DIAL files, then build the failed run's snapshot.
 
-    Rewrites the image blocks of `progress.messages` in place. A failed bucket lookup re-raises
-    rather than leaving placeholders, because a snapshot without its images would resume research
-    without what research-agent saw.
+    Rewrites the image blocks of `progress.messages` in place. A snapshot with an image that
+    could not be stored is still built, marked not resumable: resuming without what research-agent
+    saw could mislead the report. A failure a resume would repeat names that reason instead,
+    because a resume could never get past it.
     """
-    await upload_image_blocks(progress.messages, dial, reraise_bucket_failure=True)
+    not_stored = await upload_snapshot_images(messages=progress.messages, dial=dial)
+    if repeating_failure:
+        reason: NotResumableReason | None = NotResumableReason.REPEATING_FAILURE
+    elif not_stored:
+        reason = NotResumableReason.IMAGE_UPLOAD_FAILED
+    else:
+        reason = None
+    return _research_record(progress=progress, plan_id=plan_id, not_resumable_reason=reason)
+
+
+def build_completed_record(progress: CapturedProgress, *, plan_id: str) -> ResearchSnapshot:
+    """The record of a run that delivered its report: never resumed, every image a placeholder,
+    and no files call made."""
+    replace_images_with_placeholders(messages=progress.messages)
+    return _research_record(
+        progress=progress, plan_id=plan_id, not_resumable_reason=NotResumableReason.COMPLETED
+    )
+
+
+def _research_record(
+    progress: CapturedProgress, *, plan_id: str, not_resumable_reason: NotResumableReason | None
+) -> ResearchSnapshot:
     channels = progress.channels
     return ResearchSnapshot(
         plan_id=plan_id,
-        resumable=resumable,
+        resumable=not_resumable_reason is None,
+        not_resumable_reason=not_resumable_reason,
         version=SNAPSHOT_VERSION,
         resume_at=progress.resume_at,
-        messages=messages_to_dict(progress.messages),
-        original_query=channels["original_query"],
-        plans=channels["plans"],
+        research_query=channels["research_query"],
+        approved_plan=channels["approved_plan"],
+        research_agent_messages=messages_to_dict(progress.messages),
         research_iteration=channels["research_iteration"],
-        report=channels["report"],
-        report_version=channels["report_version"],
-        report_revision_instruction=channels["report_revision_instruction"],
+        research_reviews=channels["research_reviews"],
+        reports=channels["reports"],
+        report_reviews=channels["report_reviews"],
         report_revision_failed=channels["report_revision_failed"],
         data_queries=encode_data_queries(progress.data_queries),
     )
@@ -146,15 +188,22 @@ def decode_data_queries(text: str) -> dict[str, DataQueryRecord]:
 class DiscardReason(StrEnum):
     PLAN_CHANGED = "plan_changed"
     NOT_RESUMABLE = "not_resumable"
+    IMAGE_MISSING = "image_missing"
 
 
 class DiscardedSnapshot(BaseModel):
-    """A snapshot found in the history that will not be resumed. Read no further than its header,
-    so `resume_at` is set only when the snapshot names a known resume point."""
+    """A record found in the history that will not be resumed.
+
+    One discarded for `plan_changed` or `not_resumable` is read no further than its header, so
+    `resume_at` is set only when it reads as a known value, and `not_resumable_reason` only for
+    `not_resumable`, when it reads as a known reason. One discarded for `image_missing` was read
+    whole, and names its resume point.
+    """
 
     plan_id: str
     reason: DiscardReason
     resume_at: ResumePoint | None
+    not_resumable_reason: NotResumableReason | None = None
 
     def facts(self, *, current_plan_id: str) -> list[tuple[str, str]]:
         """What the "existing snapshot discarded" stage and log record say: ids and names only."""
@@ -163,6 +212,8 @@ class DiscardedSnapshot(BaseModel):
             ("current_plan_id", current_plan_id),
             ("reason", self.reason.value),
         ]
+        if self.not_resumable_reason is not None:
+            facts.append(("not_resumable_reason", self.not_resumable_reason.value))
         if self.resume_at is not None:
             facts.append(("resume_at", self.resume_at.value))
         return facts
@@ -178,49 +229,64 @@ class ResumableSnapshot(BaseModel):
     data_queries: dict[str, DataQueryRecord]
 
     @property
-    def agent_turns_completed(self) -> int | None:
-        """For resume point research: the model calls the failed iteration completed, which are
-        the `AIMessage`s after its instruction, the last `HumanMessage`."""
+    def resume_at(self) -> ResumePoint:
+        """Where the resumed run enters; `read_snapshot` refuses a resumable record without one."""
+        if self.snapshot.resume_at is None:
+            raise ValueError("A resumable snapshot names no resume point")
+        return self.snapshot.resume_at
+
+    @property
+    def draft_number(self) -> int:
+        """The latest draft's number, 0 while no draft exists."""
+        return len(self.snapshot.reports)
+
+    @property
+    def restored_model_calls_in_iteration(self) -> int | None:
+        """For resume point research: the interrupted iteration's model calls the snapshot
+        restores, which the resumed run does not make again. They are the `AIMessage`s after the
+        iteration's instruction, the last `HumanMessage`."""
         if self.snapshot.resume_at is not ResumePoint.RESEARCH:
             return None
-        turns = 0
+        model_calls = 0
         for message in reversed(self.messages):
             if isinstance(message, HumanMessage):
                 break
             if isinstance(message, AIMessage):
-                turns += 1
-        return turns
+                model_calls += 1
+        return model_calls
 
     @property
     def report_review_round(self) -> int | None:
-        """For resume point report review: the round to run, which reviews draft `report_version`."""
+        """For resume point report review: the round to run, which reviews the latest draft."""
         if self.snapshot.resume_at is not ResumePoint.REPORT_REVIEW:
             return None
-        return self.snapshot.report_version
+        return self.draft_number
 
     def facts(self) -> list[tuple[str, str]]:
         """What the "reusing snapshot" stage and log record say: ids, names and counts only."""
         snapshot = self.snapshot
         facts = [
             ("plan_id", snapshot.plan_id),
-            ("resume_at", snapshot.resume_at.value),
+            ("resume_at", self.resume_at.value),
             ("research_iteration", str(snapshot.research_iteration)),
             ("messages", str(len(self.messages))),
-            ("report_version", str(snapshot.report_version)),
+            ("draft_number", str(self.draft_number)),
         ]
-        if (turns := self.agent_turns_completed) is not None:
-            facts.append(("agent_turns_completed", str(turns)))
+        if (model_calls := self.restored_model_calls_in_iteration) is not None:
+            facts.append(("restored_model_calls_in_iteration", str(model_calls)))
         if (review_round := self.report_review_round) is not None:
             facts.append(("report_review_round", str(review_round)))
         return facts
 
 
 def find_latest_snapshot(messages: Sequence[Message]) -> Any:
-    """The raw snapshot of the latest assistant message whose state carries one, else `None`.
+    """The raw research record of the latest assistant message whose state carries one, else
+    `None`.
 
     Only the latest counts. Plan ids are only ever replaced by fresh ones, so when its id differs
-    from the current one no older snapshot can match, and a newer snapshot marked not resumable
-    shadows older ones on purpose: they belong to a run that failed in a way a resume repeats.
+    from the current one no older record can match, and a newer record marked not resumable hides
+    older ones on purpose, whatever its reason: research then reruns from the start, and that
+    turn's own record becomes the latest.
     """
     for message in reversed(messages):
         if message.role != Role.ASSISTANT:
@@ -234,11 +300,12 @@ def find_latest_snapshot(messages: Sequence[Message]) -> Any:
 def read_snapshot(raw: Any, *, current_plan_id: str) -> ResumableSnapshot | DiscardedSnapshot:
     """Decide whether `raw` is resumed, discarded or refused, reading its header first.
 
-    The plan id is compared first, then the resumable mark is read, so a snapshot of another plan
+    The plan id is compared first, then the resumable mark is read, so a record of another plan
     or one marked not resumable is discarded whatever its version or contents. Only a matching
-    resumable snapshot is read whole. Raises `SnapshotVersionUnsupportedError` for a version this
-    code does not read, and `SnapshotUnreadableError` for anything else that cannot be read,
-    chained to the original failure so the turn's error record carries both stack traces.
+    resumable snapshot is read whole; its images are downloaded afterwards, by the caller. Raises
+    `SnapshotVersionUnsupportedError` for a version this code does not read, and
+    `SnapshotUnreadableError` for anything else that cannot be read, chained to the original
+    failure so the turn's error record carries both stack traces.
     """
     plan_id = raw.get("plan_id") if isinstance(raw, dict) else None
     if not isinstance(plan_id, str):
@@ -254,16 +321,40 @@ def read_snapshot(raw: Any, *, current_plan_id: str) -> ResumableSnapshot | Disc
         raise SnapshotVersionUnsupportedError()
     try:
         snapshot = ResearchSnapshot.model_validate(raw)
+        if snapshot.resume_at is None:
+            raise ValueError("A resumable snapshot names no resume point")
         return ResumableSnapshot(
             snapshot=snapshot,
-            messages=messages_from_dict(snapshot.messages),
+            messages=messages_from_dict(snapshot.research_agent_messages),
             data_queries=decode_data_queries(snapshot.data_queries),
         )
     except Exception as failure:
         raise SnapshotUnreadableError() from failure
 
 
+def discard_for_missing_image(resumed: ResumableSnapshot) -> DiscardedSnapshot:
+    """The discard of a resumable snapshot one of whose images is gone."""
+    return DiscardedSnapshot(
+        plan_id=resumed.snapshot.plan_id,
+        reason=DiscardReason.IMAGE_MISSING,
+        resume_at=resumed.resume_at,
+    )
+
+
 def _discarded(raw: dict, *, plan_id: str, reason: DiscardReason) -> DiscardedSnapshot:
-    value = raw.get("resume_at")
-    resume_at = ResumePoint(value) if isinstance(value, str) and value in ResumePoint else None
-    return DiscardedSnapshot(plan_id=plan_id, reason=reason, resume_at=resume_at)
+    return DiscardedSnapshot(
+        plan_id=plan_id,
+        reason=reason,
+        resume_at=_known(raw.get("resume_at"), ResumePoint),
+        # Shown only when it is why the record is discarded.
+        not_resumable_reason=(
+            _known(raw.get("not_resumable_reason"), NotResumableReason)
+            if reason is DiscardReason.NOT_RESUMABLE
+            else None
+        ),
+    )
+
+
+def _known[E: StrEnum](value: Any, enum: type[E]) -> E | None:
+    """`value` as a member of `enum`, or `None` when another release may have written it."""
+    return enum(value) if isinstance(value, str) and value in enum else None

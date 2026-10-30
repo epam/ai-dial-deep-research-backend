@@ -1,18 +1,22 @@
 """The four research-graph nodes: research-agent, research-review, report, report-review.
 
-- `build_research_agent` returns a `create_agent` compiled graph used directly as
-  the research-agent subgraph node (forced tool choice + the finish_iteration sentinel).
+- `build_research_agent` returns research-agent, a `create_agent` compiled graph (forced tool
+  choice + the finish_iteration sentinel), and `make_research_agent_node` the node that runs one
+  iteration of it over the research graph's state.
 - `make_research_review_node` returns the research-review node: an independent structured LLM call
   that judges coverage and produces the next iteration's plan.
 - `make_report_node` returns the report node: it writes the first draft and every revision after
   it. Nothing it produces is streamed to the user — a draft may still be revised, so only the
   draft the loop settles on becomes assistant content, appended by the runner.
-- `make_report_review_node` returns the report-review node: an independent structured LLM call
-  that judges the draft against the report rules, emits its DIAL stage through the runner-supplied
-  callback, and records the instruction a revision would act on.
+- `make_report_review_node` returns the report-review node: the app's own rules and two LLM calls
+  judge the draft, its DIAL stage goes out through the runner-supplied callback, and the round is
+  stored whole, so the next revision's instruction is built from it.
 
-`ReportReviewOutcome.revision_instruction` is the single source for what happens to a reviewed
-draft: the router turns its presence into an edge and the review node logs the same value.
+Each node appends its model's response to the state whole, and derives what it needs from those
+lists on every run (the plan list, the draft number, the revision instruction), so a run resumed
+from a research record derives them exactly as a fresh run does. `review_violations` is the single
+source for what happens to a reviewed draft: the router, the writer and the review stage all read
+the latest round through it.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from langchain_core.messages import (
     ToolMessage,
     UsageMetadata,
 )
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel
 
@@ -62,7 +67,7 @@ from dial_deep_research.utils.llm import (
 )
 
 from .citation_lookups import CitationLookups
-from .middleware import ForceToolChoiceMiddleware, IterationCounterMiddleware
+from .middleware import ForceToolChoiceMiddleware
 from .prompts import (
     GROUNDED_REVIEW_SYSTEM_MESSAGE,
     REPORT_REQUEST,
@@ -85,11 +90,12 @@ from .prompts import (
 )
 from .report_length import LENGTH_EXEMPTIONS, count_report_words
 from .report_rules import build_report_rules, render_writer_instructions
-from .state import ResearchState
+from .state import ReportReviewRound, ResearchState
 from .tools import RULE_NEVER_ALONE, RULE_ONCE_PER_TURN, UPDATE_STATUS_TOOL_NAME
 
 logger = logging.getLogger(__name__)
 
+ResearchAgentNode = Callable[[ResearchState, RunnableConfig], Awaitable[dict[str, Any]]]
 ResearchReviewNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
 ReportNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
 ReportReviewNode = Callable[[ResearchState], Awaitable[dict[str, Any]]]
@@ -150,10 +156,57 @@ def build_research_agent(
             stream_drop_retry_middleware(),
             ForceToolChoiceMiddleware(),
             ImageBudgetMiddleware(limit=settings.max_context_images),
-            IterationCounterMiddleware(),
             ToolFailureMiddleware(),
         ],
     )
+
+
+def make_research_agent_node(agent: Any) -> ResearchAgentNode:
+    """The research-agent node: one iteration of `agent` over `research_agent_messages`.
+
+    `create_agent` fixes the agent's conversation key as `messages`, and a compiled graph added
+    directly as a node shares only the channels its parent names the same. So the node maps the
+    conversation in and out, and counts the iteration once the agent returns: a failure inside
+    the iteration leaves the count as it was, so a resumed run reads the same count until that
+    iteration ends. The agent's own stream parts keep the namespace `research-agent:<task id>` and
+    the key `messages`, which the runner reads.
+
+    The node passes its own `config` on, because `create_agent` presets `recursion_limit=9_999`
+    on the graph it returns, and that preset wins over an inherited limit. Only a config passed
+    to `ainvoke` wins over it, so without one an agent that never finishes would not be stopped
+    by the channel's step budget.
+    """
+
+    async def research_agent(state: ResearchState, config: RunnableConfig) -> dict[str, Any]:
+        result = await agent.ainvoke({"messages": state["research_agent_messages"]}, config=config)
+        return {
+            "research_agent_messages": result["messages"],
+            "research_iteration": state["research_iteration"] + 1,
+        }
+
+    return research_agent
+
+
+def iteration_plans(state: ResearchState) -> list[list[str]]:
+    """The plan of each iteration so far: the approved plan, then the next steps of each research
+    review that returned some, which are exactly the steps research-agent was given."""
+    return [
+        state["approved_plan"],
+        *(review.next_steps for review in state["research_reviews"] if review.next_steps),
+    ]
+
+
+def _render_plans(state: ResearchState) -> str:
+    return "\n\n".join(
+        f"Plan {i}:\n{render_plan(steps)}"
+        for i, steps in enumerate(iteration_plans(state), start=1)
+    )
+
+
+def latest_draft(state: ResearchState) -> str | None:
+    """The latest draft, or `None` while the writer has written none."""
+    reports = state["reports"]
+    return reports[-1] if reports else None
 
 
 def _render_findings(messages: list[BaseMessage]) -> str:
@@ -321,16 +374,15 @@ def make_research_review_node(
                 LLMModelConfig(reasoning_effort=ReasoningEffortEnum.MEDIUM)
             ).with_structured_output(ResearchReview, include_raw=True)
         )
-        plans_text = "\n\n".join(
-            f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
-        )
         review_messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(
                 content=RESEARCH_REVIEW_HUMAN_MESSAGE.format(
-                    query=state["original_query"],
-                    findings=_render_findings(_strip_status_calls(state["messages"])),
-                    plans=plans_text,
+                    query=state["research_query"],
+                    findings=_render_findings(
+                        _strip_status_calls(state["research_agent_messages"])
+                    ),
+                    plans=_render_plans(state),
                 )
             ),
         ]
@@ -344,19 +396,19 @@ def make_research_review_node(
         usage = result["raw"].usage_metadata
 
         # `research_iteration` is already the just-reviewed iteration's number: the
-        # research-agent node counts itself (`IterationCounterMiddleware`), so this node only
-        # records the plan.
-        update: dict[str, Any] = {}
-        plans = state["plans"]
+        # research-agent node counts each iteration it finishes, so this node only records the
+        # review.
+        update: dict[str, Any] = {"research_reviews": [*state["research_reviews"], review]}
         if review.next_steps:
-            plans = [*plans, review.next_steps]
-            update["plans"] = plans
-            update["messages"] = [HumanMessage(content=render_next_instruction(review.next_steps))]
+            update["research_agent_messages"] = [
+                HumanMessage(content=render_next_instruction(review.next_steps))
+            ]
 
         # Verdict mirrors `route_after_research_review` over the post-update state, so neither the
         # skeleton event nor the stage disagrees with the actual routing.
         will_continue = _should_continue_research(
-            plans_count=len(plans), research_iteration=state["research_iteration"]
+            plans_count=len(iteration_plans(state)) + (1 if review.next_steps else 0),
+            research_iteration=state["research_iteration"],
         )
         duration = time.monotonic() - start
         emit_result_stage(
@@ -382,6 +434,14 @@ def make_research_review_node(
         return update
 
     return research_review
+
+
+def _numbered_instruction(violations: Sequence[str]) -> str | None:
+    """The revision instruction for `violations`; `None` when there are none, which delivers the
+    draft as it stands."""
+    if not violations:
+        return None
+    return "\n".join(f"{i}. {violation}" for i, violation in enumerate(violations, start=1))
 
 
 class ReportReviewOutcome(BaseModel):
@@ -412,15 +472,11 @@ class ReportReviewOutcome(BaseModel):
     def revision_instruction(self) -> str | None:
         """The instruction the next revision acts on; None delivers the draft as it stands.
 
-        The single source for that decision: the review node stores it in the state, where its
-        presence routes the loop back to the report node, and the stage title reflects the same
-        value, so the two cannot disagree.
+        `violations` comes from `review_violations` over the round the node stores, and the
+        router and the writer read that round through the same function, so the stage title
+        cannot disagree with the route.
         """
-        if not self.violations:
-            return None
-        return "\n".join(
-            f"{i}. {violation}" for i, violation in enumerate(self.violations, start=1)
-        )
+        return _numbered_instruction(self.violations)
 
 
 ReportReviewResultStageEmitter = Callable[[ReportReviewOutcome], None]
@@ -442,14 +498,14 @@ class ReportBudgetExhausted(BaseModel):
 ReportBudgetExhaustedEmitter = Callable[[ReportBudgetExhausted], None]
 
 
-def report_review_budget_exhausted(*, report_version: int, max_versions: int) -> bool:
+def report_review_budget_exhausted(*, draft_number: int, max_versions: int) -> bool:
     """True iff the current draft is the last permitted version, so no rewrite may follow it.
 
     Both numbers count report versions, 1-based, which keeps the comparison plain. The report
     loop's mirror of `research_budget_exhausted`: a verdict on the last permitted version could
     not be acted on, so the router skips report review when this holds.
     """
-    return report_version >= max_versions
+    return draft_number >= max_versions
 
 
 class ReportRevisionFailure(BaseModel):
@@ -506,15 +562,14 @@ def make_report_node(
     async def report(state: ResearchState) -> dict[str, Any]:
         emit_activity(REPORT_ACTIVITY)
         llm = with_stream_drop_retry(get_chat_model(LLMModelConfig()))
-        plans_text = "\n\n".join(
-            f"Plan {i}:\n{render_plan(steps)}" for i, steps in enumerate(state["plans"], start=1)
-        )
-        previous_draft = state.get("report")
+        previous_draft = latest_draft(state)
         report_messages: list[BaseMessage] = [
             SystemMessage(content=system_prompt),
-            *_strip_status_calls(state["messages"]),
+            *_strip_status_calls(state["research_agent_messages"]),
             HumanMessage(
-                content=REPORT_REQUEST.format(query=state["original_query"], plans=plans_text)
+                content=REPORT_REQUEST.format(
+                    query=state["research_query"], plans=_render_plans(state)
+                )
             ),
         ]
         if previous_draft is not None:
@@ -526,12 +581,12 @@ def make_report_node(
                         word_count=count_report_words(previous_draft),
                         max_words=max_words,
                         length_exemptions=LENGTH_EXEMPTIONS,
-                        instruction=state.get("report_revision_instruction") or "",
+                        instruction=revision_instruction(state) or "",
                         draft=previous_draft,
                     )
                 )
             )
-        draft_number = state.get("report_version", 0) + 1
+        draft_number = len(state["reports"]) + 1
         llm_start = time.monotonic()
         try:
             response = await llm.ainvoke(report_messages)
@@ -573,10 +628,10 @@ def make_report_node(
             count_report_words(text),
             format_token_usage(response.usage_metadata),
         )
-        # No `AIMessage` into `messages`: drafts stay out of the transcript, so a rejected one
-        # is never re-sent to a model nor persisted. The runner builds the assistant message
-        # for the delivered report from the graph's final state.
-        return {"report": text, "report_version": draft_number}
+        # No `AIMessage` into `research_agent_messages`: drafts stay out of the transcript, so a
+        # rejected one is never re-sent to a model. Every draft is kept in `reports`, which the
+        # research record persists; the runner delivers the last one.
+        return {"reports": [*state["reports"], text]}
 
     return report
 
@@ -644,6 +699,28 @@ def parse_review_items(text: str) -> list[str]:
         elif items and line.strip():
             items[-1] += "\n" + _CONTINUATION_INDENT + line.strip()
     return items or [stripped]
+
+
+def review_violations(review_round: ReportReviewRound) -> list[str]:
+    """Everything the next revision must fix: the app's rule violations, then the blind review's,
+    then the grounded review's items. A review whose response is absent contributes nothing, so a
+    failed call is never read as an approval and never parsed into an error."""
+    blind = review_round.blind_review.report_violations if review_round.blind_review else []
+    # A blank answer counts as absent, as the review node stores one, so a record written
+    # elsewhere never raises here.
+    grounded_answer = review_round.grounded_review
+    grounded = (
+        parse_review_items(grounded_answer) if grounded_answer and grounded_answer.strip() else []
+    )
+    return [*review_round.rule_violations, *blind, *grounded]
+
+
+def revision_instruction(state: ResearchState) -> str | None:
+    """The instruction the next revision acts on, from the latest review round only; `None`
+    delivers the latest draft as it stands."""
+    if not state["report_reviews"]:
+        return None
+    return _numbered_instruction(review_violations(state["report_reviews"][-1]))
 
 
 def _log_review_call(
@@ -719,11 +796,11 @@ def make_report_review_node(
     async def report_review(state: ResearchState) -> dict[str, Any]:
         emit_activity(REPORT_REVIEW_ACTIVITY)
         start = time.monotonic()
-        draft = state["report"] or ""
+        draft = latest_draft(state) or ""
         word_count = count_report_words(draft)
-        draft_number = state.get("report_version", 0)
+        draft_number = len(state["reports"])
 
-        tool_results = glossary_tool_results(state["messages"], glossary=glossary)
+        tool_results = glossary_tool_results(state["research_agent_messages"], glossary=glossary)
         system_prompt = render_blind_review_system_prompt(
             today_date=today_date,
             data_sources=data_sources,
@@ -737,8 +814,8 @@ def make_report_review_node(
         review_request = REPORT_REVIEW_REQUEST.format(
             report_structure=render_report_structure(sections),
             protected_sections=render_protected_section_names(sections),
-            query=state["original_query"],
-            plan=render_plan(state["plans"][0]) if state["plans"] else "(none)",
+            query=state["research_query"],
+            plan=render_plan(state["approved_plan"]),
             draft=draft,
         )
         blind_messages = [
@@ -746,19 +823,20 @@ def make_report_review_node(
             HumanMessage(content=review_request),
         ]
         grounded_messages = grounded_review_messages(
-            transcript=_strip_status_calls(state["messages"]),
+            transcript=_strip_status_calls(state["research_agent_messages"]),
             instructions=grounded_review_instructions,
             request=review_request,
         )
 
-        async def blind_review_call() -> tuple[list[str], str | None, float]:
-            """The blind review's violations, its failure kind and its duration.
+        async def blind_review_call() -> tuple[ReportReview | None, str | None, float]:
+            """The blind review's response (`None` when the call failed), its failure kind and
+            its duration.
 
             It logs its own record.
             """
             llm_start = time.monotonic()
             usage: UsageMetadata | None = None
-            items: list[str] = []
+            review: ReportReview | None = None
             error: str | None = None
             try:
                 llm = with_stream_drop_retry(
@@ -770,8 +848,10 @@ def make_report_review_node(
                 usage = result["raw"].usage_metadata
                 if result["parsing_error"] is not None:
                     raise result["parsing_error"]
-                review: ReportReview = result["parsed"]
-                items = list(review.report_violations)
+                if result["parsed"] is None:
+                    # An answer with no structured output checked nothing.
+                    raise ValueError("the blind review returned no structured output")
+                review = result["parsed"]
             except Exception as exc:
                 # A failed blind review must not cost the report. The measured count still
                 # applies, so the loop can still shorten an over-long draft on its own instruction.
@@ -787,19 +867,21 @@ def make_report_review_node(
                 draft_number=draft_number,
                 duration=call_seconds,
                 messages=len(blind_messages),
-                items=len(items),
+                items=len(review.report_violations) if review is not None else 0,
                 error=error,
                 usage=usage,
             )
-            return items, error, call_seconds
+            return review, error, call_seconds
 
-        async def grounded_review_call() -> tuple[list[str], str | None, float]:
-            """The grounded review's items, its failure kind and its duration.
+        async def grounded_review_call() -> tuple[str | None, list[str], str | None, float]:
+            """The grounded review's answer text (`None` when the call failed or answered with no
+            text), its items, its failure kind and its duration.
 
             It logs its own record.
             """
             llm_start = time.monotonic()
             usage: UsageMetadata | None = None
+            answer: str | None = None
             items: list[str] = []
             error: str | None = None
             try:
@@ -808,7 +890,10 @@ def make_report_review_node(
                 )
                 response = await llm.ainvoke(grounded_messages)
                 usage = response.usage_metadata
-                items = parse_review_items(extract_text_from_content(response.content))
+                text = extract_text_from_content(response.content)
+                # Raises on an answer with no text, which therefore counts as a failed call.
+                items = parse_review_items(text)
+                answer = text
             except Exception as exc:
                 # Like a failed blind review, a failed grounded review must not cost the report:
                 # the other violations still stand.
@@ -824,11 +909,11 @@ def make_report_review_node(
                 error=error,
                 usage=usage,
             )
-            return items, error, call_seconds
+            return answer, items, error, call_seconds
 
         (
-            (blind_violations, blind_error, blind_seconds),
-            (grounded_items, grounded_error, grounded_seconds),
+            (blind_review, blind_error, blind_seconds),
+            (grounded_answer, grounded_items, grounded_error, grounded_seconds),
             _,
         ) = await asyncio.gather(
             blind_review_call(), grounded_review_call(), lookups.prefetch(draft)
@@ -838,8 +923,14 @@ def make_report_review_node(
         # whether the model reported any, reported none, or the call failed — so an approving
         # review cannot pass a draft that breaks one, and a failed review still shortens an
         # over-long draft and reports a mis-headed section.
-        rule_violations = [v for rule in rules for v in rule.violations(draft)]
-        violations = [*rule_violations, *blind_violations, *grounded_items]
+        review_round = ReportReviewRound(
+            draft_number=draft_number,
+            rule_violations=[v for rule in rules for v in rule.violations(draft)],
+            blind_review=blind_review,
+            grounded_review=grounded_answer,
+        )
+        violations = review_violations(review_round)
+        blind_count = len(blind_review.report_violations) if blind_review is not None else 0
         duration = time.monotonic() - start
         outcome = ReportReviewOutcome(
             draft_number=draft_number,
@@ -850,10 +941,10 @@ def make_report_review_node(
             duration_seconds=duration,
             grounded_review_error=grounded_error,
             reviews=[
-                ReviewTally(name="code checks", violation_count=len(rule_violations)),
+                ReviewTally(name="code checks", violation_count=len(review_round.rule_violations)),
                 ReviewTally(
                     name="blind review",
-                    violation_count=len(blind_violations),
+                    violation_count=blind_count,
                     duration_seconds=blind_seconds,
                 ),
                 ReviewTally(
@@ -874,7 +965,7 @@ def make_report_review_node(
             max_words,
             len(violations),
         )
-        return {"report_revision_instruction": outcome.revision_instruction}
+        return {"report_reviews": [*state["report_reviews"], review_round]}
 
     return report_review
 
@@ -950,13 +1041,14 @@ def route_after_research_agent(
 def route_after_research_review() -> Callable[[ResearchState], str]:
     """Decide the edge out of the research-review node.
 
-    Continue researching when research-review recorded a plan for a not-yet-run iteration
-    (`len(plans) > iteration`); otherwise report.
+    Continue researching when research-review recorded a plan for a not-yet-run iteration (more
+    iteration plans than finished iterations); otherwise report.
     """
 
     def route(state: ResearchState) -> str:
         if _should_continue_research(
-            plans_count=len(state["plans"]), research_iteration=state["research_iteration"]
+            plans_count=len(iteration_plans(state)),
+            research_iteration=state["research_iteration"],
         ):
             return "research-agent"
         return "report"
@@ -986,12 +1078,10 @@ def route_after_report(
     def route(state: ResearchState) -> str:
         if state.get("report_revision_failed"):
             return "end"
-        draft_number = state.get("report_version", 0)
-        if not report_review_budget_exhausted(
-            report_version=draft_number, max_versions=max_versions
-        ):
+        draft_number = len(state["reports"])
+        if not report_review_budget_exhausted(draft_number=draft_number, max_versions=max_versions):
             return "report-review"
-        word_count = count_report_words(state.get("report") or "")
+        word_count = count_report_words(latest_draft(state) or "")
         logger.info(
             "Report delivered without review: draft=%d max_versions=%d words=%d",
             draft_number,
@@ -1015,11 +1105,11 @@ def route_after_report(
 def route_after_report_review() -> Callable[[ResearchState], str]:
     """Decide the edge out of the report-review node.
 
-    Revise iff the review left an instruction. `revision_instruction` already folded in the
-    measured count, so this reads one field rather than re-deciding.
+    Revise iff the latest round left an instruction. Its rule violations already hold the
+    measured count, so this reads the round rather than re-deciding.
     """
 
     def route(state: ResearchState) -> str:
-        return "report" if state.get("report_revision_instruction") else "end"
+        return "report" if revision_instruction(state) else "end"
 
     return route

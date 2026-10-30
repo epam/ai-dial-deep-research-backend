@@ -5,7 +5,7 @@ design builds on.
 
 **How a turn persists today.**
 
-- `DeepResearchCompletion._run_turn` (`app/completion.py`) rebuilds `PrepState` from the latest
+- `DeepResearchCompletion._run_turn` (`app/completion.py`) rebuilds `CrossTurnPrepState` from the latest
   assistant message that carries a state (`load_last_prep_state`, `app/history.py`).
 - It runs the preparation agent. When `start_research` fires, it runs `ResearchRunner.run`
   (`app/research/runner.py`) in the same turn.
@@ -24,7 +24,8 @@ design builds on.
 - research-agent is a compiled `create_agent` graph, used directly as a node. One run of it is one
   research iteration.
 - `IterationCounterMiddleware.after_agent` increments `research_iteration` only when an iteration
-  ends.
+  ends. This change replaces both with a node function that runs the agent and counts the
+  iteration (D24).
 - The graph has no checkpointer (`app/research/graph.py`).
 
 **State held outside the graph.**
@@ -76,9 +77,14 @@ Its two defects shaped decisions D16 and D14 below:
 - Nothing is written while research runs. The snapshot uses the turn's one existing state write.
 - The snapshot is the app's own data, so a redeploy that does not change the snapshot format leaves
   a pending resume working.
-- No node of the research graph changes. A resumed run is a normal run seeded differently.
+- A resumed run is a normal run seeded differently. No node can tell the two apart, and the resume
+  code only loads the saved state and re-enters at the saved node; it derives nothing.
+- Every research turn whose graph started saves one research record, whether the run failed or
+  succeeded. The record keeps every response of the research graph's models whole, so what
+  happened in a run can be read without DIAL stages or traces. Model inputs are never stored.
 - The preparation agent and both preparation checks learn of the failure only from the fixed
-  note. They never receive the research transcript or any error text.
+  note. They never receive the research transcript, its images or any error text. The
+  preparation agent's history holds only earlier preparation-agent messages and no images.
 
 **Non-Goals:**
 
@@ -88,8 +94,17 @@ own later change.
 - **Saving on a cancellation or a killed pod.** Stop, a client disconnect, DIAL Core's idle timeout
   and a pod restart save nothing. Covering them needs state sent while research runs, which the
   SDK's one-write rule forbids today.
-- **Uploading images as they arrive.** Images are uploaded at save time, as today. Uploading during
-  the run, with a hash-to-URL map, would make a failed turn's save fast.
+- **Uploading images as they arrive.** A failed run's images are uploaded at save time (D16).
+  Uploading during the run, with a hash-to-URL map, would make a failed turn's save fast.
+- **Passing research-review's response on.** Research-review's assessment is stored but read by no
+  node. Passing it to research-agent, showing earlier responses to research-review, and running
+  research-review over research-agent's prompt prefix are tracked in
+  epam/ai-dial-deep-research-backend issues #116, #121 and #120. Each changes an LLM call's input
+  and needs its own eval run.
+- **Follow-up messages after a delivered report.** The next request is refused (D22), and the
+  design does not account for a later turn that reads a completed run's record.
+- **Migrating states saved before this change.** An old state keeps its `messages` key, and this
+  code ignores it (Migration Plan).
 - **Resuming the delivery step.** The delivery step never fails the turn (D22), so there is nothing
   to resume.
 - **Letting the report loop re-raise.** The report revision and the two report reviews keep
@@ -161,9 +176,10 @@ The runner adds `"tasks"` to its stream modes and keeps three things.
 
 Alternatives:
 
-- *Wrap each node to record its start* — rejected. research-agent is the compiled subgraph used
-  directly as a node, and `subgraphs=True` streaming of its inner steps relies on that. A wrapper
-  node would also couple the graph to the runner.
+- *Wrap each node to record its start* — rejected. A wrapper that records node starts would couple
+  the graph to the runner, and the `tasks` stream already reports each start. research-agent does
+  run inside a node function (D24), but that function maps the agent's state and records nothing
+  for the runner; the agent's parts keep their namespace under it.
 - *Infer the node from `updates`* — rejected. An `updates` part arrives only after a node
   finished, so the node that failed never sends one. `updates` also misses the image budget's
   in-place substitutions, which is why the runner already takes its transcript from `values`.
@@ -178,7 +194,7 @@ and persists nothing on a failure, as today. Once the report loop has settled a 
 raises out of the runner (D22), so no case below concerns the delivery. On a failure the
 coordinator decides what to persist, in this order, then re-raises the same exception object:
 
-1. **A snapshot refusal** (D13, and a snapshot image whose file is gone, D16). The turn persists
+1. **A snapshot refusal** (D13). The turn persists
    only the failure record. It comes first because every refusal happens before the graph streams
    any state, so the next case would otherwise hide it.
 2. **No research graph state.** The failure came before research started, in the data-sources fetch
@@ -200,7 +216,7 @@ Alternatives:
   classifies by the exception's own type and body, for example a 429 and its `display_message`.
   It unwraps only concurrency-runtime wrappers.
 - *Persist inside the runner* — rejected. Persistence is the coordinator's job, and only the
-  coordinator holds the preparation messages and `PrepState`.
+  coordinator holds the preparation messages and `CrossTurnPrepState`.
 
 ### D5. A failure before the graph streamed any state saves no snapshot
 
@@ -210,7 +226,7 @@ record (D21).
 
 - **On a fresh run** there is no progress to save.
 - **On a resumed run** the snapshot the run started from stays the latest one in the history, and
-  its plan id still matches, because the failure record carries the `PrepState` the turn started
+  its plan id still matches, because the failure record carries the `CrossTurnPrepState` the turn started
   from. The next request to continue resumes from it.
 - **The failed-turn note** still follows the latest failed answer, because the note is triggered by
   the failure flag (D14), not by a snapshot.
@@ -223,31 +239,97 @@ Alternatives:
 - *Rebuild the snapshot from the partly rehydrated state* — rejected. It would re-upload images that
   are already stored under the same names, and gain nothing.
 
-### D6. What the failed turn persists, and where the snapshot lives
+### D6. The state's shape: a preparation part and a research part
 
-A failed research turn with a snapshot persists `create_dial_state(prep_messages, saved_prep)`,
-plus the snapshot and the failure flag under their own keys, in one `set_state`.
+A turn's `custom_content.state` has three top-level keys. The preparation graph and the research
+graph each own one, so neither graph's messages are mixed into the other's.
 
-- `saved_prep` is a copy of `PrepState` with `plan_approved` and `research_started` false.
-- Any other failed turn persists the failure record of D21 instead.
-- The snapshot and failure-flag key constants live in `app/history.py`, next to `DialState`, which
-  owns the state's shape. The flag never goes into `PrepState`: every turn loads `PrepState` and
-  persists it again, so a flag there would be copied into the next successful turn.
-- The snapshot is parsed by its own reader, never through `DialState`. `DialState.from_dict` reads
-  only `messages` and `preparation`, so a snapshot this code cannot read never makes the turn's
-  `PrepState` unreadable.
+```json
+{
+  "preparation": {
+    "research_started": false,
+    "plan_approved": false,
+    "agent_messages": [],
+    "query_reviews": [],
+    "plan_reviews": []
+  },
+  "research": {
+    "plan_id": "…",
+    "resumable": true,
+    "not_resumable_reason": null,
+    "version": 1,
+    "resume_at": "report",
+    "research_query": "…",
+    "approved_plan": [],
+    "research_agent_messages": [],
+    "research_reviews": [],
+    "reports": [],
+    "report_reviews": []
+  },
+  "turn_failed": true
+}
+```
+
+The example is a failed run's snapshot: the flags are reset and the failure flag is set. A completed
+run's state keeps the `CrossTurnPrepState` flags as preparation left them, holds a record with `resumable`
+false, the reason `completed` and no `resume_at`, and carries no failure flag.
+
+The example shows two of `CrossTurnPrepState`'s fields and leaves out some research fields (D11).
+
+- **`preparation`** keeps every `CrossTurnPrepState` field directly under it, as today, because StatGPT
+  reads `preparation.research_started` and marks that read as a contract
+  (`statgpt/app/chains/deep_research/deep_research_tool.py`, read in the backend repository). Three
+  keys sit next to those fields:
+  - `agent_messages`: the preparation agent's model replies and tool results of this turn, as
+    `messages_to_dict` writes them. It holds no user message, because the request carries those,
+    and no earlier turn. It never holds an image, because the preparation agent has no MCP tools.
+  - `query_reviews`: every `QueryReviewResponse` of this turn's query clarity checks, whole. The
+    query review runs on every `update_query`, so it is a list.
+  - `plan_reviews`: every `PlanReviewResponse` of this turn's plan approval checks, whole. It runs
+    on every `approve_plan`, so it is a list too.
+
+  The two review lists are for observability only, and no part of the app reads them. The tool
+  results in `agent_messages` keep only the part of a review that reaches the agent: the clarifying
+  questions, or the approval's failure reason.
+- **`research`** is the research record (D11). Every research turn whose graph streamed state saves
+  one. A failed run's record is the snapshot a later turn may resume. A successful run's record is
+  marked not resumable with the reason `completed` (D20). A turn without research has no `research`
+  key.
+- **`turn_failed`** is the failure flag (D21). It stays at the top level, because a turn can also
+  fail in preparation, with no research at all.
+
+A failed research turn's `preparation` holds a copy of `CrossTurnPrepState` with `plan_approved` and
+`research_started` false. Any other failed turn persists the failure record of D21 instead.
+
+Supporting choices:
+
+- **The three key constants live in `app/history.py`.** `PreparationDialState` models only the
+  value under `preparation`, and `create_dial_state` is the one place that lays out the three
+  top-level keys. The flag never goes into `CrossTurnPrepState`: every turn loads `CrossTurnPrepState` and persists
+  it again, so a flag there would be copied into the next successful turn.
+- **The research record is parsed by its own reader, never through `PreparationDialState`.**
+  `PreparationDialState.from_dict` receives only the value under `preparation`, so a record this
+  code cannot read never makes the turn's `CrossTurnPrepState` unreadable.
+- **Only model outputs are stored, never model inputs.** The state lives in the user's
+  conversation, which the user can download and share. Model inputs carry the system prompts and
+  the client rules of the application properties, which must not reach the user. The inputs can be
+  rebuilt from the transcript and the configuration.
 
 Alternatives:
 
-- *Persist the research transcript under `messages`, as on success* — rejected. The preparation
-  agent would receive the whole research transcript with its images on every later turn. That is
-  often several hundred kilobytes, far more than a preparation history. The approval check would
-  also read research chatter as conversation.
-- *Make the snapshot a typed field of `DialState`* — rejected. A snapshot that fails validation
-  would fail `_parse_dial_state`. `load_last_prep_state` would then fall back to an older state or
-  a fresh one, and the recorded plan would be lost.
+- *Keep one `messages` key holding the preparation messages and the research transcript* —
+  rejected. The preparation agent would receive every earlier research transcript with its images,
+  often several hundred kilobytes, and the approval check would read research chatter as
+  conversation.
+- *Nest `CrossTurnPrepState` under `preparation.state`* — rejected. It would break StatGPT's read of
+  `preparation.research_started` and need a coordinated deploy.
+- *One `preparation_reviews` list for both checks* — rejected for two lists named after the check,
+  which say what each entry is without a type field.
+- *Make the research record a typed field of `PreparationDialState`* — rejected. A record that fails
+  validation would fail `_parse_dial_state`. `load_last_prep_state` would then fall back to an older
+  state or a fresh one, and the recorded plan would be lost.
 
-### D7. `PrepState.plan_id`, a fresh id per recorded plan
+### D7. `CrossTurnPrepState.plan_id`, a fresh id per recorded plan
 
 `plan_id` is a `uuid4().hex` set in three places:
 
@@ -282,20 +364,32 @@ runner.
   `ToolMessage` the agent answers in its own words. The chosen behavior is a fixed protocol error.
 - The hand-off is silent anyway, so the tool's result text gains nothing.
 
-### D9. Only the latest snapshot in the history is considered
+### D9. Only the latest research record in the history is considered
 
 The search walks `request.messages` backwards to the latest assistant message whose state carries
-the snapshot key.
+the `research` key. It looks past later assistant messages that carry none:
+
+- **Preparation-only turns after the failed turn**, such as a question before the user asks to
+  continue. The plan id then decides (D13): a newly recorded plan discards the record.
+- **A failed turn that saved only its failure record**: a failure in preparation, a failure before
+  the graph streamed any state (D5), or a failed run whose snapshot state could not be built or
+  encoded (D23). The walk reaches the previous snapshot and resumes from it. For the last case this
+  is a fallback to older progress, kept on purpose: rerunning research from the start would lose
+  more.
+
+A turn that delivered its report is never resumed. The next request is refused with 409 before the
+history is rebuilt (D22), so no search runs.
 
 - *Search for any snapshot with a matching id* — not needed. Ids are only ever replaced by fresh
-  ones, so when the latest snapshot's id differs from the current one, no older snapshot can match.
-  A rewind removes later answers from the request, and their snapshots with them. A snapshot marked
-  not resumable (D20) shadows the older ones on purpose: the run it records failed in a way a
-  resume repeats, so an older snapshot of the same plan would replay that failure.
-- A failed turn without a snapshot carries no snapshot key, so the search passes over it.
-- *Copy the snapshot forward into every later answer* — rejected. A successful turn carries no
-  snapshot. Copying would add up to about a megabyte to every answer, and DIAL Chat and StatGPT
-  already send every earlier answer.
+  ones, so when the latest record's id differs from the current one, no older record can match.
+  A rewind removes later answers from the request, and their records with them.
+- *Fall back past a record that is not resumable to an older resumable one* — rejected. Such a
+  record hides every older one, whatever its reason (D20), and research reruns from the start; the
+  new turn's own record then becomes the latest. For a failure a resume would repeat, a fallback
+  would replay that failure on every "continue". For a missing image, it would gain some progress at
+  the cost of a second rule. One rule is simpler.
+- *Copy the snapshot forward into every later answer* — rejected. Copying would add up to about a
+  megabyte to every answer, and DIAL Chat and StatGPT already send every earlier answer.
 
 ### D10. A conditional edge from `START`, with a router closed over the entry node
 
@@ -303,7 +397,8 @@ the snapshot key.
 `add_conditional_edges(START, route_from_start(entry), path_map={…four nodes…})`, in the same
 factory style as the four `route_after_*` routers. With the default, the two tests that build the
 graph from keyword arguments (`tests/test_report_loop_graph.py`,
-`tests/test_research_review_stage.py`) need no change.
+`tests/test_research_review_stage.py`) need no change for the entry; they change for the renamed
+state fields (task 14.4).
 
 Alternatives:
 
@@ -314,19 +409,58 @@ Alternatives:
   persisted-format value into every node's state and into research-agent's input schema, and no
   node needs it.
 
-### D11. The snapshot model
+### D11. The research record and the research state it mirrors
 
 `ResearchSnapshot` is a pydantic model in a new `app/research/snapshot.py`, with
-`extra="ignore"`. Its fields:
+`extra="ignore"`. It is the research record of D6: a failed run's record is the snapshot, and a
+successful run's record has the same shape. Its header:
 
-- `version: int`
 - `plan_id: str`
-- `resumable: bool`, false for a failure a resume would repeat (D20)
-- `resume_at: ResumePoint`, a `StrEnum` of `research`, `research_review`, `report`, `report_review`
-- `messages: list[dict]`, produced by `messages_to_dict`
-- `original_query`, `plans`, `research_iteration`, `report`, `report_version`,
-  `report_revision_instruction`, `report_revision_failed`
-- `data_queries: str` (D12)
+- `resumable: bool`
+- `not_resumable_reason: NotResumableReason | None`, a `StrEnum` of `completed`,
+  `repeating_failure` and `image_upload_failed` (D20), `None` when `resumable` is true
+- `version: int`
+- `resume_at: ResumePoint | None`, a `StrEnum` of `research`, `research_review`, `report`,
+  `report_review`; `None` for a completed run's record, which names no node to re-enter
+
+The rest mirrors `ResearchState`, field for field:
+
+| Field | What it holds | Who reads it while the graph runs |
+|---|---|---|
+| `research_query` | The query as preparation finalized it (`CrossTurnPrepState.current_query`). | Research-review's prompt, the writer's request, and the review request both reviews share. |
+| `approved_plan` | The plan the user approved. | The plan list in research-review's prompt and the writer's request; the review request. |
+| `research_agent_messages` | Research-agent's conversation: the first instruction, its model replies and tool results, and the instruction for each further iteration. | Research-agent, the status tool, research-review's findings, the writer, report-review's glossary results and the grounded review. |
+| `research_iteration` | How many research iterations finished. | Research-agent's node function, which counts it (D24), research-review's budget and the two routers after research-agent and research-review. |
+| `research_reviews` | Each research-review response, a whole `ResearchReview`, in order. | Its next steps feed the plan list and the routing after research-review. Nothing reads the assessment. |
+| `reports` | Each draft, in order, as the writer wrote it. The delivered text, after the citation step, is kept only in the assistant content. | The writer (the previous draft), report-review (the draft under review), the router after the writer (the version budget), and the runner (the delivered draft). |
+| `report_reviews` | One entry per report-review round: the draft number, `rule_violations` (what the seven app rules found), `blind_review` and `grounded_review` (each call's response, `null` when the call failed; a grounded review that answered with no text counts as failed). Items are derived only from responses that are present, so a stored value is never parsed into an error and an absent blind review never reads as an approval. | The writer (its revision instruction) and the router after report-review. |
+| `report_revision_failed` | Whether the latest revision's model call failed. | The router after the writer. |
+| `data_queries` | The turn's data-query records, as one string (D12). | The data-query report rule and the citation step, through the runner's store. |
+
+The research-agent model call gets the query and the approved plan from its first instruction, not
+from the fields. Research-agent receives only research-review's next steps, wrapped in the fixed
+instruction; the whole response stays in `research_reviews`.
+
+**Values derived from these fields are derived by the node that reads them, on every run.**
+Resume code derives nothing, so a fresh and a resumed run take the same code path:
+
+- The plan list, "Plan 1:, Plan 2:, …", is built from `approved_plan`, then the next steps of each
+  entry of `research_reviews` that returned some. Each later plan is therefore exactly the next
+  steps research-agent was given, and no assessment appears in it.
+- The routing after research-review counts the plans as 1 plus the number of reviews that returned
+  next steps.
+- The draft number is the length of `reports`, and the latest draft is its last entry.
+- The writer builds its revision instruction from the latest `report_reviews` entry only: the
+  rule violations, then the blind review's violations, then the grounded review's items. A failed
+  call contributes nothing, as it does today. The writer still sees only the previous draft and
+  that one instruction, never earlier drafts or earlier rounds.
+- The app rules' violations are saved as the review measured them. The writer never runs the rules
+  again: three of them depend on lookups through DIAL and the MCP servers, which can fail or answer
+  differently on a later turn.
+
+The report node's comment that a rejected draft is "never re-sent to a model nor persisted"
+(`app/research/nodes.py`, the report node's return) is rewritten: drafts are persisted in
+`reports`, and only "never re-sent to a model" holds, because no node reads an earlier draft.
 
 The module also builds the resumed `ResearchState`. `state.py` gets the thin
 `build_resumed_state` beside `build_initial_state`.
@@ -334,21 +468,37 @@ The module also builds the resumed `ResearchState`. `state.py` gets the thin
 Supporting choices:
 
 - **A stable header.** `plan_id`, `resumable` and `version` keep their names and meaning in every
-  format version, so any release can decide whether a snapshot is to be resumed before it reads
-  the rest (D13).
+  format version, so any release can decide whether a record is to be resumed before it reads the
+  rest (D13). `not_resumable_reason` is read only to show it; a record that is not resumable is
+  discarded whatever its reason.
+- **Typed fields restore typed values.** `research_reviews`, `reports` and `report_reviews` are
+  declared with their models, for example `list[ResearchReview]`, so `model_validate` turns the
+  stored dicts back into the same models a fresh run holds. Without that, a resumed run would hold
+  dicts where a fresh run holds models, and an attribute read such as `review.next_steps` would
+  fail only on resume. A field added to one of these models later needs a default, or older
+  records fail validation and are refused (D13).
+- **`SNAPSHOT_VERSION` follows its rule and stays 1.** The format has not been released, so the
+  field renames and the new fields are part of version 1.
 - **One mapping table.** It translates `ResumePoint` to node names in one place, used by the
   snapshot builder and by the router. Persisted data therefore never names a graph node, and
   renaming a node does not break a pending resume.
-- **The channels mirror `ResearchState`.** A unit test asserts that the snapshot has a field for
-  every `ResearchState` key. Adding a channel without updating the snapshot then fails a test
-  instead of silently resuming with a missing channel.
-- **Stage facts are derived when the snapshot is read.** The completed agent turns are the
-  `AIMessage`s after the last `HumanMessage`. The report-review round is `report_version`.
+- **The fields mirror `ResearchState`.** A unit test asserts that the record has a field for every
+  `ResearchState` key. Adding a field to the state without updating the record then fails a test
+  instead of silently resuming with a missing field.
+- **Stage facts are derived when the record is read.** The restored model calls of the interrupted
+  iteration are the `AIMessage`s after the last `HumanMessage`. The report-review round is the length of `reports`.
 
 Alternatives:
 
+- *Keep the reviews and drafts in a separate list next to the resume values* — rejected. The latest
+  draft and the next steps would be stored twice, and the two copies could disagree.
+- *Rebuild the resume values from an append-only list of model responses* — rejected. Several
+  values are not model responses (`research_iteration`, the rule violations,
+  `report_revision_failed`, the data-query records). The image budget also replaces a tool result
+  in place under its message id, which an append-only list would not show.
+- *Keep `plans` beside `research_reviews`* — rejected. The next steps would be stored twice.
 - *Store node names* — rejected. It couples persisted data to graph internals.
-- *Store `agent_turns_completed`*, as the proof of concept did — rejected. It duplicates a fact the
+- *Store the count of restored model calls*, as the proof of concept did — rejected. It duplicates a fact the
   transcript already holds.
 
 ### D12. Data-query records as one JSON-encoded string
@@ -375,7 +525,8 @@ Alternatives:
 - *Plain JSON* — rejected. `_meta` would be the first server data any state persists that this
   exposure applies to.
 
-The transcript's tool artifacts keep the exposure they already have today under `messages`.
+The transcript's tool artifacts keep the exposure a persisted tool result has always had: they
+stay plain JSON in `research_agent_messages`.
 
 ### D13. Reading a snapshot, and refusing one this code cannot read
 
@@ -385,22 +536,25 @@ The reader works in this order:
 2. Read `plan_id`. If it is not a string, raise `SnapshotUnreadableError`. If it differs from the
    current id, discard the snapshot (D19) with the reason `plan_changed`, without reading further.
    The discard stage and record show the snapshot's `resume_at` only when it reads as a known
-   `ResumePoint`, because `resume_at` is not part of the stable header.
+   `ResumePoint`, and its `not_resumable_reason` only when it reads as a known reason, because
+   neither is part of the stable header and another release may write a value this code does
+   not know.
 3. Read `resumable`. If it is not a boolean, raise `SnapshotUnreadableError`. If it is false,
    discard the snapshot with the reason `not_resumable`, without reading further. Reading it before
    `version` means a non-resumable snapshot of another format version is discarded, not refused.
 4. Read `version`. If it is not this code's version, raise `SnapshotVersionUnsupportedError`.
-5. Validate the model, decode `messages` with `messages_from_dict`, and decode `data_queries`. If
-   any of these fails, raise `SnapshotUnreadableError` from the original exception, so the turn's
+5. Validate the model, which restores the review and draft models (D11), decode
+   `research_agent_messages` with `messages_from_dict`, and decode `data_queries`. If any of these
+   fails, raise `SnapshotUnreadableError` from the original exception, so the turn's
    ERROR record carries both stack traces.
 
 Both errors are `AppConditionError` subclasses in `app/error_resolution.py`, with the curated
 texts the spec requires. `SnapshotVersionUnsupportedError` is outgoing 409, non-retryable.
 `SnapshotUnreadableError` is outgoing 500, non-retryable. A refusal persists only the failure
-record (D21), which carries the `PrepState` the turn started from and so keeps the plan id: the same
-snapshot stays the latest one and still matches, and the refusal repeats. The image download (D16)
-can raise `SnapshotUnreadableError` too, so D4 checks for a refusal before it would save a snapshot.
-A third subclass, `SnapshotImageUnavailableError`, is retryable (D16).
+record (D21), which carries the `CrossTurnPrepState` the turn started from and so keeps the plan id: the same
+snapshot stays the latest one and still matches, and the refusal repeats. A snapshot image that
+answers 404 is not a refusal: the snapshot is discarded and research runs fresh (D16). A third
+subclass, `SnapshotImageUnavailableError`, is retryable (D16).
 
 Tolerant reading (`extra="ignore"`, defaults for added fields) keeps most releases from needing a
 version bump. A release that changes the format incompatibly bumps the version. The project accepts
@@ -417,9 +571,18 @@ Alternatives:
 
 ### D14. The failed-turn note is a `SystemMessage` inserted during reconstruction
 
-`reconstruct_history` appends one fixed note after every assistant message whose state carries the
-failure flag (D21): after its decoded `messages`, or after the fallback `AIMessage` of its native
-`content` when `messages` is empty. It reads nothing of a snapshot and needs no parameter.
+`reconstruct_prep_agent_history` (this change renames `reconstruct_history`, because the function
+builds only the preparation agent's history) reads each earlier assistant message's
+`preparation.agent_messages`, never its `research` record. A state without that field, such as one
+saved before this change, parses with an empty list and falls back to one `AIMessage` of the
+message's native `content`, as a turn without state does. A state that fails validation takes the
+existing fallback of `_parse_dial_state`: one WARNING and the native `content`. No image is ever
+downloaded, so `rehydrate_image_blocks` has no caller and is removed.
+
+The function appends one fixed note after every assistant message whose state carries the
+failure flag (D21): after its decoded agent messages, or after the fallback `AIMessage` of its
+native `content` when they are empty. It reads nothing of a research record and needs no
+parameter.
 `_format_conversation` (`app/preparation/tools.py`) renders a system message as a `System note: …`
 line instead of dropping it. The text lives in `app/preparation/prompts.py`, as a triple-quoted
 constant.
@@ -431,7 +594,7 @@ empty or partial answer, and without a note the agent cannot tell that it failed
 
 The note does not say whether progress was saved; the coordinator alone decides whether to resume
 (D8, D9). It does not say that the approval was reset either: after a preparation failure the
-failure record keeps the `PrepState` the turn started from, which may still have the plan approved.
+failure record keeps the `CrossTurnPrepState` the turn started from, which may still have the plan approved.
 Its starting wording, to be tested:
 
 > The previous user message failed with an error before its answer finished. If the user asks to
@@ -457,12 +620,12 @@ Evidence from the proof of concept, whose note was triggered by the snapshot alo
 
 Alternatives:
 
-- *A `PrepState` flag* — rejected. Every turn loads `PrepState` and persists it again, so the flag
+- *A `CrossTurnPrepState` flag* — rejected. Every turn loads `CrossTurnPrepState` and persists it again, so the flag
   would be copied into the next successful turn, and it does not mark a position in the history.
 - *Trigger on the snapshot's presence* — rejected. A failed turn without a snapshot, such as a
   preparation failure, would get no note.
 - *Two notes, resumable and not resumable, chosen by comparing the snapshot's plan id with the
-  loaded one* — rejected. It needed the plan id inside `reconstruct_history`, and the
+  loaded one* — rejected. It needed the plan id inside `reconstruct_prep_agent_history`, and the
   not-resumable note promised a restart while a snapshot whose plan id could not be read got no
   note at all. One note that promises nothing about progress removes both problems.
 - *Add the note only before the new user message, for that call* — rejected. The history before
@@ -484,43 +647,87 @@ unchanged. Fewer prompt edits also mean less drift in the turns that have no fai
 
 ### D16. Images, and stages for the snapshot's tool calls
 
-**Upload.** The snapshot's transcript goes through the existing `upload_image_blocks` at save time,
-on a list the turn is about to discard, in the mode that re-raises a bucket lookup that fails
-(D22). The file names are the existing ones: tool call id plus
-block position. A resumed turn that completes uploads the same images again under the same names.
-Overwriting them is inferred from `aidial_client` uploading with `PUT` and no `If-None-Match`, not
-verified against DIAL Core.
+A failed run needs its images to resume, and a successful run's images are needed by nothing in the
+app. So only a failed run's record uploads images, and a successful run's record keeps none.
 
-**Download.** A new helper in `utils/image_attachments.py` downloads each image with up to three
-attempts and exponential backoff from 1 s, using `STREAM_DROP_MAX_ATTEMPTS` and its initial delay
-from `utils/llm.py`. The resumed run calls it before the graph starts. Its outcomes:
+**The placeholder.** An image that is not stored is replaced, in its own slot of the message's
+content list, by one text block of a fixed format:
 
+```text
+[image not stored: <reason>, <mime type>, sha256=<hex>]
+```
+
+The reason is `successful run` or `upload failed`. The hash is the SHA-256 of the image bytes, in
+hex; an eval needs it to identify each image. Because the
+placeholder keeps the image's slot, the k-th placeholder of a `ToolMessage` stands for the k-th
+image of that tool call's result. The format replaces the upload-failure placeholder
+`[image upload failed: …]`, so one reader recognizes both cases.
+
+**A successful run uploads nothing.** `_persist` replaces every image block of the research record
+with the `successful run` placeholder and makes no upload and no bucket lookup. No retry runs on
+this path, because nothing on it goes over the network.
+
+**A failed run uploads at save time.** The snapshot's transcript goes through `upload_image_blocks`
+at save time, on a list the turn is about to discard. All images of one save are uploaded
+concurrently, one request per image. The file names are the existing ones: tool call id plus block
+position. A resumed run that fails again uploads the same images under the same names. Overwriting
+them is inferred from `aidial_client` uploading with `PUT` and no `If-None-Match`, not verified
+against DIAL Core.
+
+- **Retries.** Each upload is tried up to four times when it fails with HTTP 500, 502, 503 or 504,
+  waiting 1, 2 and then 4 s between attempts. Any other failure is not retried. `AsyncDial`'s own
+  retries (408, 409, 429 and transport errors, twice per request, `aidial_client/_constants.py`)
+  run inside each attempt.
+- **An upload that still fails, or a bucket lookup that fails.** The image gets the `upload failed`
+  placeholder, the snapshot is still saved, and it is marked not resumable with the reason
+  `image_upload_failed` (D20). A resume without that image could let the report state what the
+  image showed with nothing left to check it against; a correct report outranks the saved progress,
+  so research reruns from the start. The snapshot is kept for debugging. A bucket lookup that fails
+  gives every image the placeholder, logged once.
+
+**Download.** A new helper in `utils/image_attachments.py` downloads each image of the snapshot's
+research-agent messages, all of them concurrently. The coordinator calls it in
+`_find_resumable_snapshot`, after `read_snapshot` returned a resumable snapshot and before it shows
+the snapshot stage, so the stage always says what the turn does. Its outcomes:
+
+- **HTTP 502 or 503.** Retried: up to three attempts, waiting 1 and then 2 s.
 - **A 404.** `aidial_client` raises `ResourceNotFoundError` (`aidial_client/resources/files.py`).
-  The file is gone for good, so it is not retried. The helper raises `SnapshotUnreadableError`, and
-  D4 persists only the failure record, so the conversation is refused like any snapshot that cannot
-  be read.
-- **Anything else after the last attempt.** The helper raises `SnapshotImageUnavailableError`, a
-  retryable `AppConditionError` with the curated "could not be loaded" text. The graph has not
-  started, so D5 saves no snapshot, and the snapshot the turn started from stays the latest one. A
-  later "continue" can try again.
+  The file is gone for good, so it is not retried. The helper reports it, and the coordinator
+  discards the snapshot with the `DiscardReason` `image_missing`: it shows the discarded stage, logs
+  one WARNING and the INFO "snapshot discarded" record (D18), and research runs fresh in the same
+  turn. The turn's own record then becomes the latest one. A refusal would repeat on every later
+  request, because the snapshot would stay the latest record, and resuming without the image could
+  make the report wrong.
+- **Any other failure, or a 502 or 503 after the last attempt.** The helper raises
+  `SnapshotImageUnavailableError`, a retryable `AppConditionError` with the curated "could not be
+  loaded" text. The graph has not started, so D5 saves no snapshot, and the snapshot the turn
+  started from stays the latest one. A later "continue" can try again.
 
 The typed errors are needed because `aidial_client` raises its own `DialException`, which
 `error_resolution._extract_error_details` does not recognize. Untyped, it would resolve to the
-generic non-retryable message.
+generic non-retryable message. The retried statuses are read from `DialException.status_code`; a
+transport error that survives the client's own retries carries 500 and is not retried on download.
 
-`AsyncDial` itself retries 408, 409, 429 and transport errors twice per request
-(`aidial_client/_constants.py`, `DEFAULT_MAX_RETRIES = 2`). The three attempts therefore come to at
-most nine requests for those errors, which is accepted for a rare path.
-
-**Stages.** The runner adds the snapshot's message ids to `_seen_ids` before streaming. When
-research-agent ends, the parent graph re-emits the subgraph's whole message list. Without the ids,
-every snapshot tool call would become a 0.00 s stage and an INFO "Tool call completed" record,
-which the proof of concept observed.
+**Stages.** The runner adds the snapshot's message ids to `_seen_ids` before streaming. The runner
+reads tool calls from the `messages` key of `updates` parts (`_handle_updates`). Under D24 the
+research-agent node's own root `updates` part carries the whole list under
+`research_agent_messages`, which `_handle_updates` does not read, and the agent's inner `updates`
+parts carry only each step's new messages. So no part the runner reads re-sends the snapshot's
+messages, and the ids are a guard: they keep the snapshot's tool calls from becoming 0.00 s stages
+and INFO "Tool call completed" records, which the proof of concept observed when the agent was a
+directly added node, should a later change read the root list again. The `_handle_part` and `_already_seen` docstrings say which key
+they read.
 
 Alternatives:
 
-- *Reuse `rehydrate_image_blocks` and its placeholder* — rejected. The resumed report could cite a
-  page whose image research-agent no longer sees, with nothing to show for it.
+- *Resume a snapshot with a placeholder in place of an image* — rejected. The resumed report could
+  cite a page whose image research-agent no longer sees, with nothing to show for it.
+- *Drop the whole snapshot when one image cannot be uploaded* — rejected. It gives the same next
+  turn, a rerun from the start, but loses the record of what the run did.
+- *Upload a successful run's images too, for debugging* — rejected. No part of the app reads them,
+  and the upload and its retries would delay a turn whose report is already written.
+- *Retry downloads on every failure but a 404* — rejected. Only a 502 or a 503 is likely to pass on
+  the next attempt; the client already retries timeouts, transport errors and 429.
 - *Upload images as they arrive* — this is in Non-Goals.
 
 ### D17. The data-query records are restored before the graph runs
@@ -533,13 +740,20 @@ snapshot. The capture interceptor then adds and replaces records by id as it doe
 
 The coordinator writes four INFO records, with the fields the **logging-policy** delta lists:
 
-- "Snapshot saved", with `resumable` and, for a non-resumable snapshot, the failure class (D20);
+- "Snapshot saved", with `resumable` and, for a non-resumable snapshot, its
+  `not_resumable_reason` and, for `repeating_failure`, the failure class (D20). It is written only
+  for a failed turn; a successful run's record is part of the completed turn and gets no record of
+  its own;
 - "Failure recorded", for a failed turn that saved no snapshot, with the reason
   `preparation_failed`, `snapshot_refused`,
   `no_graph_state` or `snapshot_failed` (D4, D21). `preparation_failed` covers every failure
-  before the research runner was created, a preparation-only turn's own failed save included;
+  before the research runner was created, a preparation-only turn's own failed save included. The
+  coordinator creates the research runner before it looks for a snapshot, so a snapshot image that
+  cannot be downloaded is recorded as `no_graph_state`, like any failure before the graph streamed
+  state, never as `preparation_failed`;
 - "Snapshot reused";
-- "Snapshot discarded", with the reason `plan_changed` or `not_resumable`. For a non-resumable
+- "Snapshot discarded", with the reason `plan_changed`, `not_resumable` or `image_missing`. Every
+  image that answered 404 also gets one WARNING. For a non-resumable
   snapshot the two plan ids are equal, so the ids alone would explain nothing. Its resume point
   appears only when it reads as a known value (D13).
 
@@ -555,8 +769,10 @@ WARNING with the exception class, never `logger.exception` at ERROR: one WARNING
 or failure record that could not be saved (D23). A turn without research whose full state fails
 logs no WARNING, because that failure is the turn's own error and gets its one ERROR. The single
 ERROR stays with
-`raise_dial_error`. Each retried image download logs one WARNING, with the URL stripped by the
-existing `_strip_url_query`.
+`raise_dial_error`. Each retried image download, and each retried image upload of a snapshot, logs
+one WARNING with the attempt number and the exception class, a download also with the URL stripped
+by the existing `_strip_url_query`. An upload whose last attempt fails logs one WARNING, because it
+costs only the resume (D16).
 
 ### D19. The snapshot stage comes from the coordinator
 
@@ -566,6 +782,19 @@ the INFO record, the discard reason included. StatGPT shows Deep Research's stag
 mode by default (`stages_config.debug_only`), so no setting is added here.
 
 ### D20. Failures a resume would repeat save a snapshot that is never resumed
+
+A record that is not resumable says why in `not_resumable_reason` (D11). There are three reasons:
+
+| Reason | Set when |
+|---|---|
+| `completed` | The run delivered its report. Nothing is left to resume, and the next request is refused anyway (D22). |
+| `repeating_failure` | The run failed in one of the classes below, which a resume would repeat. |
+| `image_upload_failed` | An image of the snapshot could not be uploaded, or the files bucket could not be resolved (D16). |
+
+Whatever the reason, the record is discarded when research next starts, and research reruns from the
+start; no older record is considered (D9). A failure of more than one kind sets
+`repeating_failure`, because it says the most about what went wrong. The rest of this decision is
+about `repeating_failure`.
 
 A resume re-sends the failed run's input and restores its state. For some failures that is certain
 or likely to fail the same way, so resuming would only make every "continue" fail again. These
@@ -578,11 +807,11 @@ from the beginning, and the turn shows the discarded stage with the reason `not_
   429 and saves snapshot S1 for plan id P. Turn B resumes from S1 and fails with a context
   overflow, so it saves S2, also for P, marked not resumable. S2 is now the latest snapshot, and the
   history search (D9) considers only the latest one, so S1 is never replayed.
-- **The plan id stays.** Nothing is cleared, so `PrepState` keeps P, and a later fresh run of the
+- **The plan id stays.** Nothing is cleared, so `CrossTurnPrepState` keeps P, and a later fresh run of the
   same plan can itself save a resumable snapshot for P.
-- **The failure record is the ordinary one.** The turn persists its preparation messages, the reset
-  `PrepState`, the snapshot and the failure flag (D6, D21), and gets the same note as any failed
-  turn (D14).
+- **The failed turn persists as any failed research turn.** It saves its `preparation` part with
+  the reset `CrossTurnPrepState`, its `research` record and the failure flag (D6, D21), and gets the same
+  note as any failed turn (D14).
 
 **This is a standing rule, not a detail of this change.** These classes are the app's list of
 failures that re-sending cannot fix. Any later retry or resume mechanism consults the same
@@ -645,10 +874,11 @@ answer back with its state, but not with its error. So every failed turn persist
 and the failed-turn note (D14) follows every message that carries it.
 
 - **Where the flag lives.** Under its own top-level key of the state, next to the snapshot key, or
-  as a defaulted field of `DialState`. Never in `PrepState` (D6).
-- **The failure record.** A failed turn without a snapshot persists an empty `messages`, the
-  `PrepState` read from the request with `load_last_prep_state(request)`, and the flag. The
-  preparation runner mutates the loaded `PrepState` in place, so the record reads it again from the
+  as a defaulted field of `PreparationDialState`. Never in `CrossTurnPrepState` (D6).
+- **The failure record.** A failed turn without a snapshot persists a `preparation` part holding
+  the `CrossTurnPrepState` read from the request with `load_last_prep_state(request)` and empty
+  `agent_messages`, `query_reviews` and `plan_reviews`, no `research` record, and the flag. The
+  preparation runner mutates the loaded `CrossTurnPrepState` in place, so the record reads it again from the
   request rather than taking the live object. A failed research turn with a snapshot persists the
   parts of D6 instead, and falls back to the failure record when its snapshot state cannot be built
   or encoded (D23).
@@ -656,8 +886,9 @@ and the failed-turn note (D14) follows every message that carries it.
   which comes before the `try` (D4); a cancellation; a non-streaming request (the SDK drops the
   state); and the 409 refusal of a conversation whose report was delivered. A failure after the
   report is written does not fail the turn at all (D22).
-- **Saving never hides the failure.** Building and saving the snapshot, its image upload included,
-  run inside a `try`. When any of it raises, the turn drops the snapshot, persists the failure
+- **Saving never hides the failure.** Building and saving the snapshot run inside a `try`. An image
+  that cannot be uploaded does not raise here: it marks the snapshot not resumable (D16). When
+  building or encoding the snapshot state raises, the turn drops the snapshot, persists the failure
   record instead, and still raises the original error. The failure record's own save runs inside a
   `try` too; if it raises, the turn persists nothing and still raises the original error. Each logs
   one WARNING (D18). The SDK allows one `set_state` per turn and has no public accessor that says
@@ -672,15 +903,15 @@ Alternatives:
 
 - *Persist nothing for a failure without a snapshot, as today* — rejected. The next turn would see
   an empty or partial answer with no note, and the agent could not tell that the request failed.
-- *Persist the live `PrepState` of the failed turn* — rejected. A tool call that ran before the
+- *Persist the live `CrossTurnPrepState` of the failed turn* — rejected. A tool call that ran before the
   failure, such as an `update_plan`, would survive into the next turn although its turn failed.
-- *Once preparation finished, persist the turn's preparation messages and its reset `PrepState`
+- *Once preparation finished, persist the turn's preparation messages and its reset `CrossTurnPrepState`
   instead* — rejected by the user. Its gain would be to keep a plan the failed turn re-recorded
   after `approve_plan` reported the recorded one as stale. Without it, the next turn recovers: the
   approval check reports the plan as stale again and the agent re-records it. The gain is rare,
   and the cost is a fifth state and a third fallback step in D23.
 - *Record a failure of the properties fetch too* — rejected by the user. It would need the 409
-  check and `PrepState` loading moved ahead of the fetch, for a failure that is rare and that the
+  check and `CrossTurnPrepState` loading moved ahead of the fetch, for a failure that is rare and that the
   next turn recovers from by reading the latest earlier state.
 
 ### D22. A turn never fails once its report is written
@@ -702,16 +933,9 @@ What runs after the draft is settled, and how each step absorbs its failure:
 | Appending the report | Caught: one WARNING. The report does not reach the user, yet the state saved next closes the conversation. Accepted: only a closed choice or a bug makes `append_content` raise (`aidial_sdk/chat_completion/choice.py`). |
 | Sending the annotations | Already absorbed: the tags show as plain text (`_send_annotations`). |
 | Writing the citation log record | Caught: one WARNING. |
-| Saving the state (`_persist`): the image upload | A bucket lookup (`dial.bucket.get_raw()`) that raises is one failure, logged once: every image then gets the existing upload-failure placeholder, as one failed upload does today. The state is saved with `research_started` set, so the conversation closes like any other whose report was delivered. |
-| Saving the state: building the state dict (`DialState(...).to_dict()`) and checking that it serializes | Caught: one WARNING, and the turn still completes. The closing state is saved instead (D23): an empty `messages`, the turn's `PrepState` with `research_started` set, and no failure flag. The next request is refused with 409, and StatGPT reads `research_started` and shows the answer as the report. |
+| Saving the state (`_persist`): the images | Nothing can fail: every image of the research record gets the `successful run` placeholder, with no upload and no bucket lookup (D16). |
+| Saving the state: building the state dict and checking that it serializes | Caught: one WARNING, and the turn still completes. The closing state is saved instead (D23): a `preparation` part with the turn's `CrossTurnPrepState` with `research_started` set and nothing else, no `research` record, and no failure flag. The next request is refused with 409, and StatGPT reads `research_started` and shows the answer as the report. |
 | Saving the state: `set_state` | After the check of D23, it raises only on a closed choice, which takes no state at all. Caught: one WARNING, and nothing is persisted. |
-
-**The bucket lookup has two callers that treat its failure differently.** The final save of a
-turn's `messages` replaces every image with a placeholder. The save of a failed research turn's
-snapshot re-raises it, so the snapshot is dropped and the failure record saved instead (D21),
-because a snapshot with placeholders would resume research without its images. `upload_image_blocks`
-therefore takes a parameter that says which of the two its caller wants, or the caller resolves
-the bucket and passes it in.
 
 Each caught failure logs one WARNING naming the step, and no ERROR, because the turn completes
 (**logging-policy** delta). The turn's "request completed" record carries `outcome=completed`.
@@ -757,6 +981,15 @@ A state that cannot be built or cannot be encoded falls back to the next one in 
 research-resume spec owns the four states and this order ("A turn's one state write falls back in
 a fixed order").
 
+The four states, in the shape of D6:
+
+| State | `preparation` | `research` | `turn_failed` |
+|---|---|---|---|
+| Full state | The turn's `CrossTurnPrepState` as it is, its agent messages and its reviews. | When research ran: the completed run's record, not resumable with reason `completed`, images as placeholders. | No. |
+| Closing state | The turn's `CrossTurnPrepState` with `research_started` set, nothing else. | None. | No. |
+| Snapshot state | The turn's `CrossTurnPrepState` with `plan_approved` and `research_started` reset, its agent messages and its reviews. | The failed run's record. | Yes. |
+| Failure record | The `CrossTurnPrepState` the request's history held when the turn started, nothing else. | None. | Yes. |
+
 | Turn | Candidate states, in order |
 |---|---|
 | The report was written | The full state, then the closing state. |
@@ -764,11 +997,10 @@ a fixed order").
 | Research failed after its graph streamed state | The snapshot state (D6), then the failure record (D21). |
 | The turn failed in any other way | The failure record. |
 
-**The closing state** is the final save of a turn whose report was written, without its
-transcript: an empty `messages`, the turn's `PrepState` with `research_started` set, and no failure
-flag. It needs no image upload, and its `PrepState` encodes as any turn's does. It closes the
-conversation as the full state would: the next request is refused with 409 before the history is
-rebuilt, so no later turn reads the transcript it lacks.
+**The closing state** is the final save of a turn whose report was written, without its research
+record: only its `CrossTurnPrepState` with `research_started` set, and no failure flag. Its `CrossTurnPrepState`
+encodes as any turn's does. It closes the conversation as the full state would: the next request
+is refused with 409 before the history is rebuilt, so no later turn reads the record it lacks.
 
 Each snapshot state or failure record that cannot be saved logs one WARNING with the exception
 class, and a failed final save after the report logs its one WARNING with `saved=` (D18). The
@@ -782,28 +1014,67 @@ Alternatives:
 - *Save a closing state that keeps the report as one message* — rejected. No later turn reads it,
   and a state that keeps any part of the transcript can fail for the reason the full state failed.
 
+### D24. research-agent runs inside a node function that maps its conversation
+
+The research graph keeps research-agent's conversation in its own field, `research_agent_messages`,
+and a node function runs the agent. The function calls the compiled `create_agent` graph with
+`{"messages": state["research_agent_messages"]}`, returns its `messages` as
+`research_agent_messages`, and returns `research_iteration` increased by one. A compiled agent added
+directly as a node shares only same-named channels with its parent, and `create_agent`'s
+`AgentState` fixes the conversation key as `messages`: with any other name, the agent receives an
+empty conversation and nothing raises (verified with a probe on the installed `langgraph` and
+`langchain`). LangGraph's guide "Use subgraphs" gives this node function, "Call a subgraph inside a
+node", as the way to keep a private message history per agent.
+
+The node function counts the iteration, the way the report node records its draft. The count goes
+up only after the agent returns, so a failure mid-iteration still leaves N − 1, and a resumed run
+reads N − 1 until that iteration ends. `IterationCounterMiddleware` is removed: it existed only
+because the agent was added directly as a node.
+
+Streaming is unchanged. The agent's own `values`, `updates` and `tasks` parts still arrive under the
+namespace `research-agent:<task id>` and still use the key `messages` (verified with a probe that
+streams with `subgraphs=True` and `version="v2"`), so the runner's capture (D3) keeps reading them as
+it does. A unit test pins that namespace and key.
+
+The node passes the execution config it receives to the agent: `agent.ainvoke(..., config=config)`.
+The runner starts the research graph with `recursion_limit` set to the channel's
+`max_research_graph_steps`. A nested run inherits that config implicitly when the node passes
+none. But `create_agent` attaches its own config, `recursion_limit=9_999`, to the graph it
+returns, and that preset wins over an inherited limit. A config passed to `ainvoke` wins over the
+preset. Without it, research-agent's run would ignore the channel's step budget, and an agent that
+never finishes would not be stopped. Callbacks reach the agent either way. This was verified with a
+probe on the installed `langgraph` and `langchain`: a nested graph with a preset limit ran past the
+parent's limit without the config, and raised `GraphRecursionError` with it. A unit test pins that
+the step budget stops a research-agent that never finishes.
+
+Alternatives:
+
+- *Keep the graph channel named `messages`* — rejected. The name says nothing about whose messages
+  they are, next to `preparation.agent_messages`.
+- *Rename only the record's field and map it in the snapshot builder and `build_resumed_state`* —
+  rejected. The graph and the record would then name the same list differently, and the record
+  would no longer mirror the state field for field.
+
 ## No changes required
 
-- **`app/research/nodes.py`.** Every node reads its inputs from the state, so it cannot tell a
-  resumed run from a fresh one. The report loop keeps absorbing its failures as it does today.
-- **`app/research/middleware.py`.** `IterationCounterMiddleware` reads `research_iteration` from
-  the state, so a resumed iteration ends at the right count.
+- **What the research graph's LLM calls receive.** The nodes read the renamed fields and build
+  their derived values from them (D11), but every prompt carries the same text as before this
+  change. The report loop keeps absorbing its failures.
 - **`app/middleware.py` (image budget) and `app/tool_failures.py`.** Both recompute their counts
   from the messages on every call.
 - **`app/research/data_queries.py`.** `DataQueryRecord` already dumps and validates by alias, and
   the runner restores into `DataQueryStore.records` (D17).
-- **`app/preparation/agent.py` and `app/preparation/runner.py`.** The agent takes its history from
-  `reconstruct_history`, whose signature does not change (D14). The middleware that stops after
-  `start_research` is unchanged.
+- **`app/preparation/agent.py`.** The middleware that stops after `start_research` is unchanged.
 - **`app/turn_lifecycle.py`.** `raise_dial_error` is unchanged. A state set before the raise
   reaches the client ahead of the error chunk.
 - **The 409 check in `app/completion.py`.** It reads `research_started`, which a failed turn
   persists as false.
-- **`load_last_prep_state` and `DialState.from_dict`.** `DialState` reads only `messages` and
-  `preparation`, so the snapshot key and the failure-flag key are ignored, unless the flag becomes a
-  defaulted field of `DialState` (D21). `PrepState` ignores unknown fields, so a rollback reads the
-  new `plan_id` harmlessly. `load_last_prep_state` is also what the failure record uses to read the
-  `PrepState` the turn started from (D21).
+- **StatGPT.** It reads only `preparation.research_started`, which stays in place (D6). Its
+  companion change keeps a failed turn's state whole without reading any other key.
+- **`load_last_prep_state`.** It reads `CrossTurnPrepState` from `preparation`, whose fields stay where they
+  are (D6). `CrossTurnPrepState` ignores unknown fields, so a rollback reads the new `plan_id` and the new
+  sibling keys harmlessly. `load_last_prep_state` is also what the failure record uses to read the
+  `CrossTurnPrepState` the turn started from (D21).
 - **`utils/llm.py`.** The OpenAI client's `max_retries=3` stays (Non-Goals).
 - **`app_properties.py`, `dial_conf/core/applications-template.json`,
   `docs/generated-app-schema.json`, the README environment-variables table.** There is no new
@@ -848,8 +1119,19 @@ Alternatives:
   state is the restored one, so the new snapshot nearly equals the one it started from, up to about
   a megabyte more in the conversation. This is accepted.
 - **[A failed turn with many images ends later]** → They are uploaded in parallel at save time,
-  which took a few seconds for a few dozen images in the proof of concept. A resume downloads them
-  before its first model call.
+  which took a few seconds for a few dozen images in the proof of concept. An image whose upload
+  meets a server error can add up to 7 s of waiting across its retries (D16). A resume downloads
+  them before its first model call.
+- **[A successful run's images are not kept]** → Debugging a completed run does not see them;
+  each placeholder's hash still identifies its image. This is accepted: no part of the app reads
+  them.
+- **[A response model gains a required field]** → Records saved before that release fail
+  validation, and a matching resumable one is refused (D13). The spec requires a default for every
+  field added later to `ResearchReview` or to the report-review entry, so this happens only through
+  a mistake that review should catch.
+- **[A completed run's record grows the conversation]** → It carries every draft and every review
+  response next to the transcript, without images. The conversation is closed after a delivered
+  report: Deep Research refuses the next request before it reads the history.
 - **[A quota error in the report loop delivers an unreviewed or partly reviewed draft]** → This is
   today's behavior, kept on purpose (Non-Goals).
 - **[A system message in the middle of the history]** → It was accepted by the five GPT
@@ -861,11 +1143,12 @@ Alternatives:
   The budget still bounds each turn.
 - **[A resume runs with today's data sources, code and properties]** → The snapshot carries data
   only. The data sources are fetched again and may differ from those of the failed run.
-- **[A refused snapshot blocks the conversation]** → An unreadable matching snapshot, or one with an
-  image whose file is gone, is refused on every request to continue. The message tells the user to
+- **[A refused snapshot blocks the conversation]** → An unreadable matching snapshot is refused on
+  every request to continue. The message tells the user to
   start a new conversation, and changing the query or the plan also gets past it. A snapshot whose
   `plan_id` itself cannot be read is the exception: it counts as matching (D13), so only a new
-  conversation gets past it.
+  conversation gets past it. A snapshot whose image is gone is not refused: it is discarded, and
+  research reruns in the same turn (D16).
 - **[The choice is closed before the state is written after the report]** → The turn completes
   (D22), but nothing is persisted, because a closed choice takes no state (D23). The next turn
   reads the latest earlier state, so the conversation stays open, and a "continue" may resume an
@@ -876,26 +1159,33 @@ Alternatives:
   run that fails in a way a resume repeats (D20), and whose snapshot state then cannot be built or
   encoded, saves a failure record without a snapshot. The older resumable snapshot of the same plan
   stays the latest one, so the next "continue" replays the failure, which D20 exists to prevent.
-  Two causes are realistic: a files bucket lookup that fails, which usually passes on the next
-  save, and a tool result holding a value the check refuses, such as a `NaN`, which repeats on every
-  replay. This is accepted: it needs a repeating failure and a failed snapshot save in the same
-  turn. A header-only snapshot marked not resumable would prevent it, at the cost of a fifth state.
-- **[A closing state carries no transcript]** → The conversation is closed, so no later turn reads
-  it (D23). Offline tools that read a conversation's final transcript, and debugging, lose that one
-  turn. This is accepted: it needs the full state to fail to build or encode.
-- **[The transcript's tool artifacts can still meet the `index` merge]** → This is today's exposure
-  under `messages`, unchanged. Only non-streaming callers are affected.
+  The realistic cause is a tool result holding a value the check refuses, such as a `NaN` in a
+  server's structured content, which repeats on every replay. A failed image upload is not a cause:
+  it marks the snapshot not resumable and still saves it (D16). This is accepted: it needs a
+  repeating failure and a failed snapshot save in the same turn. Whether to replace non-finite
+  floats before encoding is an open question.
+- **[A closing state carries no research record]** → The conversation is closed, so no later turn
+  reads it (D23). Debugging and evals lose that one turn's research record. This is accepted: it needs the full state to fail to build or encode.
+- **[The transcript's tool artifacts can still meet the `index` merge]** → A persisted tool result
+  has always been exposed to it, and it stays plain JSON in `research_agent_messages`. Only
+  non-streaming callers are affected. A task before archiving checks whether any server sends such
+  a field.
 
 ## Migration Plan
 
-- **No data migration.** Old conversations carry no snapshot. A plan recorded before the deploy
-  gets a `plan_id` when its research starts (D7).
+- **No data migration.** Old conversations carry no research record. A plan recorded before the
+  deploy gets a `plan_id` when its research starts (D7). An old state keeps its `messages` key,
+  which this code ignores: its turn has no `preparation.agent_messages`, so the preparation agent
+  gets that turn's native `content` as one `AIMessage` (D14). Its `CrossTurnPrepState` reads as before,
+  because the fields under `preparation` do not move.
 - **Deploy order is free.** The StatGPT backend change acts only when Deep Research sends a state
   with its error. Before it lands, StatGPT discards the snapshot and "continue" restarts research,
   as today. Through DIAL Chat, the resume works as soon as this change ships.
-- **Rollback.** Older code ignores the snapshot key, the failure-flag key and `plan_id`. The failed
-  answer's reset `PrepState` lets "continue" approve and restart research from zero. Redeploying
-  this change makes a pending snapshot resumable again, as long as the format version is unchanged.
+- **Rollback.** Older code ignores the `research` key, the failure-flag key, `plan_id` and the new
+  keys under `preparation`. It finds no `messages` key, so it reads each new turn as a turn without
+  state and uses its native `content`. The failed answer's reset `CrossTurnPrepState` lets "continue" approve
+  and restart research from zero. Redeploying this change makes a pending snapshot resumable again,
+  as long as the format version is unchanged.
 - **Verification during implementation.** Two unit tests use a real compiled research graph with
   a fake model:
   - **Capture.** The fake model raises on its third call. The test asserts the captured resume point
@@ -916,3 +1206,10 @@ Alternatives:
   words.
 - **The error texts' exact wording.** The spec fixes that each text states what happened and which
   advice it drops (D20); the final words are a product decision.
+- **A guard against non-finite floats.** The strict encoding (D23) refuses a `NaN` or an infinity,
+  and the MCP client keeps a literal `NaN` that a server sends in its structured content (probed on
+  the installed `mcp` package). A guard would replace every non-finite float with `null` before the
+  state is encoded and log one WARNING with the count. StatGPT's data-query tool sends no floats in
+  its structured content, read in its source and confirmed with a live call: its values travel as
+  CSV text, where a `NaN` is a string and passes the check. The guard would therefore protect only against other servers. Not
+  decided.

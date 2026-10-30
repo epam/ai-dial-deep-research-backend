@@ -380,6 +380,9 @@ class ResearchReview(BaseModel):
 
     An empty `next_steps` means every plan item is covered and no gap the rule sections of the
     instructions define is open, so research is complete.
+
+    The research record stores each response whole, so a field added later needs a default: an
+    older record without it would otherwise fail validation, and its resume would be refused.
     """
 
     assessment: str = Field(description="""\
@@ -1211,6 +1214,9 @@ class ReportReview(BaseModel):
     There is no separate approved flag: a draft the model considers fine to ship has nothing
     listed against it, so the list's emptiness is the verdict — a non-actionable remark on an
     otherwise-approved draft cannot be expressed, and forces a revision instead.
+
+    The research record stores each response whole, so a field added later needs a default: an
+    older record without it would otherwise fail validation, and its resume would be refused.
     """
 
     report_violations: list[str] = Field(

@@ -16,10 +16,10 @@ marker tag, the References section is built from the metadata the step resolved,
 annotations claiming those tags are emitted once the text is appended (see `citations.py`,
 `references.py` and the report-citations capability). Nothing about it can fail the turn.
 
-Persistence is the caller's job — `run` returns the research message slice (the transcript plus
-the delivered report as an `AIMessage`) for the coordinator to persist with the preparation slice.
-When `run` raises instead, the coordinator asks `captured_progress` what the run had done, and
-saves it as the snapshot a later turn resumes from.
+Persistence is the caller's job. The delivered report lives only in the assistant content; the
+coordinator saves the research record, built from the graph's last state: after a delivered
+report from `completed_progress`, and when `run` raises from `captured_progress`, as the snapshot
+a later turn resumes from.
 """
 
 from __future__ import annotations
@@ -32,7 +32,6 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from aidial_client import AsyncDial
 from aidial_sdk.chat_completion import Choice, Stage, Status
 from langchain_core.messages import (
     AIMessage,
@@ -47,7 +46,7 @@ from pydantic import BaseModel, Field
 from dial_deep_research.app.data_source_calls import InvalidResultError
 from dial_deep_research.app.data_sources import DataSources
 from dial_deep_research.app.glossary import read_definitions, read_term_list
-from dial_deep_research.app.history import PrepState
+from dial_deep_research.app.history import CrossTurnPrepState
 from dial_deep_research.app.mcp_tools import load_mcp_tools
 from dial_deep_research.app_properties import (
     ApplicationProperties,
@@ -63,7 +62,6 @@ from dial_deep_research.utils.dial_stages import (
     PendingToolCall,
     log_tool_call_completed,
 )
-from dial_deep_research.utils.image_attachments import download_snapshot_images
 
 from .citation_lookups import CitationLookups
 from .citations import (
@@ -80,7 +78,7 @@ from .citations import (
     log_citations_resolved,
     remove_hyperlinks,
 )
-from .data_queries import DataQueryStore
+from .data_queries import DataQueryRecord, DataQueryStore
 from .dataset_metadata import KIND_DATASET_CALL_FAILED, DatasetMetadataError
 from .document_metadata import (
     KIND_METADATA_READ_FAILED,
@@ -96,6 +94,7 @@ from .nodes import (
     ResearchBudgetExhausted,
     ResearchReviewOutcome,
     glossary_tool_messages,
+    latest_draft,
 )
 from .prompts import render_data_sources_instructions
 from .references import (
@@ -357,36 +356,32 @@ class ResearchRunner:
 
     async def run(
         self,
-        prep_state: PrepState,
+        prep_state: CrossTurnPrepState,
         properties: ApplicationProperties,
         data_sources: DataSources,
         opik_tracer: OpikTracer | None = None,
         bearer_token: str | None = None,
         resumed: ResumableSnapshot | None = None,
-        dial: AsyncDial | None = None,
-    ) -> list[BaseMessage]:
+    ) -> None:
         """Run the research graph and deliver its report.
 
         `data_sources` is the turn's data-sources fetch, made before preparation: its string
         reaches every node, and its catalogue is the one the citations resolve against.
 
-        With `resumed`, the run continues a failed one instead of starting from `prep_state`:
-        before the graph starts, the snapshot's images are downloaded with `dial` and its
-        data-query records restored, and the graph enters at the snapshot's resume point with
-        every channel filled from it. Its messages count as already seen, so a tool call the
-        failed run made gets no stage again when research-agent's iteration re-emits them.
+        With `resumed`, the run continues a failed one instead of starting from `prep_state`. Its
+        images are already downloaded; before the graph starts, its data-query records are
+        restored, and the graph enters at the snapshot's resume point with every channel filled
+        from it. Its messages count as already seen, so a tool call the failed run made never
+        gets a stage again.
         """
         loaded = await load_mcp_tools(mcp_servers=properties.mcp_servers, bearer_token=bearer_token)
         self._data_queries = loaded.data_queries
         if resumed is not None:
-            if dial is None:
-                raise ValueError("Resuming research needs a DIAL client to download its images")
             # Restored before the graph runs, so the capture adds and replaces records by id
             # as for any repeated query.
             loaded.data_queries.records.update(resumed.data_queries)
-            await download_snapshot_images(resumed.messages, dial)
             self._seen_ids.update(message.id for message in resumed.messages if message.id)
-        entry = resumed.snapshot.resume_at if resumed is not None else ResumePoint.RESEARCH
+        entry = resumed.resume_at if resumed is not None else ResumePoint.RESEARCH
         # One set of lookups per request, shared by the report review's identifier checks and the
         # citation step, so neither asks a server again about what the other already learned.
         lookups = CitationLookups(
@@ -472,7 +467,6 @@ class ResearchRunner:
             glossary=glossary,
             data_sources=data_sources,
         )
-        return self._messages
 
     async def _stream_graph(
         self, graph: Any, state: Mapping[str, Any], *, config: dict[str, Any], entry: ResumePoint
@@ -501,14 +495,32 @@ class ResearchRunner:
         if resume_at is None:
             raise ValueError(f"No resume point for the research graph node {self._running_node!r}")
         agent_messages = self._agent_messages if resume_at is ResumePoint.RESEARCH else None
-        messages = agent_messages if agent_messages is not None else self._root_state["messages"]
-        records = self._data_queries.records if self._data_queries is not None else {}
+        messages = (
+            agent_messages
+            if agent_messages is not None
+            else self._root_state["research_agent_messages"]
+        )
         return CapturedProgress(
             resume_at=resume_at,
             messages=_without_unanswered_tool_calls(messages),
             channels=dict(self._root_state),
-            data_queries=dict(records),
+            data_queries=self._data_query_records(),
         )
+
+    def completed_progress(self) -> CapturedProgress:
+        """What a run that delivered its report did, for its research record: the graph's last
+        state, with no resume point."""
+        if self._root_state is None:
+            raise ValueError("The research graph streamed no state")
+        return CapturedProgress(
+            resume_at=None,
+            messages=list(self._root_state["research_agent_messages"]),
+            channels=dict(self._root_state),
+            data_queries=self._data_query_records(),
+        )
+
+    def _data_query_records(self) -> dict[str, DataQueryRecord]:
+        return dict(self._data_queries.records) if self._data_queries is not None else {}
 
     async def _deliver_report(
         self,
@@ -527,12 +539,10 @@ class ResearchRunner:
     ) -> None:
         """Post-process the settled report, append it to the choice, and emit its annotations.
 
-        The graph state carries no draft `AIMessage` — drafts stay out of the transcript so a
-        rejected one is neither re-sent to a model nor persisted — so the assistant message is
-        built here, from the draft the loop settled on.
-
-        What is appended is that draft after the citation step, and the same text is what the
-        persisted message carries, so a later turn reads back what the user saw. The
+        Drafts stay out of the transcript, so a rejected one is never re-sent to a model; each
+        draft is persisted in the research record's `reports`, as the writer wrote it. What is
+        appended is the draft the loop settled on, after the citation step, and that delivered
+        text goes to the assistant content alone: no message of it is persisted. The
         annotations follow the content: the client reads them off a finished message, and a
         marker tag no annotation claims is shown to the reader as text.
 
@@ -582,7 +592,6 @@ class ResearchRunner:
             # Only a closed choice or a bug makes this raise. The state saved next still closes
             # the conversation, which the research run has finished.
             _warn_delivery_failure(step="append_report", error=error)
-        self._messages = [*self._messages, AIMessage(content=text)]
         self._send_annotations(delivery.annotations)
         try:
             log_citations_resolved(
@@ -1009,14 +1018,15 @@ class ResearchRunner:
         stages live. There is no `messages` mode: nothing is streamed token-by-token.
 
         `values` carries the whole root state after each super-step, so the last one is the
-        turn's final transcript. Taking it wholesale is what lets an in-place edit reach the
-        persisted slice: the image-budget middleware substitutes a tool result under its
-        original id, and collecting `updates` instead would only ever see the superseded
-        original. For the transcript `ns` must be empty — a subgraph's state has no
-        research-review or report messages. research-agent's own `values` parts (namespace
-        `research-agent:<task id>`) are kept apart, for a failed run's snapshot only: the first
-        arrives as soon as an iteration starts, holding its input, and each later one follows a
-        model call or a tools round.
+        turn's final state, whose `research_agent_messages` is the transcript. Taking it
+        wholesale is what lets an in-place edit reach the persisted record: the image-budget
+        middleware substitutes a tool result under its original id, and collecting `updates`
+        instead would only ever see the superseded original. For the transcript `ns` must be
+        empty — research-agent's own state has no research-review instructions. research-agent's
+        own `values` parts (namespace `research-agent:<task id>`, its conversation under the key
+        `messages`) are kept apart, for a failed run's snapshot only: the first arrives as soon as
+        an iteration starts, holding its input, and each later one follows a model call or a
+        tools round.
 
         `tasks` reports each node starting and finishing; a root-namespace event without `result`
         or `error` is a node starting. The runner keeps the running root node for a failed run's
@@ -1027,8 +1037,8 @@ class ResearchRunner:
             self._handle_updates(part["data"])
         elif part["type"] == "values" and not part["ns"]:
             self._root_state = part["data"]
-            self._messages = part["data"]["messages"]
-            self._report = part["data"].get("report")
+            self._messages = part["data"]["research_agent_messages"]
+            self._report = latest_draft(part["data"])
         elif part["type"] == "values":
             ns = part["ns"]
             if len(ns) == 1 and ns[0].startswith(f"{_RESEARCH_AGENT_NODE}:"):
@@ -1041,6 +1051,12 @@ class ResearchRunner:
                     self._agent_messages = None
 
     def _handle_updates(self, data: dict[str, Any]) -> None:
+        """Turn each new tool call and tool result into its stage, from the key `messages`.
+
+        Only research-agent's own `updates` parts carry that key, one model call's or one tools
+        round's new messages each. The research graph's parts carry the whole conversation under
+        `research_agent_messages`, which is not read here.
+        """
         for node_update in data.values():
             if not node_update:
                 continue
@@ -1053,8 +1069,10 @@ class ResearchRunner:
                     self._handle_tool_message(msg)
 
     def _already_seen(self, msg: BaseMessage) -> bool:
-        """Dedupe the live output for messages arriving from both the subgraph and the
-        parent aggregate. Persistence does not go through here — it reads the final state."""
+        """Dedupe the live output by message id. The ids of a resumed snapshot's messages are
+        added before the graph runs, so no part that ever re-sent them under `messages` could
+        turn a tool call of the failed run into a stage again. Persistence does not go through
+        here — it reads the final state."""
         key = msg.id or f"{id(msg)}"
         if key in self._seen_ids:
             return True

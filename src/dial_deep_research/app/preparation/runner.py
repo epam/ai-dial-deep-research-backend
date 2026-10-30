@@ -1,10 +1,11 @@
 """Streams the preparation agent into a DIAL `Choice`.
 
-Stateless per turn: the caller reconstructs `PrepState` and the transcript from the
-DIAL request and passes them in; this runner builds the agent over that state, runs
-it, and streams its output. It does not load, refuse, or persist — the turn
-coordinator (`app/completion.py`) owns those so a single combined `DialState` is
-persisted once, even when research runs in the same turn.
+Stateless per turn: the caller loads `CrossTurnPrepState` from the DIAL request and passes it in;
+this runner rebuilds the agent's history, builds the agent over that state, runs it, and
+streams its output. It does not load, refuse, or persist — the turn coordinator
+(`app/completion.py`) owns those, so one state is persisted per turn, even when research runs
+in the same turn. The coordinator reads back the turn's agent messages (`run`'s result) and
+each check's response (`reviews`) for that state.
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from aidial_client import AsyncDial
 from aidial_sdk.chat_completion import Choice, Request
 from langchain_core.messages import (
     AIMessage,
@@ -24,7 +24,7 @@ from langchain_core.messages import (
 )
 
 from dial_deep_research.app.data_sources import DataSources
-from dial_deep_research.app.history import PrepState, reconstruct_history
+from dial_deep_research.app.history import CrossTurnPrepState, reconstruct_prep_agent_history
 from dial_deep_research.app_properties import Prompts
 from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.dial_stages import (
@@ -34,6 +34,7 @@ from dial_deep_research.utils.dial_stages import (
 )
 
 from .agent import build_prep_agent
+from .tools import PrepReviews
 
 if TYPE_CHECKING:
     # opik is an optional extra; only needed for the type annotation here.
@@ -61,18 +62,23 @@ class PrepAgentRunner:
         """
         return self._appended_content
 
+    @property
+    def reviews(self) -> PrepReviews:
+        """The whole response of every clarity and approval check this turn made, in order."""
+        return self._reviews
+
     def __init__(self, choice: Choice) -> None:
         self._choice = choice
         self._pending_tool_calls: dict[str, PendingToolCall] = {}
         self._messages: list[BaseMessage] = []
+        self._reviews = PrepReviews()
         self._appended_content = False
         self._streamed_message_id: str | None = None
 
     async def run(
         self,
         request: Request,
-        dial: AsyncDial,
-        prep_state: PrepState,
+        prep_state: CrossTurnPrepState,
         prompts: Prompts,
         data_sources: DataSources,
         opik_tracer: OpikTracer | None = None,
@@ -83,12 +89,13 @@ class PrepAgentRunner:
         reflects the turn (including `research_started` if `start_research` fired).
         `data_sources` is the turn's data-sources fetch, made by the caller.
         """
-        history = await reconstruct_history(request, dial)
+        history = reconstruct_prep_agent_history(request)
         agent = build_prep_agent(
             state=prep_state,
             today_date=datetime.now().date().isoformat(),
             prompts=prompts,
             data_sources=data_sources,
+            reviews=self._reviews,
         )
         config: dict[str, Any] = {"callbacks": [opik_tracer]} if opik_tracer is not None else {}
 

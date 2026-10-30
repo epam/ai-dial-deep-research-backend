@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 import dial_deep_research.app.completion as completion_module
 from dial_deep_research.app.error_resolution import SnapshotVersionUnsupportedError
-from dial_deep_research.app.history import PrepState
+from dial_deep_research.app.history import CrossTurnPrepState
 
 COMPLETIONS_URL = "/openai/deployments/deep-research/chat/completions"
 
@@ -140,7 +140,9 @@ def test_research_already_handed_off_delivered_as_409(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        completion_module, "load_last_prep_state", lambda request: PrepState(research_started=True)
+        completion_module,
+        "load_last_prep_state",
+        lambda request: CrossTurnPrepState(research_started=True),
     )
     response = _post(client)
     assert response.status_code == 409

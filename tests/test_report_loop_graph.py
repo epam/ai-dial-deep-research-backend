@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage, BaseMessage
 
-from dial_deep_research.app.history import Plan, PrepState
+from dial_deep_research.app.history import CrossTurnPrepState, Plan
 from dial_deep_research.app.research import graph as graph_module
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.graph import build_research_graph
@@ -101,14 +101,15 @@ class _FakeReviewModel:
 def _stub_research(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replace research with one no-op iteration that hands straight to the report node."""
 
-    async def research_agent(state: dict[str, Any]) -> dict[str, Any]:
-        # The real research-agent counts its own iterations (IterationCounterMiddleware).
-        return {"research_iteration": state["research_iteration"] + 1}
+    class _ResearchAgent:
+        # The research-agent node wraps this and counts the iteration once it returns.
+        async def ainvoke(self, agent_input: dict[str, Any], config: Any = None) -> dict[str, Any]:
+            return {"messages": agent_input["messages"]}
 
     async def research_review(state: dict[str, Any]) -> dict[str, Any]:
         return {}
 
-    monkeypatch.setattr(graph_module, "build_research_agent", lambda *a, **kw: research_agent)
+    monkeypatch.setattr(graph_module, "build_research_agent", lambda *a, **kw: _ResearchAgent())
     monkeypatch.setattr(graph_module, "make_research_review_node", lambda *a, **kw: research_review)
 
 
@@ -196,7 +197,7 @@ async def test_the_channels_rules_and_kinds_of_source_reach_every_node(
 
 
 def _initial_state() -> dict[str, Any]:
-    prep = PrepState(current_query="q", plan=Plan(steps=["step one"]))
+    prep = CrossTurnPrepState(current_query="q", plan=Plan(steps=["step one"]))
     return dict(build_initial_state(prep))
 
 
@@ -211,8 +212,7 @@ async def test_approved_first_draft_ends_the_loop(monkeypatch: pytest.MonkeyPatc
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.blind_review_calls) == (1, 1)
-    assert final["report"] == _draft("short draft")
-    assert final["report_version"] == 1
+    assert final["reports"] == [_draft("short draft")]
     assert len(stages) == 1
     assert stages[0].revision_instruction is None
 
@@ -227,7 +227,7 @@ async def test_a_grounded_review_item_drives_a_revision(monkeypatch: pytest.Monk
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.blind_review_calls, llm.grounded_review_calls) == (2, 2, 2)
-    assert final["report"] == _draft("second draft")
+    assert final["reports"][-1] == _draft("second draft")
     assert stages[0].violations == ["A figure no page gives."]
     assert stages[1].revision_instruction is None
 
@@ -244,8 +244,7 @@ async def test_violations_drive_a_revision_then_approval(monkeypatch: pytest.Mon
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.blind_review_calls) == (2, 2)
-    assert final["report"] == _draft("second draft")
-    assert final["report_version"] == 2
+    assert final["reports"] == [_draft("first draft"), _draft("second draft")]
     assert [stage.revision_instruction is not None for stage in stages] == [True, False]
     # The revision extends the first draft's prompt rather than replacing any of it.
     first, revision = llm.report_messages
@@ -267,8 +266,9 @@ async def test_budget_caps_report_calls_at_the_version_count(
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.blind_review_calls) == (3, 2)
-    assert final["report"] == _draft("draft three")
-    assert final["report_version"] == 3
+    assert final["reports"] == [_draft("draft one"), _draft("draft two"), _draft("draft three")]
+    # Two review rounds: the third draft is delivered unreviewed.
+    assert [r.draft_number for r in final["report_reviews"]] == [1, 2]
     assert all(stage.revision_instruction is not None for stage in stages)
 
 
@@ -282,7 +282,8 @@ async def test_budget_of_one_skips_the_review_entirely(monkeypatch: pytest.Monke
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.blind_review_calls) == (1, 0)
-    assert final["report"] == _draft("the only draft")
+    assert final["reports"] == [_draft("the only draft")]
+    assert final["report_reviews"] == []
     assert stages == []
 
 
@@ -300,7 +301,7 @@ async def test_over_ceiling_draft_is_revised_despite_approval(
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.blind_review_calls) == (2, 2)
-    assert final["report"] == _draft("two words")
+    assert final["reports"][-1] == _draft("two words")
     # The approving review's empty list gained the app-measured length violation.
     assert len(stages[0].violations) == 1
     assert stages[0].revision_instruction is not None
@@ -319,9 +320,8 @@ async def test_failed_revision_delivers_the_previous_draft(
     final = await _run(compiled)
 
     assert (llm.report_calls, llm.blind_review_calls) == (2, 1)
-    assert final["report"] == _draft("the first draft")
-    # The failed write recorded no version, so the state still names the delivered draft.
-    assert final["report_version"] == 1
+    # The failed write appended nothing, so the latest draft is still the delivered one.
+    assert final["reports"] == [_draft("the first draft")]
     assert final["report_revision_failed"] is True
 
 
