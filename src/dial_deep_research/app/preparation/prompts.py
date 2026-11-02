@@ -3,12 +3,32 @@
 Holds the system prompts for the preparation agent and its two independent checks,
 the Pydantic response schemas those checks return (`QueryReviewResponse`,
 `PlanReviewResponse`), the result and gate-error messages the tools
-return to the agent, and the note that follows a failed turn in the history.
+return to the agent, the note that follows a failed turn in the history, and the helpers that
+render the agent's and the query check's system prompts.
 """
 
 from __future__ import annotations
 
+from datetime import date
+from typing import TYPE_CHECKING
+
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from dial_deep_research.app.data_sources import DataSources
+
+
+def year_span_examples(today_date: str) -> dict[str, str]:
+    """Placeholders for the prompts' examples of a span of years counted back from today, so
+    the years in them are always those of the current year. `today_date` is an ISO date
+    (`YYYY-MM-DD`); any other string raises `ValueError`."""
+    year = date.fromisoformat(today_date).year
+    return {
+        "current_year": str(year),
+        "last_two_years": f"{year - 1}–{year}",
+        "last_ten_years": f"{year - 9}–{year}",
+    }
+
 
 PREP_AGENT_SYSTEM = """\
 You are the intake assistant for a deep-research system.
@@ -35,6 +55,13 @@ The tool checks the query and either returns clarifying questions or confirms it
   Do not call any other tool in the same turn.
 - When the user answers, fold their answer into an improved query and call `update_query` again.
   Repeat until the query is clear.
+- A span of N years counted back from today ("the last 2 years", "the past
+  decade") ends with the current year, which counts as one of the N even though
+  it is not over: in {current_year}, "the last 2 years" is {last_two_years} and
+  "the last 10 years" is {last_ten_years}. Never shift such a span back to the
+  last N completed years. A span given in months or days runs to today. Write
+  the resolved years into the query you record, as in "over the last 10 years
+  ({last_ten_years})", so research is never left to read the span itself.
 - Never answer a clarifying question on the user's behalf,
   only the user can introduce meaningful changes to the query
 - Exception: if a question asks only to restate the time period as an absolute
@@ -44,11 +71,11 @@ The tool checks the query and either returns clarifying questions or confirms it
 - Exception: if the user declines to choose or hands a question back to you
   ("any", "doesn't matter", "you pick"), that IS their answer — do not re-ask.
   Choose a sensible default yourself and fold it into the query. When they have no
-  preference on the time period, use the last 10 years as a concrete range. Then
-  say plainly in your reply which default you applied — for the time period,
-  something like "you had no preference on timing, so I'll cover the last 10 years
-  (2016–2025); tell me if you'd like a different range" — so the user can adjust
-  it.
+  preference on the time period, use the last 10 years as a concrete range,
+  counted as above. Then open your reply by saying plainly which default you
+  applied — for the time period, something like "you had no preference on timing,
+  so I'll cover the last 10 years ({last_ten_years}); tell me if you'd like a
+  different range" — so the user can adjust it.
 
 ## Stage 2 — Draft and align a plan
 
@@ -179,11 +206,16 @@ Resolve the time period yourself, and do not ask the user, in any of these cases
   given, fill the missing one with the broadest reading that suits the task, and
   never ask which edge of "now" is meant.
 - Relative spans ("last 10 years", "last 6 months"), read against today's date.
+  A span of N years ends with the current year, which counts as one of the N
+  even though it is not over: in {current_year}, "the last 2 years" is
+  {last_two_years} and "the last 10 years" is {last_ten_years}, never the last N
+  completed years. A span given in months or days runs to today.
 - An event or era you recognize ("Trump's first presidency", "since Brexit").
 - "the latest" / "newest" / "most recent" <publication> selects the most recent
   matching document, not a time span — it needs no period.
 - The user handed the time choice to you or declined to pick one — the assistant
-  defaults to the last 10 years, so this is settled, not a question.
+  defaults to the last 10 years ({last_ten_years}), so this is settled, not a
+  question.
 Ask about time only when the query gives no usable time signal, when a bare
 "latest" / "recent" / "lately" has nothing else to anchor it, or when the event
 or era is one you genuinely do not recognize.
@@ -234,6 +266,27 @@ the user wants months or exact days, they will say so.
 {data_sources}
 </data_sources>
 """
+
+
+def render_prep_agent_system(*, agent_name: str, today_date: str, data_sources: DataSources) -> str:
+    """The preparation agent's system prompt, carrying the turn's data-sources string, and the
+    instruction to plan around a failed list of datasets on a turn whose list failed."""
+    return PREP_AGENT_SYSTEM.format(
+        agent_name=agent_name,
+        today_date=today_date,
+        data_sources=data_sources.text,
+        dataset_list_failed_instruction=(
+            DATASET_LIST_FAILED_INSTRUCTION if data_sources.dataset_list_failed else ""
+        ),
+        **year_span_examples(today_date),
+    )
+
+
+def render_query_review_system(*, today_date: str, data_sources: str) -> str:
+    """The query check's system prompt with today's date, the data sources and the span examples."""
+    return QUERY_REVIEW_SYSTEM.format(
+        today_date=today_date, data_sources=data_sources, **year_span_examples(today_date)
+    )
 
 
 class QueryReviewResponse(BaseModel):

@@ -11,7 +11,7 @@ from langchain_core.runnables import RunnableLambda
 from dial_deep_research.app.data_sources import DatasetsFetch, DataSources
 from dial_deep_research.app.glossary import GlossaryFetch
 from dial_deep_research.app.preparation import prompts as prep_prompts
-from dial_deep_research.app.preparation.agent import render_prep_agent_system
+from dial_deep_research.app.preparation.prompts import render_prep_agent_system
 from dial_deep_research.app.research import nodes
 from dial_deep_research.app.research.prompts import (
     GLOSSARY_TERMINOLOGY_RULE,
@@ -109,7 +109,7 @@ def test_no_preparation_prompt_tells_the_model_to_call_a_dataset_tool() -> None:
     agent_prompt = render_prep_agent_system(
         agent_name="ACME", today_date="2026-09-27", data_sources=_sources(list_failed=True)
     )
-    clarity_prompt = prep_prompts.QUERY_REVIEW_SYSTEM.format(
+    clarity_prompt = prep_prompts.render_query_review_system(
         today_date="2026-09-27", data_sources=_TEXT
     )
     for prompt in (agent_prompt, clarity_prompt):
