@@ -25,7 +25,8 @@ jobs:
                 "issue_type": "pull-request",
                 "repository": "epam/ai-dial-ci",
                 "static_args": [
-                  "application=${{ github.event.repository.name }}",
+                  "application=statgpt-deep-research",
+                  "environment=statgpt-review",
                   "skip-e2e"
                 ]
               }
