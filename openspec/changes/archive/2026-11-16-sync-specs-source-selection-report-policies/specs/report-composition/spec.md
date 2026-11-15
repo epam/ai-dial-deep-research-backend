@@ -1,0 +1,1281 @@
+## ADDED Requirements
+
+### Requirement: A table in the report gives the values of one source
+
+The report writer's formatting rules SHALL tell it to prefer short paragraphs and bullet lists
+inside a section. They SHALL say that a table gives values from one source, as the source-selection
+rule "Every current value, with its own source" says. They SHALL say that figures go in tables of
+one source each only where a table makes them easier to read and the section descriptions ask for
+it.
+
+How a table is titled, ordered and cited is a section rule, so it lives in the section
+descriptions. In the default structure, the description of Key Findings carries these rules. Two
+source-selection rules also apply to the title of a table of one source: "Every current value, with
+its own source" says that the title names its source, and "Stated date and described period" says
+that it gives its source's stated date (see **source-selection**). How a table cell is exempt from
+an inline citation is a citation rule (see **research-execution**).
+
+#### Scenario: The writer is told that a table holds one source
+
+- **WHEN** the report writer's system prompt is rendered
+- **THEN** its formatting rules SHALL prefer short paragraphs and bullet lists, SHALL say that a
+  table gives values from one source, and SHALL make tables of one source each depend on the
+  section descriptions asking for them
+
+#### Scenario: The default structure asks for tables in Key Findings
+
+- **WHEN** a research turn runs on an instance that does not configure a report structure, and the
+  findings hold GDP growth for three countries from one `IMF:WEO` data query
+- **THEN** the writer's instructions SHALL allow one table of those values in Key Findings, whose
+  title names the dataset and carries the data query's citation
+
+## MODIFIED Requirements
+
+### Requirement: Reports follow the configured report structure
+
+The report SHALL be organized into the sections configured for the application instance
+(`default_report_structure`, see the **application-config-schema** capability), in the
+configured order, each rendered as a Markdown heading carrying the configured section name.
+
+**The references section is the one section the writer does not write.** The application builds it
+after the report loop settles and appends it to every report (see **report-citations**, which owns
+what it contains), and no configured section is ever that section. So nothing has to be subtracted
+from the structure the writer is given, from the structure the review step is given, or from the
+list of headings the app's own structure check expects: all three are the configured structure
+itself. Everything below about sections applies to the sections the writer writes; a delivered
+report still carries the references section, and still
+carries it last.
+
+**Heading levels are fixed.** Every configured section SHALL be a `##` heading carrying exactly
+its configured name — never `#`, never `###`, and never bold text standing in for a heading. A
+report SHALL carry no `##` heading that is not a configured section, and sub-headings within a
+section SHALL be `###` or deeper. The report writer SHALL be given this rule, and the app SHALL
+check it itself over the finished draft (see the app-checked-rules requirement below). The level
+is not decoration: DIAL chat renders the report from its heading structure, and a report whose
+sections sit at differing levels reads as several documents. The app's own References section is
+written to the same levels — its heading at `##`, its per-server tables at `###`.
+
+The writer SHALL also be told to keep each sub-heading short, a few words. It SHALL be told that a
+table's title is not a sub-heading, and that it writes a table's title in the line above the table.
+The app checks the heading levels only. It checks neither of these two rules.
+
+A section's configured **description is the single home for that section's rules**. Everything
+about what the section contains — its purpose, what to put in it, how to render it, any table
+columns it carries — SHALL live in that description and SHALL be passed verbatim to both the
+report writer and the review step. No prompt, model, or spec SHALL carry per-section content
+instructions of its own, so there is exactly one place to change a section's behavior and exactly
+one place a reader has to look. The one exception is the source-selection rules, which name the
+default Overview and Additional context sections (see **source-selection**). A references section is the exception that proves it: nothing about
+its content is instructions to anyone, so its description carries the text the section itself
+shows when the report cited no source (see **application-config-schema**).
+
+Report-wide rules are not section rules and stay out of the descriptions: the word ceiling, the
+prohibited meta-annotations, and the inline citation format (which applies to every section's
+body, not to one section) are defined by this capability and by **research-execution**. The inline
+citation format in particular SHALL remain non-configurable — DIAL chat will render citations
+from it, so it is an interface every instance shares, not a per-deployment preference.
+
+The default structure, used by an instance that configures none, SHALL be **Overview → Key
+Findings → Additional context**, with Key Findings protected. The References section is not part of
+any configured structure: the application appends it to every report after the loop settles
+(**report-citations**).
+
+The default sections' own rules live in their descriptions (see **application-config-schema**). In
+short: the Overview states the question as research understood it and the kinds of source that
+research covered, and it does not give the answer. Key Findings opens with the direct answer and
+gives the values for the requested facts. Additional context gives the supporting context and no
+value for a requested fact. Each default section is a section like any other: the report-wide
+inline citation rule applies to it.
+
+Every configured section the writer writes SHALL be present in the report. A section SHALL NOT be
+filled with text the findings do not support in order to make it appear; a section the findings
+leave nothing to say about SHALL say that plainly instead of being dropped.
+
+A report that cites no source at all SHALL still carry the References section, saying so, rather
+than omitting it: that outcome is a failure of the research to find citable evidence, and hiding it
+as a missing section would misrepresent the report as unsourced by choice. The application writes
+that statement, from `references_section_empty_text`. No configuration SHALL be able to switch the
+section off, and no section of a configured structure SHALL be a references section.
+
+#### Scenario: Default structure applies when nothing is configured
+
+- **WHEN** a research turn runs on an instance that does not configure a report structure
+- **THEN** the delivered report SHALL carry the sections Overview, Key Findings and Additional
+  context as Markdown headings in that order, written by the report writer, followed by the
+  References section the app appends
+
+#### Scenario: Configured structure replaces the default
+
+- **WHEN** an instance configures a structure of `Summary`, `Evidence`, `Outlook`, with `Evidence`
+  marked protected (some section must be, so the structure validates)
+- **THEN** the report SHALL carry exactly those three section headings in that order followed by the
+  appended References section, no Overview, Key Findings or Additional context heading SHALL
+  appear, and each written section's content SHALL follow its configured description
+
+#### Scenario: A section's rules come only from its description
+
+- **WHEN** a deployment changes what belongs in a configured section
+- **THEN** editing that section's `description` SHALL be sufficient, and no prompt text outside
+  the configured structure SHALL have to change with it
+
+#### Scenario: Neither prompt offers a references section to write
+
+- **WHEN** the report writer's prompt and the review step's prompt are rendered from the configured
+  structure
+- **THEN** the rendered structure SHALL be exactly that structure, with no section subtracted from
+  it, and both prompts SHALL state that the application appends the References section itself — the
+  writer's forbidding it to write one, the review step's making one in the draft a violation, from
+  which its never asking for one follows
+
+#### Scenario: A report with nothing to cite still carries the section
+
+- **WHEN** research ends without a single citable source
+- **THEN** the delivered report SHALL still carry the references section, carrying the configured
+  text that states no source was cited, rather than being omitted or filled with invented entries
+
+#### Scenario: A references heading the writer wrote is a violation
+
+- **WHEN** a draft writes `## References` while no configured section carries that name
+- **THEN** the app's own structure check SHALL report it as a `##` heading that is not one of the
+  configured sections, and a revision SHALL be required while the version budget allows
+
+#### Scenario: A section written at the wrong heading level is a violation
+
+- **WHEN** a draft writes a configured section as `# Conclusion`, or as `## **Conclusion**`
+- **THEN** the app's own structure check SHALL report it, naming the heading the section must
+  carry, and a revision SHALL be required while the version budget allows
+
+#### Scenario: A section the findings do not support is not padded
+
+- **WHEN** the findings leave a configured section with nothing substantive to say
+- **THEN** that section SHALL say so plainly and SHALL NOT be filled with text the findings do
+  not support
+
+#### Scenario: The writer is told to keep sub-headings short
+
+- **WHEN** the report writer's system prompt is rendered
+- **THEN** its structure rule SHALL tell the writer to keep each sub-heading short, a few words, and
+  to write a table's title in the line above the table rather than as a sub-heading
+
+### Requirement: Protected sections and their rules survive any user instruction
+
+Some sections carry the report's integrity rather than its shape, and SHALL be **protected**:
+neither removable nor alterable by anything the user asked for. Protection covers two things —
+the section's **presence** in the report, and the **rules in its description** that generate its
+content.
+
+A section is protected iff its configuration marks it so (`ReportSection.protected`, see the
+**application-config-schema** capability), and at least one section SHALL always be protected —
+configuration cannot yield a report whose every section a user may remove. The shipped default
+protects Key Findings. A deployment MAY protect further sections of its own, and
+protection then means the same thing for them.
+
+**The References section is beyond an instruction's reach without being a protected section.** It
+is no part of any configured structure: the application appends it to every report it delivers
+(**report-citations**), so an instruction to leave the sources out has nothing to act on. The writer
+SHALL be told not to write such a section and not to enumerate its sources anywhere else. The review
+step SHALL be given that same prohibition as one of its own checks, whatever the research question
+or the approved plan asked for; its never demanding one follows from holding the check rather than
+from a second instruction.
+
+The inline citation format is protected report-wide rather than per section, because it applies
+to every section's body: no user instruction SHALL change it, and it is not configurable at all.
+
+The user's wording reaches the report writer already: the research question and the plan steps
+are part of its prompt, and either may carry an instruction about structure or formatting. The
+app SHALL therefore state the protection explicitly to **both** the report writer and the review
+step, alongside the configured sections and the query and plan those instructions may hide in,
+naming which sections may not be dropped or restyled.
+
+**Protection SHALL be stated as a rule of its own and SHALL NOT be rendered as a marker on a
+section's name.** The report writer is told to use the configured names as the report's headings,
+so anything attached to a name can be copied into the delivered report. Protection is a fact about
+the app's rules rather than part of what the report says, and it SHALL appear in no text a user
+sees.
+
+Precedence SHALL be: a user instruction applies to everything except the protected sections, their
+rules, and the report-wide rules of this capability — the word ceiling, the prohibited
+meta-annotations, the inline citation format, the appended References section, the ban on
+hyperlinks and "No calculation by research or the report" — and every rule that excludes content,
+together with the source-selection and faithful-relay rules that the writer's list of rules that
+outrank the request names (see those capabilities). None of those SHALL yield to an instruction; an
+instruction to ignore the length limit, to add confidence ratings, or to restyle citations SHALL
+be refused exactly as an instruction to drop a protected section is. Where an instruction conflicts
+with any of them, the rule wins and the rest of the instruction is still honoured as far as it can
+be. A report SHALL NOT carry
+commentary explaining that an instruction was declined — the report contains the report. The one
+exception is the sentence that says the values are given separately because the sources differ,
+when an instruction asks to average or merge differing values (see **source-selection**).
+
+A user's request for a form of the report reaches the writer as one step of the approved plan (see
+**clarification-and-plan-alignment**). The writer is told to follow the instructions about
+structure or formatting in the research question and the plans where it can. This requirement
+bounds what such a request can ever do, whenever it arrives.
+
+#### Scenario: An instruction to drop the references is refused
+
+- **WHEN** the research question or a plan step asks for a report with no references or sources
+  section
+- **THEN** the delivered report SHALL still carry the appended References section with its source
+  tables, and the review step SHALL NOT act on the request — there is no draft section to drop, the
+  application writing the section after the loop settles
+
+#### Scenario: An instruction to restyle citations is refused
+
+- **WHEN** a user instruction asks for citations as numbered footnotes instead of the defined
+  `[doc <id>, page <ix>]` form
+- **THEN** the delivered report SHALL keep the defined citation format, and the review step SHALL
+  treat a draft that adopted the requested format as needing a revision
+
+#### Scenario: A protected section survives a conflicting instruction
+
+- **WHEN** a user asks for an answer in two sentences, which cannot coexist with the configured
+  sections and a full References section
+- **THEN** the References section SHALL still be present however brief the rest becomes, and the
+  report SHALL NOT explain the conflict to the user. The writer follows the brevity request where
+  it can, but nothing about the request may remove a protected section.
+
+#### Scenario: A reader never learns which sections are protected
+
+- **WHEN** a report is delivered from a structure whose Overview section is protected
+- **THEN** neither the section's heading nor any other text in the response SHALL mark it as
+  protected, and the protection SHALL be visible only in the rules the app gives its own models
+
+#### Scenario: A harmless format instruction is not treated as an override
+
+- **WHEN** a user asks for the analysis as a comparison table, touching no protected section
+- **THEN** the review step SHALL NOT flag that as an override attempt on protected-section
+  grounds
+
+#### Scenario: An instruction to lift the length ceiling is refused
+
+- **WHEN** a user instruction asks for an exhaustive report with no length limit
+- **THEN** the ceiling SHALL still apply, and the review step SHALL require a revision of a draft
+  that exceeded it on the instruction's authority
+
+### Requirement: Reports respect a configured word ceiling without abrupt truncation
+
+The report SHALL respect a configured word ceiling (`max_report_words`, default 2750, see the
+**application-config-schema** capability). A report's length SHALL be measured as the number of
+whitespace-separated tokens in the draft's Markdown text **after removing the inline citations**,
+and that one definition SHALL be used everywhere a length is stated — in prompts, in the review
+stage and in logs alike.
+
+The ceiling bounds what the writer chooses to say, and it is measured over the draft the writer
+produced. A citation's length is not that — it follows from the source it names — so counting it
+would let a well-sourced report be revised for its sourcing.
+
+**The references section is outside the measure because it is outside the draft.** The application
+writes it after the loop settles (see **report-citations**), so no draft carries it and no exemption
+is needed; its length follows from how much the research cited and never consumes the writer's
+budget. The report writer SHALL be told what the count leaves out, so a writer is never promised
+room the count does not give.
+
+The writer's own length rule SHALL also tell it never to shorten by dropping a value, and to keep
+every value with its citation and its dates. This holds for the first draft as well as for a
+revision.
+
+A draft that writes a references section **anyway** SHALL lose nothing from the count: that heading
+is a structure violation the review step reports, and a violation SHALL NOT also earn length budget.
+Nothing removes it at delivery either — the app appends its own section and takes no text out (see
+**report-citations**) — so the revision loop is the only thing that can, and a draft that spends its
+last version still carrying one is delivered with that section followed by the built one.
+
+Length is never a model's judgement: it is measured in Python and enforced deterministically (see
+below). Where a model does need a length, it is supplied as a number rather than left for it to
+count: the writer SHALL be told the ceiling, and a revision SHALL be told the draft's measured
+count alongside the ceiling. The review step SHALL be told neither — it judges the content rules
+only.
+
+The ceiling SHALL NOT be enforced by truncation:
+
+- No token cap SHALL be placed on the report model call. Measured behavior, not caution: a capped
+  call returns `finish_reason="length"` and stops mid-sentence rather than wrapping up (see
+  design.md).
+- A revision that shortens an over-long draft SHALL rewrite it to fit by stating the same content
+  more concisely — condensing sections, tightening prose, merging overlapping passages — and SHALL
+  NOT cut a sentence, a list, a table, or a section short. It SHALL NOT drop a fact to fit: every
+  value the draft reports, with its citation and its dates, stays in the revision, unless another
+  item of the same revision instruction asks to change it (see **source-selection**, where
+  omitting a relevant value costs more than including one). The length violation's text SHALL ask
+  for exactly this and SHALL NOT ask to cut detail.
+- The delivered report SHALL end at a clean boundary: a complete sentence closing a complete
+  section, followed by the References section the app appends.
+
+The ceiling is an upper bound, not a target. A draft already under the ceiling SHALL NOT be
+expanded or padded to approach it. A draft whose measured count equals the ceiling exactly SHALL be
+treated as within it.
+
+**Exceeding the ceiling SHALL force a revision deterministically, in Python, not on the review
+model's opinion.** While the version budget allows, a draft whose measured count is above the
+ceiling SHALL be revised regardless of the review step's verdict — including when that verdict
+approves the draft, and including when the review call failed and produced no verdict at all. The
+count is app-owned and needs no model, so a model that approves an over-long draft SHALL NOT be
+able to end the loop on it. The model's verdict governs the other criteria only.
+
+A revision forced on the count alone SHALL still arrive with a concrete instruction: the app SHALL
+render one from the draft, its measured count, and the ceiling, directing a rewrite that shortens to
+fit rather than cutting. Where the review step also returned violations, the two SHALL be given
+together as one instruction.
+
+#### Scenario: Over-long draft is revised with the numbers stated
+
+- **WHEN** a draft measures 3,910 words against a ceiling of 2,750
+- **THEN** a revision SHALL be required regardless of the review step's output, and the
+  revision instruction SHALL state the measured count and the ceiling
+
+#### Scenario: Shortening rewrites rather than truncates
+
+- **WHEN** an over-long draft is revised to fit the ceiling
+- **THEN** the revised report SHALL contain every configured section that the original filled,
+  each ending in a complete sentence, and SHALL NOT end mid-sentence or mid-table
+
+#### Scenario: The length violation asks to condense without dropping a fact
+
+- **WHEN** a draft measures above the ceiling and the app renders the length violation
+- **THEN** the violation text SHALL ask to state the same content more concisely, SHALL say that
+  every reported value stays with its citation and its dates, and SHALL NOT ask to cut detail
+
+#### Scenario: The writer is told never to drop a value to fit
+
+- **WHEN** the report writer's system prompt is rendered, for the first draft or a revision
+- **THEN** its length rule SHALL tell the writer never to shorten by dropping a value, and to keep
+  every value with its citation and its dates
+
+#### Scenario: No token cap on the report call
+
+- **WHEN** the report model call is issued, for the first draft or any revision
+- **THEN** it SHALL carry no maximum-token limit imposed by the app for the purpose of bounding
+  report length
+
+#### Scenario: Short draft is left alone
+
+- **WHEN** a draft measures 900 words against a ceiling of 2,750 and satisfies the other report
+  rules
+- **THEN** the review step SHALL approve it, and no revision SHALL be requested on length
+  grounds
+
+#### Scenario: An approving verdict cannot pass an over-long draft
+
+- **WHEN** the review step approves a draft measuring 3,100 words against a ceiling of 2,750 and
+  the version budget is not exhausted
+- **THEN** a revision SHALL still be written, on the measured count alone
+
+#### Scenario: A draft exactly at the ceiling is within it
+
+- **WHEN** a draft measures exactly 2,750 words against a ceiling of 2,750
+- **THEN** no revision SHALL be forced on length grounds
+
+#### Scenario: Citations do not consume the budget
+
+- **WHEN** a draft's Markdown holds 2,950 whitespace-separated tokens, of which 200 are inline
+  citations, against a ceiling of 2,750
+- **THEN** its measured length SHALL be 2,750 and no revision SHALL be forced on length grounds
+
+#### Scenario: The app's References section never consumes the budget
+
+- **WHEN** a draft measuring 2,600 words is delivered and the app appends a References section of
+  400 words, against a ceiling of 2,750
+- **THEN** the measured length SHALL remain 2,600, no revision SHALL be forced on length grounds,
+  and the delivered report SHALL carry both
+
+#### Scenario: A references section the writer wrote is measured with the rest
+
+- **WHEN** a draft carries a `## References` section of 400 words, and the configured structure's
+  references section is named `References`
+- **THEN** those words SHALL count toward the ceiling like any other, and the heading SHALL be
+  judged by the review step as a section-structure violation
+
+### Requirement: Reports carry no meta-annotations about the research process
+
+The report SHALL NOT contain annotations about the research process or the model's own
+certainty: confidence scores or ratings, certainty or reliability labels, complexity or
+difficulty ratings, processing or elapsed times, iteration counts, or token usage. This covers
+both explicit fields (`Confidence: High`, `Complexity: moderate`, `Processing time: 4m 12s`)
+and equivalent prose or table cells.
+
+The report writer SHALL NOT give an account of how research searched, such as which sources it
+checked, or that one source does not give a fact that another source gives. Which statements about
+missing evidence are required is owned by **source-selection**. The review step SHALL still treat
+honest qualification of the evidence in prose as correct, and SHALL NOT report it as a prohibited
+annotation. A statement labelled as the report's own inference is not qualification of the
+evidence: the report infers nothing (see **faithful-relay**).
+
+Evidence the run could not obtain falls on the permitted side of that line, and important
+evidence must be reported. When evidence for an item that the research question or the approved
+plan asks for could not be retrieved — a tool failed for it, per the **tool-call-fault-tolerance**
+capability, and no other result supplies it — the report SHALL state that it could not be
+retrieved and what therefore cannot be concluded, because a reader who is not told would take the
+report as complete. It SHALL NOT name the tool, give the error or its status, or say how many
+attempts were made: those are facts about the run, which this requirement bans, and the reader can
+act on none of them.
+
+The review step SHALL enforce this boundary as it enforces the rest of this requirement. Its
+checklist is closed — it reports only the violations it is given — so a draft naming the failed
+tool or counting the attempts is caught only if the list says so. The blind review cannot enforce
+the obligation to state evidence lost to a failed tool, because it does not receive the findings.
+The grounded review receives the findings but not this obligation: it judges only the
+source-selection rule "When to say that evidence is missing". So this obligation rests on the
+report writer, which sees the failed results among its findings.
+
+#### Scenario: A draft naming the failed tool is sent back
+
+- **WHEN** a draft states that a tool failed, names it, or says how many attempts were made
+- **THEN** the review step SHALL require its removal, as it does for any other annotation about the research process
+
+#### Scenario: Confidence annotation forces a revision
+
+- **WHEN** a draft ends a section with `Confidence: High (3 sources)`
+- **THEN** the review step SHALL require its removal, and the delivered report SHALL NOT
+  contain it
+
+#### Scenario: Prose qualification of evidence is kept
+
+- **WHEN** a draft gives two differing values for one figure, each with its own citation, and
+  says that the sources give different values
+- **THEN** the review step SHALL NOT treat that as a prohibited annotation and SHALL NOT
+  require its removal
+
+#### Scenario: The writer is told not to describe how research searched
+
+- **WHEN** the report writer's system prompt is rendered
+- **THEN** its list of what the report never includes SHALL name an account of how research
+  searched, such as which sources it checked, or that one source does not give a fact that another
+  source gives
+
+#### Scenario: No processing time in the report
+
+- **WHEN** a research run takes several minutes across many iterations
+- **THEN** the report SHALL state neither the elapsed time nor the number of iterations or tool
+  calls it took
+
+#### Scenario: Important evidence that could not be retrieved is stated
+
+- **WHEN** a tool the run needed failed and the evidence it would have produced is absent from the
+  findings
+- **THEN** the report SHALL state, when the research question or the approved plan asks for that
+  evidence, that it could not be retrieved and what cannot be concluded from its absence, and
+  SHALL NOT state which tool failed, how it failed, or how many attempts were made
+
+### Requirement: Reports contain no calculations
+
+The report SHALL give every figure as a source states it, and SHALL compute nothing. A calculation
+is arithmetic or modelling that produces a number no source gives: a growth rate derived from two
+levels, a difference or a gap in percentage points, a ratio, a multiple such as "twice as large", a
+share, a sum, an average, an elasticity or a regression estimate. Three things are not
+calculations and stay allowed: a comparison that produces no new number, such as which value is
+larger, a rank, or the direction of a change; writing a value in another notation, such as a
+fraction as a percentage; and rounding a value given with more digits than a reader can use, such
+as 0.0473918265 written as 4.74%. The writer's rule section and report review's check SHALL be
+built from this definition in one wording (`CALCULATION_DEFINITION`), so the two cannot drift
+apart.
+
+- **Report writer.** Its prompt SHALL carry this rule as a section of its own, headed "No
+  calculation by research or the report". Flagging a computed number as the report's own inference
+  SHALL NOT make it allowed. Where the question or the plan asks for a figure that only a
+  calculation gives and no source states it, the report SHALL give the figures it is computed
+  from, each with its citation, and SHALL say that the sources do not give the computed figure.
+  Where the question names only a measure, such as an index, and no source states how to compute
+  it, the report SHALL say that the sources give neither the figure nor how to compute it, and
+  SHALL give none of the figures that it could be computed from.
+- **Precedence.** This rule SHALL have the highest priority of all the rules: neither the research
+  question, the plan, a section's description nor a client-specific rule SHALL override it, and both
+  the writer and report review SHALL be told so in those words. The writer's list of rules that
+  outrank the research question and the plan SHALL include this rule. Saying that the sources do not
+  give a figure is a statement about the evidence, and SHALL NOT be read as the commentary on a
+  declined instruction that **Protected sections and their rules survive any user instruction**
+  forbids.
+- **Report review.** The blind review's prompt SHALL carry a "No calculation by research or the
+  report" check among its numbered checks: a number the draft presents as computed from other
+  figures is a violation, even when the draft flags it as its own inference or a section's
+  description or a client-specific rule asked for it. The three allowed things above are not
+  violations. A number that carries its own citation, and that the draft does not present as
+  computed, is not report review's to judge, because report review cannot see the sources. A
+  figure computed from values for different requested facts, such as the difference between two
+  growth rates, falls within this check. The blind part of the source-selection rule "Every current
+  value, with its own source" SHALL say that its own check does not cover such a figure. The
+  grounded review SHALL receive the writer's section in the same wording, so it also finds a
+  computed number the draft presents as stated (see **faithful-relay**, "Rule 3 — the grounded
+  review judges the "No calculation by research or the report" rule").
+
+#### Scenario: The question asks for an elasticity no source states
+
+- **WHEN** the question asks for the elasticity of import growth to GDP growth, and the findings
+  hold both growth series but no source that states the elasticity
+- **THEN** the report SHALL present both series with their citations, SHALL say that the sources do
+  not give the elasticity, and SHALL NOT give an elasticity or a regression estimate of its own
+
+#### Scenario: The question names an index that no source defines
+
+- **WHEN** the question asks for a trade-openness index for Germany, no source states the index or
+  how to compute it, and the findings hold the exports, the imports and the GDP of Germany
+- **THEN** the report SHALL say that the sources give neither the index nor how to compute it, and
+  SHALL NOT give the exports, the imports or the GDP as the figures the index is computed from
+
+#### Scenario: A gap in percentage points between two cited values
+
+- **WHEN** a draft states that one cited growth rate is 1.2 percentage points above another cited
+  growth rate, and no source gives that gap
+- **THEN** report review SHALL report a "No calculation by research or the report" violation
+
+#### Scenario: A comparison is not a calculation
+
+- **WHEN** a draft states that one cited growth rate is higher than another, without giving a new
+  number
+- **THEN** report review SHALL NOT report a "No calculation by research or the report" violation
+
+#### Scenario: Rounding is not a calculation
+
+- **WHEN** a data query returned 0.0473918265 and the draft gives it as 4.74% with the query's
+  citation
+- **THEN** report review SHALL NOT report a "No calculation by research or the report" violation
+
+#### Scenario: A client rule asks for a computed figure
+
+- **WHEN** a channel's client rule asks the writer to give the year-on-year change of each series,
+  and no source states those changes
+- **THEN** the report SHALL give the cited values for each year, SHALL NOT compute the changes, and
+  report review SHALL report a "No calculation by research or the report" violation for a draft
+  that computed them
+
+#### Scenario: A computed figure flagged as inference
+
+- **WHEN** a draft gives the average of three cited yearly values and labels it as its own
+  estimate
+- **THEN** report review SHALL report a "No calculation by research or the report" violation
+
+### Requirement: The rules the app can check itself are checked in Python, not by a model
+
+Some report rules are decidable from the draft text alone, or from the draft and what the app
+itself captured during the turn. Those SHALL be owned by the app: the **section structure** (every
+section the writer writes present, named exactly as configured, in the configured order, as a `##`
+heading, and no other `##` heading), the **word ceiling**, the **absence of hyperlinks** (see the
+requirement above), the **absence of emojis** (see "The app reports every emoji in a draft"), the
+**data-query citations**, and the **dataset and document identifiers** (below). They SHALL be
+checked in Python on
+every reviewed draft, and their violations SHALL join the review model's violations as one list,
+so a revision acts on all of them together.
+
+**The data-query citation check.** Every distinct query id the draft cites as `[data_query <id>]`
+SHALL be looked up, verbatim, among the data-query records the turn captured (**report-citations**
+owns what is captured). The check reports one violation per offending id, and says what to do
+rather than only what is wrong, because a bare "remove this citation" would cost a report the
+citation of a fact it needs:
+
+- **An id the turn never captured** is a mistyped or invented id. The violation SHALL name the id,
+  say that no tool reported a query with it, and ask for it to be corrected to the id exactly as
+  the tool reported it for the query the fact came from.
+- **A captured id of a query that did not return data** — a query whose structured result carries
+  no `seriesCount` greater than zero, which covers a candidate query, a query that did not run, and
+  one that ran and returned nothing — SHALL name the id and say that only a data query that
+  returned data may be cited. It SHALL then say what to do instead: where the statement is about
+  the dataset itself — its last update, its structure, what it covers or does not cover — cite the
+  dataset as `[dataset <urn>]` instead; otherwise drop the citation, or drop the statement when
+  nothing else in the report supports it. A query that returned no data backs no value, so the only
+  fact such a citation can stand for is a fact about the dataset.
+
+A cited id of a query that returned data raises nothing, **whether or not the query has an
+explorer link**. A query that returned data is usable evidence, and the writer cannot see the link
+in any case; a missing link costs the citation its pill at delivery and nothing else
+(**report-citations** defines both terms). The check SHALL NOT judge whether a fact is supported by
+the query it cites: that needs the tool results, and this rule reads only ids.
+
+**The dataset and document identifier checks.** Every distinct URN the draft cites as
+`[dataset <urn>]`, and every distinct document id it cites as `[doc <id>, page <ix>]`, SHALL be
+checked against what its server knows, through the lookups **report-citations** shares with the
+delivery:
+
+- **A URN the dataset catalogue does not carry** SHALL raise one violation naming the URN, saying
+  that no dataset with that identifier exists, and asking for the URN exactly as the dataset tool
+  reported it — whole, with its punctuation and version.
+- **A document id the document-metadata resource does not know** SHALL raise one violation naming
+  the id, saying that no document with that id exists, and asking for the id exactly as the search
+  tool reported it for the document the fact came from.
+
+**Valid means available on the server, not seen in a tool response.** A URN is valid when it is
+in the list of datasets the dataset server makes available, and a document id is valid when it is
+among the documents the document server makes available. The check SHALL NOT ask whether the id
+appeared in an earlier tool response of this turn. That would need the app to read attribution out
+of tool results, and the citation contract deliberately does not require a server to report
+attribution in any predefined format (**source-attribution**): the research agent reads each tool's
+response, whatever its form, and writes the report's citations in this application's own format,
+which the app then parses to build the annotations. The only surfaces the app reads by contract are
+the servers' resolution surfaces, so those are what an id is checked against. An id that exists on
+the server but that the research never retrieved therefore passes this check. A query id is checked
+against tool results only because the data-query server resolves query ids nowhere else: the
+structured result and the `_meta` payload it attaches to each result are contracted surfaces with a
+fixed shape, not attribution text written in whatever form a server chooses (**report-citations**).
+
+An id whose lookup failed, and every id on a channel that configures no server of its kind, SHALL
+raise nothing: a check that cannot tell whether an id is valid stays silent. The cited page is not
+checked; that is deferred.
+
+Each such rule SHALL keep three things in one place: the instruction given to the report writer,
+the check over the finished draft, and the wording of the violation a revision acts on. A rule is
+configured once from the instance's configuration and used at both points, so the writer can never
+be told something different from what its draft is judged against.
+
+**The structure check and the writer see the same list.** The sections the writer is told to write,
+the sections the check expects, and the sections the structure rule's violation names SHALL all be
+the configured structure itself, with nothing added and nothing subtracted anywhere — the
+References section is no part of it, so no derivation stands between the instruction and the check.
+
+**The review model SHALL NOT be asked to judge any of them.** It is told that the app checks the
+headings, the length, the hyperlinks, the emojis and the cited query, dataset and document ids, and
+its own checks are the ones that need a reader: a padded section, a section that should admit it
+has nothing to say, content that a section's description keeps out of that section or sends to
+another section, the protected-section rules, the prohibited annotations, valid Markdown, the
+citation format, a list of sources the draft carries, the "No calculation by research or the
+report" check, the blind-review part of every generic and client rule, and, on a turn whose glossary fetch listed
+at least one term or whose research agent obtained a successful glossary tool result, the
+"Glossary terms" check (see **A report uses the glossary's terminology**). A model verdict SHALL
+NOT be able to pass a draft that breaks an app-checked rule, and a review call that fails SHALL NOT
+suppress one.
+
+**A list of sources is the review model's to report, because the app cannot see every form of
+one.** The structure check reads `##` headings, so it catches a references section written as one
+and nothing else: the same list written under a `###` sub-heading, in bold standing in for a
+heading, under a bold line standing in for a heading, or under no heading at all breaks the
+writer's rule and reaches the reader unreported.
+
+**What is forbidden is an enumeration, not a mention.** The rule given to the writer and to the
+review model SHALL name a list carrying one entry per source — the bibliography an article ends
+with — in whatever form it takes, and SHALL exclude the two things it is not: the inline citations,
+and prose describing the evidence. A section whose description requires it to say what the research
+drew on, to name the kinds of source it covered, or to characterise their coverage SHALL be correct
+to do so. The Overview is exactly such a section in the default structure, so a rule worded against
+*mentioning* sources would contradict the structure it is enforcing.
+
+**Every check the review model is given SHALL be decidable from what that call receives.** It sees
+the draft, the configured structure, the query and plan, the turn's data-sources string, and the
+research agent's successful glossary tool results, and it deliberately sees neither the findings nor
+any other tool result (**research-execution**). The "Glossary terms" check is given only on a
+turn whose glossary fetch listed at least one term or whose research agent obtained a successful
+glossary tool result, for this reason. A check phrased against what a server
+reported is therefore unanswerable, and a model asked one resolves it by guessing. The
+citation-format check in particular SHALL be worded against the **shape** of a citation and SHALL
+carry an example of a well-formed dataset URN and of a well-formed data-query citation, rather than
+asking whether the identifier is the one the dataset tool returned — an identifier whose name reads
+like ordinary words is otherwise reported as a display name, and an opaque query id is otherwise
+reported as a malformed dataset citation. Whether a cited URN or query id matches a real record is
+not this model's to decide: the app compares it to what the server reported character for
+character (**source-attribution**) and simply draws no pill where nothing matches. For the same
+reason the citation-format check SHALL NOT ask which tool a fact came from: that is in the tool
+results this call does not see. A figure whose only citation is a `[dataset <urn>]` marker is a
+different matter: it breaks the language-and-style rule "Datasets by name, cited once", which the
+blind review judges from the draft alone (see **language-and-style**).
+
+The review model SHALL therefore be asked to report such an enumeration wherever it appears. Its
+never demanding one follows from the same check rather than from a second instruction: it is told
+its job is the checks alone, so a section it asked a revision to add would break one it holds.
+Reporting a `##` references section the structure check also reports is accepted — a duplicated
+violation costs a revision nothing, while a missed one costs the reader.
+
+The check is the reviewer's standing behaviour rather than anything about the draft in hand, so it
+SHALL be stated in its **system prompt**. The per-turn request SHALL carry no copy of it, and SHALL
+NOT need the section's configured name to render: the check does not turn on what the heading is
+called, so naming it there would add a per-instance input to a call that does not use one.
+
+#### Scenario: An approving verdict cannot pass a mis-headed draft
+
+- **WHEN** the review model returns no violations for a draft whose `Conclusion` section is written
+  as `# Conclusion`
+- **THEN** the app's structure rule SHALL report it, a revision SHALL be required while the budget
+  allows, and the violation SHALL name the section and the heading it must carry
+
+#### Scenario: A failed review call still reports the app-checked rules
+
+- **WHEN** the review call fails on a draft that is over the ceiling and missing a configured
+  section
+- **THEN** both violations SHALL still be reported, and the turn SHALL NOT fail
+
+#### Scenario: The review model is not asked about headings, length or hyperlinks
+
+- **WHEN** the report-review call is issued
+- **THEN** its prompt SHALL state that the app checks the headings, the length, the hyperlinks and
+  the emojis itself, and SHALL NOT ask it to verify any of them
+
+#### Scenario: The expected headings are the configured structure itself
+
+- **WHEN** the structure check runs on a draft written from a configured structure
+- **THEN** the headings it expects SHALL be exactly that structure's sections, with nothing
+  subtracted, and a draft carrying exactly those SHALL pass the check
+
+#### Scenario: The review model never asks for a references section
+
+- **WHEN** the report-review call is issued
+- **THEN** its prompt SHALL state that the application appends the References section itself once
+  the draft is settled and that an enumeration of the report's sources in the draft is a violation,
+  whatever the research question or the approved plan asked for, so a revision it asks for SHALL
+  NOT demand one
+
+#### Scenario: The review model is told to report a references section the draft wrote
+
+- **WHEN** the report-review call is issued
+- **THEN** its prompt SHALL ask the model to report an enumeration of the report's sources wherever
+  the draft carries one — under a heading, under a bold line standing in for one, or under none —
+  and SHALL state that the inline citations and prose describing the evidence are not such an
+  enumeration
+
+#### Scenario: A readable dataset identifier is not reported as a display name
+
+- **WHEN** a draft cites a dataset whose URN carries a legible name, such as
+  `[dataset IMF:WEO(1.0.0)]`, and the review model cannot see what the dataset tool reported
+- **THEN** the citation-format check SHALL NOT report it, the prompt having told the model to judge
+  the citation's shape and shown it a well-formed URN
+
+#### Scenario: A section naming its sources in prose is not a violation
+
+- **WHEN** a draft's Overview names the question and the kinds of source the research covered, as
+  its configured description requires, and the draft carries no list with one entry per source
+- **THEN** neither the app's own checks nor the review model's SHALL report it
+
+#### Scenario: A data-query citation is a well-formed citation
+
+- **WHEN** a draft cites `[data_query dq_0123abcd45]`, and the review model cannot see what the
+  data-query tool reported
+- **THEN** the citation-format check SHALL NOT report it, the prompt having shown the model a
+  well-formed data-query citation beside the document and dataset forms
+
+#### Scenario: A mistyped query id asks for the id to be fixed
+
+- **WHEN** a reviewed draft cites `[data_query dq_0123abcd46]` and the turn captured no query with
+  that id
+- **THEN** the app SHALL report one violation naming `dq_0123abcd46`, stating that no tool reported
+  a query with that id, and asking for the id the tool reported
+
+#### Scenario: A query without data is not simply removed
+
+- **WHEN** a reviewed draft cites a candidate query's id for a statement that a dataset carries no
+  data for a country
+- **THEN** the app SHALL report one violation naming the id, stating that only a query that returned
+  data may be cited, and directing a statement about the dataset itself to a `[dataset <urn>]`
+  citation, and any other statement to dropping the citation or the statement
+
+#### Scenario: A query that returned data raises nothing
+
+- **WHEN** a reviewed draft cites a query id whose captured structured element carries a
+  `seriesCount` greater than zero
+- **THEN** the data-query check SHALL report no violation for it
+
+#### Scenario: A query that returned data but has no explorer link raises nothing
+
+- **WHEN** a reviewed draft cites a query id whose structured element carries a `seriesCount` of
+  `3`, and whose `_meta` element carries no data explorer URL
+- **THEN** the data-query check SHALL report no violation for it, and the delivered citation SHALL
+  stay as text (**report-citations**)
+
+#### Scenario: A query that ran and returned nothing asks for a revision
+
+- **WHEN** a reviewed draft cites a query id whose `_meta` element carries a data explorer URL and
+  whose structured element carries no `seriesCount`
+- **THEN** the app SHALL report one violation naming the id and stating that only a query that
+  returned data may be cited
+
+#### Scenario: An unknown dataset URN asks for the reported URN
+
+- **WHEN** a reviewed draft cites `[dataset IMF:WEO(2.0.0)]` and the catalogue carries
+  `IMF:WEO(1.0.0)` and no `IMF:WEO(2.0.0)`
+- **THEN** the app SHALL report one violation naming `IMF:WEO(2.0.0)` and asking for the URN exactly
+  as the dataset tool reported it
+
+#### Scenario: An unknown document id asks for the reported id
+
+- **WHEN** a reviewed draft cites `[doc 999, page 2]` and the document-metadata resource's answer
+  omits `999`
+- **THEN** the app SHALL report one violation naming document `999`, and SHALL say nothing about
+  page `2`
+
+#### Scenario: An available id that no tool response mentioned passes
+
+- **WHEN** a reviewed draft cites `[dataset IMF:WEO(1.0.0)]`, the catalogue carries that URN, and no
+  tool response of the turn mentioned it
+- **THEN** the dataset check SHALL report no violation for it
+
+#### Scenario: A failed lookup raises no identifier violation
+
+- **WHEN** a reviewed draft cites documents and the document-metadata read fails
+- **THEN** the document check SHALL report no violation for that draft
+
+#### Scenario: The glossary check is given only with the glossary
+
+- **WHEN** the report-review call is issued on a turn whose glossary listed terms
+- **THEN** its system prompt SHALL list the "Glossary terms" check among the review model's own
+  checks and SHALL carry the glossary in its data-sources string, while on a turn without a
+  glossary the check SHALL NOT appear
+
+#### Scenario: Content that a description sends elsewhere is a violation
+
+- **WHEN** the default structure is used, and a draft gives a value for a requested fact in
+  Additional context, whose description says not to give one there
+- **THEN** the review model SHALL report it as a violation where it stands
+
+#### Scenario: A figure cited only by its dataset is reported
+
+- **WHEN** a draft gives inflation in the United States with only the citation
+  `[dataset IMF:WEO(1.0.0)]`
+- **THEN** the blind review SHALL report it under the rule "Datasets by name, cited once", while the
+  citation-format check SHALL NOT report the marker's form
+
+### Requirement: A review ↔ revise loop enforces the report rules before delivery
+
+A finished draft SHALL be judged by an independent review step before it is delivered. That step's
+first call, the **blind review**, SHALL read the draft, the configured report structure, the
+protected sections, and the research question and plan — the last two because they are where a
+user's formatting instruction lives, and without them the step cannot tell a legitimately-followed
+instruction from an override of a protected rule. It SHALL judge the draft against the section
+content rules, the protected sections and their rules, the prohibited meta-annotations, well-formed
+Markdown, the citation format rules the **research-execution** capability defines, and the
+blind-review part of every quality rule: the generic rules of every policy and the channel's client
+rules (see **source-selection** and **faithful-relay**). These parts judge only
+what the draft shows — how two values for one fact are presented, whether a value states its
+described period, whether a near match says how it differs, whether a claim carries a citation —
+because the blind review never sees the sources.
+
+The review step SHALL make a second call beside it, the **grounded review**, which sees the
+research transcript and judges the draft against the source-selection and faithful-relay rules'
+writer parts, the writer's "No calculation by research or the report" rule, and the
+grounded-review part of every other
+quality rule, generic and client (see **faithful-relay**). The two calls SHALL run concurrently, and
+the grounded review's items SHALL be appended to the blind review's violations, so the loop below
+treats every item alike.
+
+The section structure, the word ceiling, the absence of hyperlinks and the absence of emojis are not
+the review step's to judge — the app checks those itself (see the
+requirement above). The citation-format check becomes load-bearing with this change: the app parses
+those markers out of the delivered report (see **report-citations**), so a draft that adopted
+numbered footnotes would yield no pills at all, and this step is what pushes it back to the defined
+form. It SHALL NOT be given the measured word
+count or the ceiling: length needs no model — the app measures it and adds the length violation
+itself (see the ceiling requirement).
+
+The blind review's structured output SHALL be the violations alone, one entry per rule the draft
+breaks and naming what to change; the grounded review answers with a numbered list of the same
+kind. There SHALL be no separate approval field: an empty list SHALL
+mean the draft is approved, so a remark that is not meant to block delivery cannot be expressed —
+every returned violation forces a revision.
+
+The blind review SHALL NOT receive the research findings: every criterion it judges is decidable
+from the draft, the configuration, and the query and plan. Only the grounded review receives them.
+
+**A failing review SHALL NOT cost the report.** If the blind review fails — an unparseable
+structured response, a provider error, exhausted transient-drop retries — the turn SHALL NOT fail
+and the failure SHALL be logged as a warning. The same holds for the grounded review: a failed
+grounded review adds no item, and the blind review's violations still stand, as the grounded
+review's items still stand when the blind review fails. This departs deliberately from
+research-review, which is fail-loud because a broken verdict there means research of unknown
+completeness; here the report already exists, and discarding a finished multi-minute run over a
+formatting check is the worse outcome.
+
+When both calls fail, the app has no verdict, so the two rules compose in one order, which SHALL
+be: the measured count still applies. An over-ceiling draft whose review failed SHALL be revised on
+the app-rendered length instruction alone; a draft within the ceiling SHALL be delivered as the
+answer. A reviewed draft always has a rewrite in budget — the review is gated on the budget below —
+so a failed review never has to reason about an exhausted budget.
+
+**A swallowed revision failure ends the loop, overriding the count gate.** It is the third delivery
+case beside "within the ceiling" and "budget exhausted": an over-ceiling draft MAY therefore ship
+with
+version budget still remaining, and that unresolved length SHALL be recorded in the logs exactly as
+an exhausted budget is. The count gate above applies while revisions are still being written
+successfully, not after one has failed.
+
+**A failed revision SHALL NOT cost the report either.** Once a draft exists, no later failure in the
+loop may discard it: if a revision's own model call fails — after its transient-drop retries, or on
+a
+non-retryable error such as an exceeded context length, which a revision is likelier to hit than the
+first draft was because its request is strictly larger — the **previous** draft SHALL be delivered
+and the failure logged as a warning. The turn SHALL NOT fail. Before this loop existed the report
+was
+written once and a failure had nothing to discard; adding revisions must not turn a finished report
+into a failed turn.
+
+When the review returns revision instructions, the report SHALL be rewritten against them and
+judged again. The loop SHALL be bounded by a configured version budget (`max_report_versions`,
+default 3, counting the first draft and every rewrite as one version each): a draft SHALL be
+reviewed only while another version may still be written, so the last permitted version is
+delivered as the answer without a further review. That final review is deliberately not run
+because its verdict would be non-actionable — no rewrite may follow it — so the review would spend
+a review's time and cost only to log problems the loop can no longer fix. An imperfect report is
+delivered, the turn is never failed and the work is never discarded over a formatting verdict,
+and the unreviewed delivery SHALL be announced (see the stage requirement above). A budget of one
+SHALL mean the first draft is delivered with no review at all.
+
+The review step SHALL judge the report as written. It SHALL NOT re-open evidence coverage or
+request further research — that judgement belongs to research-review — and it SHALL NOT be able to
+route control back to research-agent. The blind review's prompt SHALL still list, among what it does
+not judge, whether a claim is true and whether the research was thorough, and SHALL NOT list whether
+a source was the right one to use: how the draft presents the values of several sources is a
+source-selection check it does judge. The grounded review's instructions SHALL list whether
+the research was thorough among what it does not judge, and SHALL NOT list whether a claim is true
+to its source, which is what it judges.
+
+Once the loop has settled on the draft to deliver, that draft's wording is final: no later step may
+rewrite, shorten, reorder, or reformat it. The one permitted exception is the citation step, which
+replaces each citation marker it converts into an inline citation annotation with that citation's
+marker tag and changes nothing else (see the **report-citations** capability). The review step
+judges
+the draft with its markers in place, which is the form the citation rules are written against.
+
+#### Scenario: Approved first draft is delivered as judged
+
+- **WHEN** the review step approves the first draft
+- **THEN** that draft SHALL be delivered as the answer with no revision written and no rewording,
+  its only permitted difference from the judged text being the citation markers the citation step
+  replaced with marker tags
+
+#### Scenario: Rejected draft is revised and judged again
+
+- **WHEN** the review step returns revision instructions for the first draft and the version
+  budget is 3
+- **THEN** a revision SHALL be written against those instructions and SHALL itself be judged by
+  the review step before delivery
+
+#### Scenario: A violation always forces a revision, with no way to leave it merely informative
+
+- **WHEN** the review step returns one violation on a draft it would otherwise consider fine to
+  ship
+- **THEN** the draft SHALL still be treated as not approved and a revision SHALL be written
+  against that violation, because the schema has no field to mark a violation non-actionable
+
+#### Scenario: Exhausted budget delivers the latest draft
+
+- **WHEN** every review demanded a rewrite and the last permitted version has been written
+- **THEN** the latest draft SHALL be delivered as the answer without a further review, the
+  turn SHALL complete successfully, and the unreviewed delivery SHALL be recorded in the logs
+
+#### Scenario: A failed blind review delivers a draft that is within the ceiling
+
+- **WHEN** the blind review raises, or returns output that cannot be parsed into its verdict schema,
+  after its transient-drop retries are exhausted, the draft is within the word ceiling, and the
+  grounded review reports no item or fails too
+- **THEN** the current draft SHALL be delivered as the answer, the turn SHALL complete
+  successfully, and the failure SHALL be logged as a warning
+
+#### Scenario: A failed blind review still shortens an over-long draft
+
+- **WHEN** the blind review fails on a draft measuring 3,900 words against a ceiling of 2,750 and
+  the version budget is not exhausted
+- **THEN** a revision SHALL be written against the app-rendered length instruction, together with
+  any item the grounded review reports, and the failure SHALL be logged as a warning
+
+#### Scenario: A failed revision call delivers the previous draft
+
+- **WHEN** a revision's model call fails — its transient-drop retries exhausted, or a non-retryable
+  error such as an exceeded context length — after a first draft was already written
+- **THEN** the previous draft SHALL be delivered as the answer, the turn SHALL complete
+  successfully,
+  and the failure SHALL be logged as a warning
+
+#### Scenario: An over-long draft ships when the budget runs out
+
+- **WHEN** the version budget is exhausted and the latest draft still measures above the ceiling
+- **THEN** that draft SHALL be delivered as the answer, the turn SHALL complete successfully, and
+  the
+  unresolved length SHALL be recorded in the logs
+
+#### Scenario: A forced revision carries an instruction even with nothing from the model
+
+- **WHEN** the review step approves an over-long draft, so Python forces the revision
+- **THEN** the report node SHALL receive the previous draft, its measured count, the ceiling, and a
+  direction to shorten by rewriting, and SHALL NOT be invoked as if writing a first draft
+
+#### Scenario: Version budget of one skips the review
+
+- **WHEN** an instance configures a version budget of one
+- **THEN** the first draft SHALL be delivered as the answer and no review SHALL be made
+
+#### Scenario: Review cannot reopen research
+
+- **WHEN** the review step judges a draft whose Key Findings rest on thin evidence
+- **THEN** it SHALL confine its instructions to the report text and SHALL NOT cause another
+  research iteration
+
+#### Scenario: Review reports two differing values merged into a range
+
+- **WHEN** a draft states "global GDP is forecast to grow by 3.3% to 3.5% in 2026" and cites two
+  sources, each of which gives one end of the range
+- **THEN** the review step SHALL report a violation asking for each value to be stated on its own,
+  with its own citation, and SHALL NOT ask for the reason for the difference unless the query or
+  the approved plan asks for it
+
+#### Scenario: A failed blind review leaves the grounded review's items standing
+
+- **WHEN** the blind review fails and the grounded review reports two violations
+- **THEN** the draft SHALL be revised against those two violations, and the blind review's failure
+  SHALL be logged as a warning
+
+#### Scenario: The grounded review's item forces a revision the blind review would not
+
+- **WHEN** the blind review approves a draft and the grounded review reports that a figure is
+  not on the page cited for it
+- **THEN** the draft SHALL be revised against that item
+
+### Requirement: A report cites only the retrieved sources, and carries no hyperlinks
+
+The report SHALL reference a source in exactly one way: the inline citation forms the
+**research-execution** capability defines. It SHALL contain no hyperlink of any kind — no Markdown
+link (`[text](url)`), no Markdown image (`![alt](url)`), no autolink (`<https://…>`), no
+reference-style link (`[text][ref]` together with its `[ref]: url` definition), no raw HTML anchor
+or image tag, and no bare URL. A hyperlink is a citation of something the research did not retrieve,
+which is what this rule exists to prevent. The inline citation of the retrieved page identifies the
+source, and the writer SHALL be told so.
+
+This list is the rule's own enumeration and the one place it is written out: every other capability
+that acts on it — the delivery step in **report-citations**, the citation forms in
+**research-execution** — refers here rather than repeating the forms, so a form added to the rule is
+added once.
+
+This rule is enforced in three layers, and they carry **different** responsibilities — that split is
+the point, not an accident (see the app-checked-rules requirement below):
+
+1. **The report writer is told.** Its instructions state that only the inline citation forms may
+   reference a source, and that links, images, autolinks and bare URLs are never written.
+2. **The review loop is where a link is properly fixed, and it owes the reader good prose.** Every
+   reviewed draft SHALL be checked for hyperlinks and each occurrence reported as a violation, which
+   joins the review model's own list and is visible in the review's DIAL stage like any other. The
+   violation SHALL ask for the sentence to be **rewritten** so that it no longer refers the reader
+   to anything outside the retrieved sources — not merely for the URL to be deleted. A rewrite is
+   the only repair that can keep the sentence reading well, and the report writer, which acts on the
+   violation, is the only participant that can produce one.
+3. **The delivery step is the guarantee, and owes only that.** It SHALL leave no hyperlink and no
+   external URL in the delivered text, even in a draft the review never got to revise (see the
+   **report-citations** capability, which owns that step). It SHALL NOT try to make the result read
+   well: a draft reaching delivery with a URL has already had its revision chance, so the guarantee
+   that nothing points the reader outward matters more than the wording left behind.
+
+Removing the link markup is not by itself enough at either layer: a URL left as text still tells the
+reader where else to look, and a Markdown renderer turns a bare URL into a link of its own.
+
+How each form is repaired:
+
+- A **Markdown link** SHALL keep its label and lose its URL: `see the [latest
+  outlook](https://example.org/outlook)` becomes `see the latest outlook`. The sentence survives and
+  nothing points outward.
+- A **Markdown image** SHALL be dropped whole, alt text included, so no client fetches a remote
+  resource on the reader's behalf.
+- A **reference-style link** SHALL keep its label and lose both bracket pairs, and its `[ref]: url`
+  definition line SHALL be deleted whole. A bracketed token is a reference-style link only when a
+  matching definition exists, so an inline citation marker is never treated as one — the citation
+  forms are not hyperlinks, as the last scenario of this requirement states.
+- A **raw HTML anchor** (`<a href="…">text</a>`) SHALL keep its text and lose its tags, and a raw
+  HTML image tag SHALL be dropped whole, each for the same reason as its Markdown counterpart.
+- An **autolink or a bare URL** has no label to keep — the URL is the text — so the delivery step
+  SHALL delete it. That can leave a sentence ending mid-thought (`published at`), and that cost is
+  accepted deliberately: the layer that owes readable prose is the review loop, which had its chance
+  to demand a rewrite, and a mechanical pass cannot reword a sentence. Neither rendering the URL as
+  inline code nor replacing it with a placeholder is used: both keep telling the reader where else
+  to look, which is the thing the rule forbids.
+
+**What the app deliberately does not do with a link the report should not have carried.** The repair
+is mechanical and stops at removal:
+
+- It SHALL NOT interpret the link. No attempt is made to work out which source it meant, to match
+  its target against the retrieved documents, or to turn it into a citation.
+- It SHALL NOT preserve the URL anywhere the user reads — not in the delivered text, not as a
+  footnote, and not in the references section. The research record keeps each draft as the writer
+  wrote it, links included, for observability (**research-resume**): the removal applies to what is
+  delivered, not to the writer's output.
+- It SHALL NOT rewrite the prose around the removal. The wording stays as the writer wrote it and
+  may read worse for the loss; only the link's own characters go. Rewriting is the review loop's
+  business, one layer earlier.
+- It SHALL NOT distinguish one URL from another. Internal or external, reachable or broken, every
+  link is repaired the same way.
+- It SHALL NOT announce the removal in the report. A reader sees ordinary prose; the violation is
+  what the review stage and the logs carry.
+- It SHALL NOT fail the turn or withhold the report over a link.
+
+#### Scenario: A reviewed draft carrying a link is rewritten, not just stripped
+
+- **WHEN** a reviewed draft contains `see the [latest outlook](https://example.org/outlook)`
+- **THEN** the app SHALL report a violation naming that link, it SHALL join the review model's
+  violations as one list, and the revision SHALL be asked to rewrite the sentence so it refers to no
+  source outside the retrieved ones — so the delivered sentence reads correctly rather than merely
+  losing its URL
+
+#### Scenario: A link that survives to delivery is removed from the text
+
+- **WHEN** the version budget is exhausted and the delivered draft still contains
+  `see the [latest outlook](https://example.org/outlook)`
+- **THEN** the delivered text SHALL read `see the latest outlook`, with the link removed and its
+  label kept, and the turn SHALL complete successfully
+
+#### Scenario: An image is dropped rather than delivered
+
+- **WHEN** a delivered draft contains `![chart](https://example.org/chart.png)`
+- **THEN** that image SHALL NOT appear in the delivered text, so no client fetches a remote
+  resource on the reader's behalf
+
+#### Scenario: A bare URL is a violation, and does not reach the reader either
+
+- **WHEN** a reviewed draft contains `published at https://example.org/outlook`
+- **THEN** the app SHALL report a violation asking for the sentence to be rewritten, and a revision
+  SHALL be written while the budget allows; if it survives to delivery the URL SHALL be deleted, even
+  though that leaves the sentence ending in `published at`
+
+#### Scenario: The inline citation forms are not hyperlinks
+
+- **WHEN** a draft cites `[doc 442, page 3]` and `[dataset ABC:DEF]`
+- **THEN** neither SHALL be reported as a hyperlink violation, and neither SHALL be altered by the
+  hyperlink removal
+
+### Requirement: A report uses the glossary's terminology
+
+On a channel that configures a glossary (see **data-sources-discovery**), the report SHALL use the
+glossary's terminology: where the report refers to a concept that a glossary term names, it SHALL
+use that term, spelled as the glossary spells it, rather than a synonym or a paraphrase. A glossary
+term that the report has no reason to mention is not required.
+
+**A glossary term may be written in any of the forms the glossary gives it.** A term that lists
+several names separated by a slash, such as "Workforce/Labour force", MAY be written as any one of
+those names, and the whole slash form SHALL NOT be required. A term that gives a full form with its
+abbreviation in parentheses, such as "Harmonised Index of Consumer Prices (HICP)", MAY be written in
+either form; where the report uses the abbreviation, its first use SHALL be written as the full form
+followed by the abbreviation in parentheses. In mid-sentence, a glossary term's first letter MAY
+be written in lower case. A `[glossary <term>]` citation still writes the whole term, as the
+glossary spells it. Both calls receive this in the rule's shared wording.
+
+**The glossary is the only source of glossary terms and definitions.** A phrase counts as a
+glossary term only when it is a term of the glossary: a `term` in the data-sources string's
+`Glossary terms:` list, or a term in the research agent's glossary tool results. A phrase found
+anywhere else, such as a dataset description or structure, a document, a data-query result or
+the knowledge-base descriptions, is not a glossary term, however much it reads like one. The rule
+governs only the concepts the glossary names: a term the glossary does not list, such as "trade
+balance" taken from a document or a dataset description, may be used freely, unless it names a
+concept that a glossary term names, in which case the glossary term applies. The writer SHALL NOT
+present such a phrase as a glossary term or cite it with `[glossary <term>]`, and the reviewer
+SHALL NOT ask for it as a glossary term. The same holds for definitions: a definition cited as a
+glossary definition comes from the glossary. Both calls receive this in the rule's shared wording.
+
+The rule is named "Glossary terms": the writer's prompt carries it under that heading, and the
+blind review's prompt carries it as the check of that name. The rule SHALL be given to two calls,
+in the same wording of what it requires:
+
+- **The report writer**, on every turn of such a channel. Its system prompt SHALL carry the rule
+  next to the other report-wide rules. The glossary reaches the writer in two ways: the app's fetch
+  through its data-sources string, and whatever terms and definitions the research agent obtained
+  with its own tool calls through the transcript (see **research-execution**). The writer's rule
+  SHALL say that the glossary in the data-sources string may lack terms or definitions, because the
+  app's fetch may have failed in part or in whole, and that the terms and definitions in the
+  research's tool results count as glossary terms too.
+- **The report reviewer**, on a turn whose glossary fetch listed at least one term, or whose
+  research agent obtained at least one successful result from a configured glossary tool. Its
+  system prompt SHALL carry the check as one of the review model's own checks. The glossary reaches
+  the reviewer in two ways: the app's fetch through its data-sources string, and the research
+  agent's successful glossary tool results, which the app selects from the transcript by the
+  configured tool names (see **research-execution**). A draft that names a glossary concept by
+  another word SHALL be reported as a violation naming the passage and the glossary term to use.
+
+**Both calls know the glossary citation form.** The writer's instructions state the form
+`[glossary <term>]` and when to use it (see **research-execution**). The reviewer's instructions
+state the same form, so the review model treats a glossary marker as a well-formed citation and
+reports a malformed one, such as a different keyword or a term written in parentheses, under the
+citation-format check. The readable form the delivery produces never reaches the reviewer. Both hear of the form only on a channel that configures a glossary.
+
+This is a check for the review model, not for Python: whether a phrase in the draft refers to the
+concept a glossary term names needs a reader, so no app-owned rule decides it.
+
+A term whose definition is `null` SHALL still count for the rule, judged by its name.
+
+On a channel without a glossary, neither call SHALL carry the rule. On a turn whose list-terms call
+failed, the writer SHALL carry the rule, and the reviewer SHALL carry the check only when the
+research agent obtained a successful glossary tool result, because otherwise the reviewer has no
+terms to judge against. Both still receive the data-sources string, which on a
+failed list ends in the failure text.
+
+#### Scenario: The writer is told to use the glossary's terms
+
+- **WHEN** the report writer runs on a turn whose glossary listed terms
+- **THEN** its system prompt SHALL carry the "Glossary terms" rule, and its data-sources string
+  SHALL carry the glossary
+
+#### Scenario: The reviewer reports a synonym
+
+- **WHEN** the glossary lists `Primary Commodity Prices`, and a draft refers to the same concept as
+  "raw material price levels"
+- **THEN** the review model SHALL report a violation that names the passage and the glossary term
+
+#### Scenario: A term found only outside the glossary is not demanded
+
+- **WHEN** the `Datasets:` part describes `IMF:WEO` as covering the "unemployment rate", no glossary
+  term is "unemployment rate", and a draft writes "the share of the labour force without a job"
+- **THEN** the review model SHALL NOT report a "Glossary terms" violation for that passage
+
+#### Scenario: A term the glossary does not list may be used
+
+- **WHEN** a document page the research read uses the term "trade balance", and no glossary term
+  names that concept
+- **THEN** the report writer MAY use "trade balance", and the review model SHALL NOT report its use
+  as a violation
+
+#### Scenario: The reviewer accepts a glossary citation and reports a malformed one
+
+- **WHEN** a draft on a glossary channel cites `[glossary World Economic Outlook]` in one place and
+  `(World Economic Outlook - glossary term)` in another
+- **THEN** the review model SHALL NOT report the first, and SHALL report the second as a citation
+  that does not follow the glossary form
+
+#### Scenario: A failed list still gives the writer the rule
+
+- **WHEN** the list-terms call failed three times, and the research agent obtained the terms with
+  its own list-terms call
+- **THEN** the report writer's prompt SHALL carry the "Glossary terms" rule, saying that the
+  data-sources glossary may lack terms and that the terms in the research's tool results count,
+  and the report reviewer's prompt SHALL carry the check and the research agent's list-terms
+  result
+
+#### Scenario: A failed list and no agent result give the reviewer no check
+
+- **WHEN** the list-terms call failed three times, and the research agent obtained no successful
+  result from either glossary tool
+- **THEN** the report reviewer's prompt SHALL NOT carry the "Glossary terms" check
+
+#### Scenario: One name of a slash term is enough
+
+- **WHEN** the glossary lists `Workforce/Labour force`, and a draft uses only the name "labour
+  force", in mid-sentence
+- **THEN** the review model SHALL NOT report a "Glossary terms" violation for it
+
+#### Scenario: A glossary abbreviation is spelled out at its first use
+
+- **WHEN** the glossary lists `Harmonised Index of Consumer Prices (HICP)`, and a draft writes
+  "HICP" at its first mention and at every later one
+- **THEN** the review model SHALL report a violation for the first mention, which SHALL give the
+  full form "Harmonised Index of Consumer Prices (HICP)", and SHALL NOT report the later mentions
+
+### Requirement: The data sources in the system prompt count as retrieved sources
+
+The report writer's system prompt SHALL state that the report may draw on two kinds of source: the
+research findings in the transcript, and the data-sources string in its `<data_sources>` block,
+which holds the channel's hand-written descriptions and what the app fetched from the dataset
+server — the list of datasets, their structures and the glossary. A fact taken from the
+data-sources string SHALL count as grounded in a retrieved source, and SHALL be cited with the
+citation form of the source it describes, such as `[dataset <urn>]` for a dataset's description,
+coverage or last-update date.
+
+A fact taken from a glossary definition SHALL be cited `[glossary <term>]` (see
+**research-execution**). A fact from the hand-written description of a publication series SHALL NOT
+be cited at all, and SHALL NOT be given an invented citation such as a `[doc <id>, page <ix>]`: only
+a publication itself is cited, by its document and page. Such a fact names the publication series
+as its source in words, which the faithful-relay rule "Facts only from the sources" allows (see
+**faithful-relay**).
+
+The report reviewer SHALL judge such a fact the same way: citing a dataset for a fact the datasets
+section states about it SHALL NOT be reported as a violation.
+
+The statement SHALL NOT tell the writer to cite datasets the research did not query, nor forbid
+it. A report may cite such a dataset when it uses it, and an instruction either way would bias the
+writer.
+
+#### Scenario: A dataset's metadata is cited from the datasets section
+
+- **WHEN** a draft states the last-update date of a dataset that no tool call of the turn queried,
+  taken from the datasets section, and cites it as `[dataset <urn>]`
+- **THEN** the report writer's instructions SHALL allow it, and the report reviewer SHALL NOT report
+  it as a fact without a retrieved source
+
+#### Scenario: A fact from a series description names the series
+
+- **WHEN** a draft states a fact that only the description of a publication series gives
+- **THEN** the sentence SHALL name the series as its source in words and carry no citation, and
+  report review SHALL NOT report it as an uncited claim

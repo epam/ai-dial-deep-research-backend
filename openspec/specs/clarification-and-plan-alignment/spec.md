@@ -84,15 +84,20 @@ not addressed by the user SHALL be asked again rather than dropped. The check SH
 NOT assess data-source availability, SHALL NOT ask obvious or low-value questions,
 and SHALL NOT inject assumed defaults into the query.
 
+A question about how a value was revised, such as how a forecast changed over time, needs a date
+range for the revisions: the dates between which the forecasts were made. When the query gives no
+such range, the clarity check SHALL ask for it. This question comes in addition to the period that
+the value is about.
+
 When clarifying questions are produced, the agent SHALL present them to the user in
 natural language and end the turn awaiting an answer. When the user answers, the
 agent SHALL fold the answer into a refined query and call `update_query` again,
 supporting multiple rounds until the check returns no questions. There SHALL be no
 sentinel answer string.
 
-The restated query SHALL keep the user's formatting requests, such as rounding figures, a
-number of decimals or a unit, because the report writer and report review see the user's
-request only as this query restates it (see **faithful-relay**).
+The restated query SHALL keep the user's formatting requests, such as a unit, because the report
+writer and report review see the user's request only as this query restates it (see
+**faithful-relay**). The agent SHALL add no formatting request of its own.
 
 #### Scenario: Under-specified query yields clarifying questions
 - **WHEN** `update_query` runs on a query missing a material dimension (e.g. region or period)
@@ -118,11 +123,17 @@ request only as this query restates it (see **faithful-relay**).
 - **WHEN** `update_query` is called after a plan was recorded (and possibly approved)
 - **THEN** the recorded plan and its plan id SHALL be cleared and the plan-approved flag SHALL be reset to false
 
-#### Scenario: A rounding request survives the restatement
+#### Scenario: A unit request survives the restatement
 
-- **WHEN** the user asks for GDP growth by region "rounded to one decimal"
-- **THEN** the query the agent records with `update_query` SHALL keep the request to round to
-  one decimal
+- **WHEN** the user asks for the exports of Germany "in US dollars"
+- **THEN** the query the agent records with `update_query` SHALL keep "in US dollars", and SHALL
+  add no formatting request that the user did not make, such as a number of decimals
+
+#### Scenario: A question about revisions needs the dates of the revisions
+
+- **WHEN** the user asks how the IMF forecast of 2026 GDP growth for Germany changed, and gives no
+  dates between which the forecasts were made
+- **THEN** the clarity check SHALL record a question asking for that date range
 
 ### Requirement: A span of years counted back from today ends with the current year
 
@@ -132,10 +143,12 @@ years earlier. The current year is the one the user most wants to see, and the o
 keeps it, the last N completed years plus the current one, turns "the last 2 years" into three
 calendar years; a span given in months or days runs to today and needs no such rule. The agent
 SHALL write the resolved years into the query it records, so research never reads the relative
-span itself. The default span the agent applies when the user declines to choose the time period,
-the last 10 years, SHALL be counted the same way, and the agent SHALL open its reply by naming that
-range, so the user can change it. The preparation agent's prompt and the query check's prompt
-SHALL both state the rule with an example that uses the current year.
+span itself. When the user declines to choose the time period, the agent SHALL apply two defaults:
+the last 10 years for past values, counted the same way, and the next 3 years after the current
+year for forecasts. The agent SHALL open its reply by naming the default it applied, so the user
+can change it. The preparation agent's prompt and the query check's prompt SHALL both state the
+rule with an example that uses the current year, and SHALL both state the two defaults with their
+years computed from today's date.
 
 #### Scenario: The last two years include the current year
 
@@ -155,6 +168,13 @@ SHALL both state the rule with an example that uses the current year.
 - **WHEN** in 2026 the user declines to choose the time period
 - **THEN** the agent SHALL apply 2017–2026 as the last 10 years, and SHALL open its reply by
   telling the user that range
+
+#### Scenario: The default span of forecasts is the next three years
+
+- **WHEN** in 2026 the user asks for the IMF forecasts of GDP growth for Germany and declines to
+  choose the time period
+- **THEN** the agent SHALL apply 2027–2029 to the forecasts, and the query check SHALL treat the
+  time period as settled
 
 #### Scenario: The query check accepts a span resolved this way
 
@@ -215,12 +235,19 @@ The plan the preparation agent drafts SHALL NOT ask to calculate, compute, deriv
 model a figure, such as a growth rate from two levels, a difference, a share, a sum, an average, an
 elasticity or a regression estimate, because neither research nor the report computes anything (see
 **report-composition**, "Reports contain no calculations"). When the query asks for such a figure,
-the plan item SHALL ask to look for a source that states the figure itself and, only where none
-does, to retrieve the figures it would be computed from. The preparation agent SHALL plan such an
-item straight away, without asking the user first, and its prompt SHALL say so, with an example of
-such a plan item. A plan item asking research to look for what explains a difference between
-sources is not a calculation, and the prompt SHALL say so, since the source-selection rules need
-that explanation.
+the plan item SHALL ask research to look for a source that states the figure. Only where no source
+states it SHALL the plan item ask research to retrieve the figures it is computed from:
+
+- When the query names these figures, the plan SHALL name them. For a growth rate of X, or for an
+  elasticity of X to Y, the plan names X and Y.
+- When the query names only a measure, such as an index, the plan SHALL ask for a source that
+  states how to compute it, and for the figures that this source names.
+
+The preparation agent SHALL plan such an item straight away, without asking the user first, and
+its prompt SHALL say so, with an example of such a plan item.
+
+A comparison is not a calculation. When the query asks to compare values, the plan SHALL ask
+research to find each value, and SHALL NOT ask for their difference.
 
 The query itself is unaffected: the preparation agent restates what the user asked for, a request
 for a computed figure included, and the plan alone carries how research handles it. The query check
@@ -241,8 +268,8 @@ result.
 - **WHEN** the clarified query asks to quantify the elasticity of import growth to GDP growth over
   a period
 - **THEN** the recorded plan SHALL ask to look for a stated elasticity and, if no source states
-  one, to retrieve the import growth and GDP growth series for that period, and no plan item SHALL ask to calculate, estimate or
-  model the elasticity, by regression or otherwise
+  one, to retrieve the import growth and GDP growth series for that period, and no plan item SHALL
+  ask to calculate, estimate or model the elasticity, by regression or otherwise
 
 #### Scenario: The query check does not ask for an estimation method
 
@@ -257,6 +284,19 @@ result.
 - **WHEN** the query asks for the growth of a value between two years
 - **THEN** the plan SHALL ask for a source that states that growth and, if none does, for the
   value in both years, and SHALL NOT ask to compute the growth from the two values
+
+#### Scenario: The user asks for an index without its inputs
+
+- **WHEN** the query asks for a trade-openness index for Germany and names none of its inputs
+- **THEN** the plan SHALL ask for a source that states the index, and otherwise for a source that
+  states how to compute it and for the figures that this source names
+
+#### Scenario: The user asks to compare two values
+
+- **WHEN** the query asks to compare the IMF forecast of 2026 GDP growth for Germany with the IMF
+  forecast for France
+- **THEN** the plan SHALL ask research to find each forecast, and SHALL NOT ask for the difference
+  between them
 
 #### Scenario: The user insists on a calculation
 
@@ -415,11 +455,12 @@ updating this requirement.
 **1. The preparation agent's model call** (one per agent step)
 
 - System prompt: the preparation instructions, filled with the instance's `agent_name`, today's
-  date, the examples of a span of years computed from that date, and the turn's data-sources
-  string: the configured servers' descriptions, the document statistics block, the datasets
-  section and the rendered glossary, each when its condition holds (see
-  **data-sources-discovery**). When the list of datasets failed, it also carries the instruction
-  to plan around the failure (see **data-sources-discovery**). It carries neither the instruction
+  date, the spans of years computed from that date, and the turn's data-sources string. The spans
+  are the examples of a span counted back from today, and the default span of forecasts, the three
+  years after the current one. The data-sources string holds the configured servers' descriptions,
+  the document statistics block, the datasets section and the rendered glossary, each when its
+  condition holds (see **data-sources-discovery**). When the list of datasets failed, it also
+  carries the instruction to plan around the failure (see **data-sources-discovery**). It carries neither the instruction
   to request missing definitions nor the instruction about the dataset tools, because this agent
   has no MCP tools.
 - Messages: the **full** conversation history reconstructed from the DIAL request — every user
@@ -437,9 +478,10 @@ updating this requirement.
 
 **2. The query clarity check** (one per `update_query` call)
 
-- System prompt: the intake-check instructions, filled with today's date, the examples of a span
-  of years computed from that date, and the turn's data-sources string, the same one the
-  preparation agent receives, with no instruction about a failed list of datasets.
+- System prompt: the intake-check instructions, filled with today's date, the same spans of years
+  computed from that date as the preparation agent receives, and the turn's data-sources string,
+  the same one the preparation agent receives, with no instruction about a failed list of
+  datasets.
 - Messages: one human message carrying the rendered conversation so far and the candidate query.
   The rendering SHALL include only natural-language user and assistant text, and the
   failed-turn note as a `System note:` line at its position in the conversation; tool calls,
@@ -498,6 +540,12 @@ updating this requirement.
   the same data-sources string, including the datasets section with its structures block, and the
   approval check's system prompt SHALL carry no part of it
 
+#### Scenario: The agent and the clarity check receive the spans of the current year
+
+- **WHEN** a preparation turn runs on 20 November 2025
+- **THEN** the preparation agent's system prompt and the clarity check's system prompt SHALL each
+  give the last 10 years as 2016–2025 and the next 3 years as 2026–2028
+
 ### Requirement: Stateless turns persist CrossTurnPrepState and transcript in DIAL custom state
 
 The app SHALL process each turn statelessly, with no checkpointer and no
@@ -536,3 +584,43 @@ state across requests.
 #### Scenario: The turn after a failed research run restores the plan without approval
 - **WHEN** a follow-up request's latest stateful assistant message was written by a failed research turn that saved a snapshot
 - **THEN** the preparation agent SHALL run with that turn's query, plan and plan id restored, and with the plan-approved and research-started flags false
+
+### Requirement: The plan covers each part of the query and keeps what the user asked for
+
+The preparation agent's prompt SHALL tell it to find each separate part of the query and to make
+sure that the plan covers each one. A part is what makes two requested values different, such as a
+country, a period or a forecaster. One plan step MAY cover several parts, for example the same
+indicator for several countries.
+
+The restated query and the plan SHALL keep what the user asked for. They SHALL NOT add a detail
+that the user did not state, and SHALL NOT drop a detail that the user stated. When the user asks
+to compare two values, the plan SHALL NOT assume that they come from one source, unless the user
+says so. A plan step that names where to look, as the rules on data sources require, is not an
+added detail.
+
+The plan SHALL say what research looks for, and never how the report looks. It SHALL carry no
+step and no phrase about the form of the report: no table, chart or list, and no sections, order
+or length. The one exception is a form that the user asked for, in the query or in a later
+message. Then exactly one plan step SHALL ask for that form, as the user described it, and the
+plan SHALL add no other form. That step is written as a plan step, such as "Present the forecasts
+in a table", and never as a copy of the user's message.
+
+#### Scenario: Two forecasts to compare are two parts
+
+- **WHEN** the user asks to compare the IMF forecast of euro-area GDP growth for 2026 with the
+  consensus forecast
+- **THEN** the plan SHALL cover both forecasts, and SHALL NOT add that they come from the same
+  publication
+
+#### Scenario: No form of the report unless the user asks for one
+
+- **WHEN** the user asks for the IMF forecasts of GDP growth for Germany and France and asks for no
+  form of the report
+- **THEN** no plan step SHALL ask for a table, a chart, a list, sections, an order or a length
+
+#### Scenario: A requested form becomes one plan step
+
+- **WHEN** the user asks for the same forecasts and adds, in a later message, that they want them
+  in a table
+- **THEN** exactly one plan step SHALL ask to present the forecasts in a table, and no plan step
+  SHALL ask for any other form

@@ -247,7 +247,7 @@ async def test_the_lists_are_written_and_read_in_one_run(monkeypatch: pytest.Mon
     assert final["report_reviews"][0].blind_review == _BLIND
     assert final["report_reviews"][0].grounded_review == _GROUNDED
     # Routing counted two plans, and both the second review and the writer list them.
-    plans = f"Plan 1:\n1. {_APPROVED_PLAN[0]}\n\nPlan 2:\n1. {_NEXT_STEPS[0]}"
+    plans = f"Plan 1 (the approved plan):\n1. {_APPROVED_PLAN[0]}\n\nPlan 2:\n1. {_NEXT_STEPS[0]}"
     assert plans in str(models.research_review_calls[1][-1].content)
     assert _report_request(models.writer_calls[0]) == REPORT_REQUEST.format(
         query=_QUERY, plans=plans

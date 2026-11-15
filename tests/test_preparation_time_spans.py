@@ -14,6 +14,7 @@ def test_the_examples_are_counted_from_the_year_of_the_given_date() -> None:
         "current_year": "2031",
         "last_two_years": "2030–2031",
         "last_ten_years": "2022–2031",
+        "next_three_years": "2032–2034",
     }
 
 

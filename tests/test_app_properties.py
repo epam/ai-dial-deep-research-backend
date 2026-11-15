@@ -182,10 +182,9 @@ def test_report_defaults_resolve_without_configuration() -> None:
     assert [section.name for section in sections] == [
         "Overview",
         "Key Findings",
-        "Detailed Analysis",
-        "Conclusion",
+        "Additional context",
     ]
-    assert [section.protected for section in sections] == [True, False, False, False]
+    assert [section.protected for section in sections] == [False, True, False]
     # The References section is no section of the structure: the app appends it, under this
     # heading, carrying this text when the report cited nothing.
     assert properties.references_section_name == "References"

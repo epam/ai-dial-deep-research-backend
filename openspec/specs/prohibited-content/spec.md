@@ -27,9 +27,10 @@ the blind review is the review that knows what is excluded.
   evidence that the sources lack, and does not refer to it later, such as "the requested
   share prices". When the question or the plan asks for excluded content, leaves that part out and
   says nothing about it. A figure or a finding that the sources do not give is not excluded
-  content, unless a rule excludes its topic: the writer says that the sources do not give it, as "No
-  calculations" and "Gaps in the
-  evidence" ask.
+  content, unless a rule excludes its topic. The writer says that the sources do not give it, as
+  the rules on calculations and on missing evidence ask: "No calculation by research or the report"
+  (see **report-composition**) and the source-selection rule "When to say that evidence is
+  missing".
 - **Blind review:** excluded content in the draft is a violation of the rule that excludes it, even
   when the question or the plan asks for it. When it reports a passage that must go, it also
   reports, in the same list, every passage that refers to it, so that one revision fixes all of
@@ -42,8 +43,9 @@ the blind review is the review that knows what is excluded.
 The writer's rule that the report does not explain a declined part of a request (see
 **source-selection**, "The rules and the existing prompt text do not contradict each other") SHALL
 stay as it is, with no exception for excluded content. The writer's list of rules that outrank the
-request SHALL name the rules that exclude content, so that the report request's "covering every
-item of the plans" never reads as an order to cover an excluded topic.
+request SHALL name the rules that exclude content, so that the report request's "covering the
+research question and every item of the approved plan" never reads as an order to cover an excluded
+topic.
 
 #### Scenario: The outrank list names the exclusion rules
 

@@ -22,6 +22,9 @@ the verdict reports a problem, fix it and run the subagent again before committi
 
 - Always use simple and clear phrasings, without unnecessary complexity.
   Including comments, docstrings, git commits and pull requests
+- When you refer to a rule of a Deep Research quality policy, always give the policy name, the
+  rule number (if the rule has one) and the rule name, for example: Source selection, rule 2
+  "Every current value, with its own source". Never refer to a rule only by its number.
 - Use clear and precise wordings; never abstract and vague ones. Name the real thing instead of a
   category, prefer one plain sentence to a chain of qualifiers, and cut words that carry no fact.
 - Abstraction is not a cure for wording that is too tied to today's implementation. Blurring it

@@ -26,11 +26,20 @@ That one rule prevents most of what follows.
   often they were run, and their results: outcomes, scores, regressions, and runs that failed or
   could not be run. Write "the eval needs to cover this behaviour", never what the cases ask or how
   the runs went.
+- **Any part of a client's document**: its text, its figures, its quotes, its title and its
+  document id. Its publication date or its issue number counts too when it appears together with
+  another part of the document, such as a figure from it. This applies also when the other parts
+  of an example are changed: one real figure next to a changed name still reuses the client's
+  document. It applies also to a published document: do not disclose a client's identity. The
+  public IMF datasets under "What is allowed" stay allowed. A tool result, a fixture or an eval run
+  that shows such a document is client data too. A reviewer who cannot see the client's documents
+  reports a figure, a date or a title only when the change, its message or the text around it ties
+  it to a client document, a fixture or an eval run.
 - **Examples modeled on a client's material**: an example built from a client's publications or
   from what an eval run returned, even with every name changed, such as a figure, a quote or a
-  topic taken from one of its documents. Take examples from public statistics instead. A generic
-  publishing pattern is not client material: an annual report revised by an interim update, or an
-  issue number with its year, may stay.
+  topic taken from one of its documents. Take examples from public statistics instead, and give
+  them a made-up date. A generic publishing pattern is not client material: an annual report
+  revised by an interim update, or the form of an issue number with its year, may stay.
 
 ## What is allowed
 

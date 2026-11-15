@@ -198,7 +198,7 @@ def iteration_plans(state: ResearchState) -> list[list[str]]:
 
 def _render_plans(state: ResearchState) -> str:
     return "\n\n".join(
-        f"Plan {i}:\n{render_plan(steps)}"
+        f"Plan {i}{' (the approved plan)' if i == 1 else ''}:\n{render_plan(steps)}"
         for i, steps in enumerate(iteration_plans(state), start=1)
     )
 
@@ -561,7 +561,9 @@ def make_report_node(
 
     async def report(state: ResearchState) -> dict[str, Any]:
         emit_activity(REPORT_ACTIVITY)
-        llm = with_stream_drop_retry(get_chat_model(LLMModelConfig()))
+        llm = with_stream_drop_retry(
+            get_chat_model(LLMModelConfig(reasoning_effort=ReasoningEffortEnum.MEDIUM))
+        )
         previous_draft = latest_draft(state)
         report_messages: list[BaseMessage] = [
             SystemMessage(content=system_prompt),

@@ -182,12 +182,14 @@ def _words(text: str) -> str:
     return " ".join(text.split())
 
 
-def test_research_review_can_resolve_the_failed_tool_reference() -> None:
-    """The term's failed-tool clause relies on a rule research review's own prompt states."""
+def test_a_failed_tool_is_left_to_research_reviews_own_rule() -> None:
+    """The term "Reasonable attempt" covers searches that find nothing; research review's own
+    prompt says what a failed tool call means."""
     block = _words(
         render_source_selection(RuleStep.RESEARCH_REVIEW, source_kinds=BOTH_SOURCE_KINDS)
     )
-    assert "once that tool has failed for it and may not be called again for it" in block
+    assert "**Reasonable attempt**: two or more searches for the evidence" in block
+    assert "When a tool fails" not in block
     assert "Research-agent has already retried it as far as it is allowed" in _words(
         RESEARCH_REVIEW_SYSTEM_PROMPT
     )
@@ -196,11 +198,15 @@ def test_research_review_can_resolve_the_failed_tool_reference() -> None:
 def test_the_latest_value_rule_holds_on_a_channel_with_one_kind_of_source() -> None:
     """A channel may configure datasets only or documents only, so the publication search is
     required only where publications exist."""
-    latest = next(rule for rule in SOURCE_SELECTION_RULES if rule.name == "The latest value")
-    assert "Where it has both publications and datasets, a dataset value does not make" in _words(
+    latest = next(
+        rule
+        for rule in SOURCE_SELECTION_RULES
+        if rule.name == "The latest value in each kind of source"
+    )
+    assert "search each kind of source of the channel for the value" in _words(
         latest.part(RuleStep.RESEARCH_AGENT) or ""
     )
-    assert "Where the channel has publications, every fact" in _words(
+    assert "When the channel has publications, a requested fact" in _words(
         latest.part(RuleStep.RESEARCH_REVIEW) or ""
     )
 
@@ -320,9 +326,9 @@ def test_the_writer_prompt_carries_both_blocks_and_the_prohibitions() -> None:
     )
     assert render_source_selection(RuleStep.REPORT_WRITER, source_kinds=BOTH_SOURCE_KINDS) in prompt
     assert "<client_rules>\n### Writer rule\n\nWrite it this way." in prompt
-    assert "never average or merge differing values" in prompt
+    assert "never average or merge differing values" in _words(prompt)
     assert (
-        "say in one sentence that they are given separately because the sources differ"
+        "say in one sentence that the values are given separately because the sources differ"
         in _words(prompt)
     )
 

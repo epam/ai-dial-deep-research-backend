@@ -30,7 +30,9 @@ SHALL expose:
   - `name: str` — required, non-empty (`min_length=1`); the section's heading in the report.
   - `description: str` — required, non-empty (`min_length=1`); everything the writer and the review
     step need to know about that section's content, and the **single home** for that section's
-    rules: no other prompt, model, or spec SHALL carry per-section content instructions.
+    rules: no other prompt, model, or spec SHALL carry per-section content instructions. The one
+    exception is the source-selection rules, which name the default Overview and Additional
+    context sections.
   - `protected: bool` — default `False`; whether user instructions may drop or restyle this
     section (see the **report-composition** capability's protected-sections requirement).
 
@@ -38,8 +40,10 @@ SHALL expose:
   carrying the withdrawn `references_section` field fails validation rather than being accepted as
   a section the writer is then asked to write beside the app's own.
 
-  The default value SHALL be the four sections Overview, Key Findings, Detailed Analysis and
-  Conclusion, each with its description, and Overview SHALL default to `protected: true`.
+  The default value SHALL be the three sections Overview, Key Findings and Additional context,
+  each with its description, and Key Findings SHALL default to `protected: true`. What each default
+  section holds is summarised in the **report-composition** capability; its rules live in its
+  description.
 
   The list SHALL be constrained to contain at least one section with `protected: true`, so no
   configuration can produce a report whose every section a user instruction may remove.
@@ -99,8 +103,8 @@ lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
 
 - **WHEN** `ApplicationProperties.model_validate` receives an object that configures no report
   properties
-- **THEN** validation SHALL succeed, `default_report_structure` SHALL be the four default sections
-  in order (Overview, Key Findings, Detailed Analysis, Conclusion) with Overview alone carrying
+- **THEN** validation SHALL succeed, `default_report_structure` SHALL be the three default sections
+  in order (Overview, Key Findings, Additional context) with Key Findings alone carrying
   `protected: true`, `references_section_name` SHALL equal `References`,
   `references_section_empty_text` SHALL be the default cited-nothing sentence, `max_report_words`
   SHALL equal `2750`, and `max_report_versions` SHALL equal `3`
@@ -152,7 +156,7 @@ lives in DIAL Core) and SHALL NOT carry an Opik project name (moved to the
 - **WHEN** an instance configures a structure that marks a "Regulatory disclaimer" section
   `protected: true`
 - **THEN** validation SHALL succeed and that section SHALL receive the same protection from user
-  instructions as Overview does
+  instructions as Key Findings does
 
 #### Scenario: The removed descriptions field is rejected
 

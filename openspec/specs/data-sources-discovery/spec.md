@@ -668,8 +668,8 @@ describes the data sources. Its other inputs are unchanged.
 - **WHEN** all three list-terms attempts failed
 - **THEN** the preparation agent, the query clarity check, the playground agent and every call of
   the research graph SHALL receive the data-sources string ending in the failure text, and the
-  report reviewer SHALL be given the glossary-terminology check only if the research agent obtained
-  a successful glossary tool result
+  report reviewer SHALL be given the report-composition rule "Glossary terms" as a check only if
+  the research agent obtained a successful glossary tool result
 
 #### Scenario: A failed list of datasets still reaches the prompts
 
