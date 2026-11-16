@@ -411,7 +411,9 @@ lists on every run, so a resumed run builds them exactly as a fresh one does:
 | `report_revision_failed` | Whether the latest revision's call failed. | The report node |
 
 The plan list research-review and the writer receive is the approved plan followed by each
-review's next steps; the draft number is the length of `reports`; and the writer's revision
+review's next steps, with Plan 1 labelled as the approved plan. The report request asks the writer
+to cover the research question and every item of Plan 1. The draft number is the length of
+`reports`, and the writer's revision
 instruction comes from the latest `report_reviews` entry only. Research-agent is a `create_agent`
 graph, whose conversation key is fixed as `messages`, so its node maps `research_agent_messages`
 in and out and passes the research graph's config on, which carries the step budget. See
@@ -458,7 +460,8 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   transcript exactly as the report writer receives it, then two system messages — its
   instructions, and the review request ending in the draft. The instructions carry the
   source-selection and faithful-relay blocks with those rules' writer parts, which both reviews
-  therefore check, then every other rule's grounded part, the writer's "No calculations" rule, the
+  therefore check, then every other rule's grounded part, the writer's "No calculation by research
+  or the report" rule, the
   client rules' grounded parts, and the client rules' writer parts as context it does not check,
   so that it can ask for a missing value without asking for content a client rule excludes. The
   grounded review answers with a plain numbered list, whose
@@ -612,13 +615,13 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   only. Every record of the step carries counts and never a URL, a file name,
   a document title, a dataset name, a filter value, or a cited document's, dataset's or query's id.
 - **Report structure**: `default_report_structure` (an application property) — an ordered list of
-  `{name, description, protected}` sections, Overview → Key Findings → Detailed Analysis →
-  Conclusion by default. Unknown fields are refused, so a stored entry still carrying the
+  `{name, description, protected}` sections, Overview → Key Findings → Additional context by
+  default. Unknown fields are refused, so a stored entry still carrying the
   withdrawn `references_section` flag fails validation rather than becoming a section the writer is
   asked to write beside the app's own. Every section is rendered as a `##`
   heading, and the app checks that itself (see the rules bullet below). A section's `description`
   is the single home for its content rules and is passed verbatim to both the report node and
-  report-review. A protected section (Overview, by default) may be neither dropped
+  report-review. A protected section (Key Findings, by default) may be neither dropped
   nor restyled by anything the user asked for; at least one section must be protected. Both models
   are told which sections are protected as a rule of their own — the marker is never rendered next
   to a section name, which the report node is told to use as the heading. The References section is

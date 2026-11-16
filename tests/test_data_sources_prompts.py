@@ -357,7 +357,7 @@ async def test_the_report_reviewer_receives_the_successful_glossary_results(
     )
     assert "a failure" not in system
     assert "some data" not in system
-    assert "Glossary terminology" in system
+    assert "**Glossary terms.**" in system
     assert f"<data_sources>\n{_TEXT}\n</data_sources>" in system
 
 
@@ -369,7 +369,7 @@ async def test_a_failed_list_and_no_agent_result_give_the_reviewer_no_check(
     await node(_state())  # type: ignore[arg-type]
 
     system = llm.calls[0][0].content
-    assert "Glossary terminology" not in system
+    assert "**Glossary terms.**" not in system
     assert "<glossary_tool_results>" not in system
     assert "[glossary <term>]" in system, "the reviewer still knows the citation form"
 
@@ -381,7 +381,7 @@ async def test_a_listed_glossary_gives_the_reviewer_the_check(
 
     await node(_state())  # type: ignore[arg-type]
 
-    assert "Glossary terminology" in llm.calls[0][0].content
+    assert "**Glossary terms.**" in llm.calls[0][0].content
 
 
 def test_the_writer_and_the_reviewer_share_the_terminology_wording() -> None:

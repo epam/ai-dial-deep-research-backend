@@ -3,7 +3,7 @@
 ## Purpose
 
 How each research step finds, keeps and presents the values that several sources and editions give
-for the same fact: the quality-rule bundle each step's prompt is built from, the source-selection
+for the same requested fact: the quality-rule bundle each step's prompt is built from, the source-selection
 terms and rules, and how a channel's own rules reach the steps.
 
 ## Requirements
@@ -79,16 +79,16 @@ Three constraints follow from what the steps can do:
 
 #### Scenario: One edit changes the rule for every step
 
-- **WHEN** the generic rule for dates is changed
+- **WHEN** the generic rule "Stated date and described period" is changed
 - **THEN** the change SHALL be made in one definition, from which every step's prompt that carries
   the rule is rendered
 
 #### Scenario: Research review asks for a retrieval, not a summary
 
-- **WHEN** research review finds that two editions of a forecast were read but their difference
-  was not explained
-- **THEN** its next step SHALL ask for the pages or the methodology that could explain the
-  difference, and SHALL NOT ask the research agent to compare or summarise the two values
+- **WHEN** research review finds that a retrieved page refers to a methodology section for a
+  value, and the findings show no read of that section
+- **THEN** its next step SHALL ask to read that section, and SHALL NOT ask the research agent to
+  compare or summarise values
 
 #### Scenario: A channel with documents only
 
@@ -137,10 +137,11 @@ Where the text a step's prompt already carries would contradict a generic rule, 
 amended in the same change, so a model never has to choose between two instructions:
 
 - **Research agent.** Its pre-finish checklist SHALL exempt a publication's stated date from "every
-  date confirmed on the page itself", since rule 7 takes it from the document metadata. The
-  checklist SHALL gain an item for the generic rules, and the exception that lets a plan item count
-  as done without evidence only a failed tool could give SHALL name the checklist items it applies
-  to rather than pointing at "the last check"; it SHALL apply to the new item too.
+  date confirmed on the page itself", since the rule "Stated date and described period" takes it
+  from the document metadata. The checklist SHALL gain an item for the generic rules, and the
+  exception that lets a plan item count as done without evidence only a failed tool could give
+  SHALL name the checklist items it applies to rather than pointing at "the last check"; it SHALL
+  apply to the new item too.
 - **Research review.** Its task sentence, its list of gaps, its sentence saying that research is
   complete when every plan item is covered, its scope paragraph, the description of its output
   schema and the descriptions of its two output fields SHALL each include the gaps the rules
@@ -150,14 +151,16 @@ amended in the same change, so a model never has to choose between two instructi
   search summary SHALL exempt a stated date taken from document metadata. The stage that shows
   research review's verdict to the user SHALL say the same: research is complete when the plan and
   the rules are covered.
-- **Report writer.** Its list of rules that outrank the request SHALL include the source-selection
-  prohibitions: a request never makes the report average or merge differing values, leave out a
-  value's described period or the stated date of a forecast or an estimate, or present a near match
-  as an exact match. A request may still narrow what the report covers. Where the report declines a
-  request to average or merge differing values, it SHALL give each value separately with its source
-  and say in one sentence that the values are given separately because the sources differ, as the
-  one exception to the rule that the report does not explain a declined request. A request declined
-  under the other two prohibitions is declined without comment.
+- **Report writer.** Its list of rules that outrank the request SHALL include three source-selection
+  prohibitions, each with the name of its rule. A request never makes the report average or merge
+  differing values ("Every current value, with its own source"). A request never makes the report
+  leave out a value's described period ("Stated date and described period"). A request never makes
+  the report present a near match as an exact match ("Nearest matches when no exact match
+  exists"). A request may still narrow what the report covers. Where the report declines a request
+  to average or merge differing values, it SHALL give each value separately with its source and say
+  in one sentence that the values are given separately because the sources differ, as the one
+  exception to the rule that the report does not say it declined part of a request. A request
+  declined under the other two prohibitions is declined without comment.
 - **Report review.** Its instruction to check "exactly these" SHALL name the checks of every rule
   section below it, the client-specific checks included, and all of them SHALL come before its
   "Not your job" section, whose "the checks above" then covers them.
@@ -170,7 +173,7 @@ amended in the same change, so a model never has to choose between two instructi
 
 - **WHEN** the question asks for "the average of the published growth forecasts" and the research
   found two differing forecasts
-- **THEN** the report SHALL give each forecast with its source, its citation and its stated date,
+- **THEN** the report SHALL give each forecast separately with its source and its own citation,
   SHALL NOT give their average, and SHALL say that the values are given separately because the
   sources differ
 
@@ -202,9 +205,11 @@ When no client rule has a part for a step, that step's prompt SHALL carry neithe
 the text around it.
 
 The generic rules SHALL name no client, no client dataset, no client publication and no client
-domain. What a client's sources contain SHALL be said only in that channel's client rules: whether
-its datasets document their methodology or keep earlier releases, where its publications document
-methodology, which metadata key carries a publication's date, and which tool lists its documents.
+domain. What a client's sources contain, and a rule that holds only for them, SHALL be said only in
+that channel's client rules. Examples are whether its datasets document their methodology or keep
+earlier releases, where its publications document methodology, which metadata key carries a
+publication's date, which tool lists its documents, and the order in which the report gives a
+dataset value and a publication value.
 
 #### Scenario: A client rule for one step
 
@@ -230,115 +235,300 @@ methodology, which metadata key carries a publication's date, and which tool lis
 
 Every step's prompt, the grounded review's included, SHALL carry the same definitions of the terms
 the source-selection rules use, at the top of the source-selection block, before the rules, and
-SHALL present them as definitions rather than as a rule or a check to
-follow. The last term, "Reasonable attempt", concerns searching and when a failed tool may be
-called again, which only the research agent and research review deal with, so only those two steps
-SHALL carry it. Its
-reference to a failed tool SHALL resolve in both prompts: the research agent's rules on failed tool
-calls and research review's rule that a tool-failure result is not planned again both say when a
-tool may not be called again.
+SHALL present them as definitions rather than as a rule or a check to follow. The last term,
+"Reasonable attempt", concerns searching, which only the research agent and research review deal
+with, so only those two steps SHALL carry it. The term SHALL NOT say how a failed tool call is
+handled. The research agent's prompt and research review's prompt each say that in their own
+text.
 
-- **Fact**: what the question asks for, as a figure or a finding stated in words, with its
-  indicator, scope, geography, period and scenario.
-- **Value**: a figure or a finding that a source gives for a fact.
-- **Exact match**: a value that agrees with the fact on all of these.
-- **Near match**: a value that differs from the fact in one of them, such as a narrower geography
-  or a narrower scope.
-- **Stated date**: when the source stated the value. For a publication it is the publication date
-  in the document's metadata; an edition name, such as a volume or issue number, is not a stated
-  date. For a dataset value it is the dataset's last update.
-- **Described period**: the period the value is about. A forecast for 2027 made in 2025 has the
-  stated date 2025 and the described period 2027.
-- **Previous value**: the value for the previous period (year, quarter or month), or the value
-  from the previous edition.
-- **Methodology**: the details a source gives on how a figure or an analysis was obtained, such as
-  its geography, time range, sectors and other splits, sample size, adjustments and definitions.
-- **Qualifying context**: what a source states that changes how a value is read. This is its
-  methodology, and also its assumptions, scenario conditions, limitations and caveats, such as
-  "preliminary estimate", "the baseline assumes unchanged policies" or "excludes financial
-  services".
-- **Supersede**: a newer value may supersede an older one for the same fact only when the two
-  were obtained with a methodology that is obviously identical, or very likely so. Editions of one
-  publication series usually share a methodology, but the series alone decides nothing. When the
-  methodology differs or is unclear, such as a changed sample, model or coverage, neither value
-  supersedes the other, and the report gives both. A dataset value is never superseded, because a
-  dataset is an independent source. A dataset value never supersedes a publication's value
-  either.
-- **Obviously outdated**: a value that meets all four conditions: a newer retrieved value for the
-  same fact supersedes it; it is neither the latest nor the previous edition; the question does not
-  ask how the value evolved; and it does not contribute meaningfully to answering the question. It
-  is never judged from the model's own knowledge.
-- **Reasonable attempt**: at least two searches for the evidence that differ in wording or in
-  scope, such as a metadata filter, neither of which found it. Evidence that only a failed tool
-  could give counts as missing once that tool has failed for it and may not be called again for
-  it.
+The terms SHALL define the following, in this order:
+
+- **Approved plan**: the research plan that the user approved before research started. A plan that
+  research review writes is not the approved plan.
+- **Requested fact**: one figure, or one finding in words, that the user asks for in the query or
+  in the approved plan. Other statements in a source are not requested facts. A requested fact has
+  the parts below, and the list is not complete:
+  - **Indicator**: what is measured. A growth rate, a share or an index is a different indicator.
+  - **Unit**: the currency, or the measure of the same quantity. A scale word, such as million, is
+    notation, not a different unit.
+  - **Scope**: the group that the value is about, such as one age group. When the query and the
+    approved plan name no group, the scope is all groups, and a value for one group is a near
+    match.
+  - **Geography**: a country, a region or a group of countries.
+  - **Period**: the described period. Its length is its frequency. Only a word such as "monthly",
+    "quarterly" or "annual" names a frequency, and a time span such as "in 2024" names none. When
+    no frequency is named, a value at any frequency within the time span matches, and the most
+    appropriate frequency among those the sources give is chosen. When a frequency is named, a
+    value at another frequency is a near match. The preparation phase settles the period before
+    research starts. It asks the user, and when the user leaves the choice to it, it applies the
+    last 10 years for past values and the next 3 years for forecasts.
+  - **Scenario**: the case that the source names for a hypothetical value, such as "baseline". A
+    hypothetical value is a forecast, a projection, or a value for an event that did not occur. A
+    preliminary estimate for a period that had ended when the source stated it is not a
+    hypothetical value: it is a value for the same requested fact as the final value. An observed
+    value has no scenario. The assumptions of a value are
+    qualifying context, not its scenario. A forecast that its source does not label has the
+    baseline scenario. For a period that has ended, the observed value is the exact match and a
+    forecast is a near match, which the report gives only when no observed value exists. When the
+    user asks for a forecast, the forecast is the exact match, and an observed value is at most a
+    near match.
+
+  The query or the approved plan can name another part, such as who states a forecast. An
+  institution's forecast and the consensus forecast are then two requested facts. When no one is
+  named, the values of different sources are values for the same requested fact. Where the query
+  or the approved plan says to look for a value is not a part. It tells research where to look
+  first.
+- **Exact match**: a value with the same indicator, unit, scope, geography, period and scenario as
+  the requested fact, and with the definition or basis that the query or the approved plan names.
+  A unit, a scenario, a definition or a basis that they do not name matches any value. A part that
+  the source does not state also matches. Exception: when they ask for no forecast, a forecast for
+  a period that has ended is a near match. Exception for the unit: when no source of one kind gives
+  the requested fact in the named unit, a value of that kind that differs only in its unit is an
+  exact match.
+- **Near match**: a value with the same indicator as the requested fact and one or more other
+  parts that differ, or with a definition or basis other than the one named. A part that the source
+  does not state does not alone make a near match, and the report says which part the source does
+  not state.
+- **Value for another indicator**: a value with a different indicator. It is neither an exact match
+  nor a near match, and it is not a value for the requested fact.
+- **Matching series**: a dataset series whose dimensions match a requested fact, as the term "Exact
+  match" says, and that has a value for the requested period. Its value for a period that has
+  ended can be a forecast, and the term "Scenario" decides whether that value is an exact match or
+  a near match, and when the report gives it. Each requested period is its own
+  requested fact, so a series can be a matching series for some periods and a near-match series for
+  others. For an indicator that a query about an effect, a cause or a relation names, a matching
+  series has the geography and the period that the query or the approved plan names.
+- **Near-match series**: a dataset series of the same indicator as a requested fact that is not a
+  matching series, because a dimension differs or it has no value for the requested period. A
+  series of another indicator is not a near-match series.
+- **Value**: a figure, or a finding in words, that a source gives.
+- **Kind of source**: publications or datasets.
+- **Values for the same requested fact**: two values that match the same requested fact and agree
+  with each other on all their parts, including a definition or basis that the query or the
+  approved plan names.
+- **Stated date**: the date when the source gave the value. For a publication, it is the
+  publication date in the document metadata, and an edition name, such as an issue number, is not
+  a stated date. For a dataset value, it is the date of the dataset's last update.
+- **Described period**: the period that the value is about. A GDP forecast for 2027 that a source
+  gave in 2025 has the stated date 2025 and the described period 2027.
+- **Earlier value**: a value for the same requested fact that a current value supersedes. A value
+  that a publication quotes as its own earlier value is an earlier value too.
+- **Value for another period**: a value with the same indicator, scope, geography and scenario as
+  the requested fact but for a different period. It is not a value for the requested fact.
+- **Asks how a value was revised**: the query or the approved plan asks how the value for one
+  period changed from one stated date to another. A query about a trend over several periods does
+  not ask this. It asks for one requested fact for each period.
+- **Methodology**: the information that a source gives about how it got a figure or an analysis,
+  such as definitions, basis, coverage, sample, adjustments and calculation method.
+- **Qualifying context**: what a source states about how it got a value and under which conditions
+  the value holds. It covers what the value covers and excludes, its definition and basis, its
+  status and caveats, the assumptions of a forecast or a scenario, and what a scenario stands for.
+  Why a value changed, what drives it and what it means for something else are supporting context.
+  Qualifying context can be on the page of the value, or in a methodology section, a box, a
+  footnote, a note under a table or chart, or an appendix. A methodology that the query or the
+  approved plan asks for is a requested fact, not qualifying context.
+- **Measured differently**: two values whose sources state a different definition, basis or
+  calculation method. A different definition or basis does not make a different indicator.
+- **Supersede**: a newer value supersedes an older value for the same requested fact, and the
+  report does not give the superseded value unless the query or the approved plan asks how the
+  value was revised. Of two publication values, the one with the later stated date supersedes the
+  other, with no age threshold. A dataset value and a publication value never supersede each
+  other, and neither do two dataset values. For a requested fact that is a figure, a finding in
+  words never supersedes an older figure, and a newer figure supersedes an older finding in words.
+  Two values with the same stated date never supersede each other. A superseded value can
+  supersede a value that is older than it. Supersession applies in the same way between two near
+  matches that agree on all their parts, and to supporting context about the same subject.
+- **Current value**: a value that no other retrieved value supersedes.
+- **Supporting context**: content from the sources that does not answer a requested fact but helps
+  the reader read the answer. It stands next to the answer and never replaces it. Research does not
+  search for it. The writer can say in one clause how each item bears on the answer, and that
+  clause states only what a source states, or a comparison. When an exact match exists, a near
+  match can stay only as supporting context. A superseded value, a value of a near-match series, an
+  earlier value or a value for another period that nobody asked for, content about a different
+  topic, an account of the search, and a cause of a difference that no source states are never
+  supporting context.
+- **Account of the search**: a statement about how research searched, such as which sources it
+  checked, or that one publication does not give a requested fact that another publication gives.
+  A statement that the rule "When to say that evidence is missing" or the rule "Nearest matches when
+  no exact match exists" requires is not an account of the search. Neither is the statement in the
+  Overview that names the question and the kinds of source that research covered.
+- **Reasonable attempt**: two or more searches for the evidence that differ in wording or in
+  filters, such as a metadata filter, and that find no evidence. For context that a retrieved page
+  refers to, a reasonable attempt is to read the page that it refers to.
 
 #### Scenario: Every step receives the terms
 
 - **WHEN** a research turn runs
-- **THEN** the system prompts of the research agent and research review SHALL each carry all twelve
-  definitions above, and the system prompts of the report writer, the blind review and the
-  grounded review SHALL each carry the first eleven, without "Reasonable attempt"
+- **THEN** the system prompts of the research agent and research review SHALL each carry all
+  twenty-three definitions above, and the system prompts of the report writer, the blind review and
+  the grounded review SHALL each carry the first twenty-two, without "Reasonable attempt"
 
-### Requirement: Rule 1 — missing evidence is accepted after a reasonable attempt
+#### Scenario: A failed tool is left to research review's own prompt
 
-Any evidence the other rules ask for, including a methodology or a date, may not exist.
+- **WHEN** research review's system prompt is rendered
+- **THEN** the term "Reasonable attempt" SHALL carry no clause about a failed tool, and research
+  review's own prompt SHALL say that the research agent has already retried a failed tool as far
+  as it is allowed, so the tool call is not planned again
 
-The rule's parts SHALL tell each step the following.
+### Requirement: Rule 1 — every requested fact is answered on its own
 
-- **Research agent:** makes a reasonable attempt to find it, then moves on without it.
-- **Research review:** keeps the gap open until the findings show a reasonable attempt, then
-  treats the evidence as missing rather than as a gap.
-- **Report writer:** states what is missing and what therefore cannot be concluded, as it does for
-  evidence that could not be retrieved.
-- **Report review:** a check that asks for some evidence, such as a stated date or the reason for a
-  difference, is satisfied by a statement that the sources do not give it.
+The rule SHALL be named "Every requested fact, each on its own", and its parts SHALL tell each step
+the following.
 
-#### Scenario: A missing previous edition stops being a gap
+- **Research agent:** finds and searches for each requested fact that the query and the approved
+  plan ask for. Two requested facts are different when they differ in any part. The other rules
+  apply to each requested fact separately, so each requested fact has its own latest values, which
+  can come from sources with different stated dates.
+- **Research review:** a requested fact that research did not search for is a gap. A value for one
+  requested fact never supersedes a value for another requested fact, so it does not close the gap
+  of another.
+- **Report writer:** answers each requested fact that the query and the approved plan ask for. The
+  later plans of research review are not requested facts, because they are the retrieval steps
+  that research took. The part of a plan item that says where or how to search is not a requested
+  fact either: the values that the search found answer the plan item. A value for one requested
+  fact never supersedes a value for another. When research found no value for a requested fact,
+  the writer follows rule 10.
 
-- **WHEN** the findings show two differently worded searches for the previous edition of a
-  forecast, neither of which found it
-- **THEN** research review SHALL NOT plan a further search for it, and the report SHALL say that
-  no earlier edition was found
+#### Scenario: Two forecasters give two requested facts
 
-#### Scenario: A stated date the sources do not give
+- **WHEN** a query compares the IMF forecast of euro-area GDP growth for 2026 with the consensus
+  forecast
+- **THEN** the research agent SHALL search for the latest value of each forecast, and the report
+  SHALL give both, also when they have different stated dates
 
-- **WHEN** a draft gives a forecast and says that its source gives no publication date
-- **THEN** report review SHALL NOT report the missing stated date as a violation
+#### Scenario: A search instruction in the plan is not a requested fact
 
-### Requirement: Rule 2 — the latest value leads
+- **WHEN** a plan item says "check the datasets for the 2025 unemployment rate of the euro area"
+- **THEN** the report SHALL answer the 2025 unemployment rate of the euro area with the values that
+  research found, and SHALL NOT treat the instruction to check the datasets as a fact to answer
 
-The rule's parts SHALL tell each step the following.
+### Requirement: Rule 2 — every current value is given with its own citation
 
-- **Research agent:** looks for the latest value of every fact in each kind of source the channel
-  has: the latest dataset release and the latest publication edition. Where the channel has both,
-  a dataset value does not make the search of the publications unnecessary. A
-  dataset's entry in the data sources was fetched at the start of the turn and is its latest
-  release, so a dataset value needs no check for a later release. A search's first results are not
-  necessarily a publication's latest edition, so the agent checks for a later one, for example
-  with a search scoped to recent publication dates or with the document listing. This matters most
-  for forecasts, for estimates of past events that are recalculated as information arrives, such
-  as the turnout of a past election, estimated before the final count, and for figures revised
-  later. A later value can
-  come from another publication type or series than the one first found, so the check is scoped
-  by publication date, not by the first result's type or series. A listing shows titles and dates,
-  not values, so a later document whose title or topic could cover the fact is searched or read.
-  When the latest edition does not give the value, the agent checks the edition before it, and so
-  on: the latest value is the one from the most recent edition that states it.
-- **Research review:** where the channel has publications, a fact the question asks about with no
-  search of the publications for its latest value is a gap, even when a dataset gives its value. A
-  value taken from a publication, with no check for a later edition, is also a gap. A dataset value needs no check for a later
-  release. A check covers only what it searched: one confined to the type or series of the value
-  found leaves a gap, and so does a later listed document whose title or topic could cover the
-  fact and that was never searched or read. When the latest edition read does not give the value,
-  the earlier editions never searched or read are a gap until one gives it.
-- **Report writer:** the most recent exact match leads.
+The rule SHALL be named "Every current value, with its own source", and its parts SHALL tell each
+step the following.
 
-#### Scenario: A later edition exists
+- **Research agent:** searches each kind of source as rules 3 and 4 say. After that it does not
+  search for more sources that give the same requested fact. It does not search for the cause of a
+  difference between values, unless the query or the approved plan asks for it.
+- **Research review:** a difference between values is not a gap. A missing cause of a difference is
+  not a gap, unless the query or the approved plan asks for the cause. Research review never plans
+  a search for more sources that can disagree, because such a search has no end.
+- **Report writer:**
+  - gives all current values for a requested fact, from different sources and disagreeing ones
+    included;
+  - cites each value and does not name its source in the text, because the citation identifies the
+    source. When one sentence or phrase gives values from two or more sources, it names the source
+    of each value. The title of a table of one source names that source;
+  - when two values are measured differently, gives the qualifying context of each value next to
+    it;
+  - gives in one table the values of one source only, unless the query or the approved plan
+    explicitly asks to present the answer as a table. In such a table it makes clear which source
+    gives each value, preferably by a passage right before or right after the table that cites
+    each source, and otherwise by a citation in each cell;
+  - gives a cause for a difference only when a source says that this cause explains the difference
+    between these values. It does not write that the sources do not explain the difference, unless
+    the query or the approved plan asks for the cause;
+  - never averages or merges values, and never gives a range that includes them;
+  - under this policy, omits a value only in four cases: the value is superseded and the query or
+    the approved plan does not ask how it was revised; the value is a near match, an exact match
+    exists, and the value is not supporting context; the value is not for a requested fact and is
+    neither a near match that rule 9 requires or allows nor supporting context; or the query or the
+    approved plan asks to omit it. Other policies can also remove content;
+  - gives each value it keeps with its own citation, also when two values are the same figure, and
+    never puts two or more citations on one figure. A value in a table that a passage next to the
+    table attributes to its source, and a value in a table of one source that cites that source in
+    its title, are the exceptions.
+- **Report review:** for each pair of values that the draft gives for the same requested fact, each
+  value has its own citation, with the same two table exceptions. The draft does not average the
+  two values, and does not give a range that includes them. One figure with two or more citations
+  is a violation. Report review does not ask for a cause of the difference, unless the query or the
+  approved plan asks for it. A figure computed from values for different requested facts, such as
+  the difference between two growth rates, merges no values and is outside this check; report
+  review's "No calculation by research or the report" check covers it (see
+  **report-composition**, "Reports contain no calculations").
 
-- **WHEN** the research finds a forecast in one edition of a periodic publication and a later
-  edition of the same publication gives a new forecast for the same fact
-- **THEN** the report SHALL lead with the later edition's value
+#### Scenario: A dataset value and a newer publication value
+
+- **WHEN** IMF:WEO, last updated in October 2025, gives a 2026 GDP growth forecast of 3.4%, and a
+  publication of 20 November 2025 gives 3.2% for the same requested fact
+- **THEN** the report SHALL give both values, each with its own citation, SHALL NOT drop either as
+  superseded, and SHALL NOT say why they differ unless a source says what explains the difference
+
+#### Scenario: A dataset and a publication give the same figure
+
+- **WHEN** a data query and a publication give the same value for the same requested fact
+- **THEN** the report SHALL give the value from each source with its own citation, and SHALL NOT
+  put two citations on one figure
+
+#### Scenario: Differing values merged into a range
+
+- **WHEN** a draft states "growth is forecast at 3.2% to 3.4% in 2026" and cites one source for
+  each end of the range
+- **THEN** report review SHALL report a violation asking for each value on its own with its own
+  citation, and SHALL NOT ask for the reason for the difference
+
+#### Scenario: One figure with two citations
+
+- **WHEN** a draft gives "growth of 3.2% in 2026" with two citations on the one figure
+- **THEN** report review SHALL report a violation
+
+#### Scenario: A difference between two indicators is not a merged value
+
+- **WHEN** a draft gives a column of differences between export growth and GDP growth, each
+  computed from two cited values of different indicators
+- **THEN** report review SHALL NOT report the column under this rule as a range or an average of
+  differing values, and SHALL report it under its "No calculation by research or the report" check
+  as figures computed from other figures
+
+#### Scenario: Research review does not start an open-ended search
+
+- **WHEN** the findings hold one value for a requested fact and no other source was found
+- **THEN** research review SHALL NOT plan a search for further sources that might disagree
+
+#### Scenario: Values of two sources are not combined in one table
+
+- **WHEN** a dataset and a publication each give the 2025 unemployment rate, and the query does not
+  ask for a table
+- **THEN** the report SHALL NOT put the two values in one table
+
+### Requirement: Rule 3 — the latest value is searched for in each kind of source
+
+The rule SHALL be named "The latest value in each kind of source", and its parts SHALL tell each
+step the following.
+
+- **Research agent:** for each requested fact, searches each kind of source the channel has for
+  the value with the latest stated date. For a requested fact that is a finding in words, it
+  searches only the publications, because a dataset series never gives a finding in words. For a
+  query about an effect, a cause or a relation, it searches the publications for that effect, cause
+  or relation, and the datasets for the series of each indicator that the query names. For a
+  requested fact that is a figure, it searches each kind of source for the latest figure and for
+  the latest value, which can be a finding in words. A finding in words that is newer than the
+  latest figure does not end the search for the latest figure. A dataset's entry in the data
+  sources is its latest release, so a dataset value needs no check for a later release. When the
+  query or the approved plan names a source, the agent starts with it and then searches the other
+  sources, unless the user explicitly limits research to the named sources.
+- **Research review:** where the channel has publications, a requested fact without a search of
+  the publications for its latest value is a gap, also when a dataset gives a value. For a
+  requested fact that is a figure, a missing search for the latest figure is a gap, also when
+  research found a newer finding in words. A dataset value needs no check for a later release. A
+  source that the query or the approved plan names does not close these gaps, unless the user
+  explicitly limits research to the named sources.
+- **Report writer:** gives the current exact matches for each requested fact. For a requested fact
+  that is a figure, when a finding in words is newer than the latest figure, it gives both the
+  latest figure and the newer finding in words.
+
+#### Scenario: A later edition supersedes an earlier one
+
+- **WHEN** an edition of a periodic publication of 15 May 2025 and an edition of 20 November 2025
+  each give a 2026 GDP growth forecast for the same requested fact
+- **THEN** the report SHALL give the forecast of 20 November 2025, and SHALL NOT give the forecast
+  of 15 May 2025 unless the query asks how the forecast was revised
+
+#### Scenario: A newer finding in words does not replace the latest figure
+
+- **WHEN** one edition of a publication gives a 2026 GDP growth forecast of 3.2%, and a later
+  edition says only that the forecast was revised up
+- **THEN** the report SHALL give both the 3.2% and the later edition's statement
 
 #### Scenario: A dataset value is not rechecked
 
@@ -346,303 +536,386 @@ The rule's parts SHALL tell each step the following.
   update
 - **THEN** research review SHALL NOT plan a check for a later release of that dataset
 
-#### Scenario: A listing is not a check for a later value
+#### Scenario: A dataset value does not close the requested fact
 
-- **WHEN** the findings take a forecast from an annual report, and the only check for a later
-  value is a document listing filtered to that report's publication type, or a listing whose later
-  documents were judged by their titles and never searched or read
-- **THEN** research review SHALL report a gap asking for a search scoped to publication dates after
-  the report's, across publication types
-
-#### Scenario: A dataset value does not close the fact
-
-- **WHEN** the plan names only datasets, a data query gives the value of a fact the question asks
-  about, and the findings show no search of the publications for that fact
+- **WHEN** the plan names only datasets, a data query gives the value of a requested fact, and the
+  findings show no search of the publications for that fact
 - **THEN** research review SHALL report a gap asking for a search of the publications for the
   fact's latest value
 
 #### Scenario: A channel without publications
 
 - **WHEN** a channel's data sources include datasets and no publications, and a data query gives
-  the value of a fact the question asks about
+  the value of a requested fact
 - **THEN** research review SHALL NOT report a missing search of the publications as a gap
 
-### Requirement: Rule 3 — previous values are added where they give context
+#### Scenario: The user limits research to a named source
 
-The report gives what the user asked for. A previous value is added only where it gives context
-and makes sense. It does for a forecast, whose previous edition shows how the view moved. A value
-for the previous period does not for a one-off event, which has no previous period; a previous
-edition of an estimate of such an event, recalculated as information arrived, is an earlier value
-for the same fact and falls under rules 2 and 6.
+- **WHEN** the query says "use only the World Economic Outlook"
+- **THEN** research review SHALL NOT report a missing search of the other sources as a gap
 
-The rule's parts SHALL tell each step the following.
+### Requirement: Rule 4 — the datasets are searched through their structures
 
-- **Research agent:** retrieves every value the question asks for, including every edition when
-  the question asks how the value evolved, and the previous value where it gives context. For a
-  forecast taken from a publication, it reads the previous edition, found in the document listing,
-  for its forecast of the same fact. A later edition's quote of the previous value does not replace
-  that read, because the quote does not carry the previous value's stated date.
-- **Research review:** a value the question asks for that is not in the findings is a gap. For a
-  forecast taken from a publication, the previous edition's forecast for the same fact is a gap
-  until the findings show that edition read, and a later edition's quote of it does not close the
-  gap. A dataset forecast's previous release is a gap only where a client rule says the datasets
-  keep earlier releases, because whether they do depends on the channel's data. No other previous value
-  is a gap. The part states the
-  forecast's gap as a requirement and says "not in the findings" rather than "missing", which rule
-  1 uses for evidence not found after a reasonable attempt.
-- **Report writer:** gives every value the question asks for, and a previous value where it gives
-  context. For a question about the current forecast, the latest forecast is required and the
-  previous edition is added context; for a question about how a forecast evolved, every edition is
-  required.
+The rule SHALL be named "Searching the datasets". It SHALL apply to each requested fact that is a
+figure, and to each indicator that a query about an effect, a cause or a relation names. Its parts
+SHALL tell each step the following.
 
-#### Scenario: How a forecast evolved
+- **Research agent:**
+  - finds which dataset series match each requested fact, starting from the dataset structures in
+    the data-source descriptions;
+  - makes no availability query for a series when the structures show that a code it needs is
+    missing, and calls no dataset tool for a requested fact when the data-source descriptions show
+    that no dataset can hold its indicator;
+  - otherwise checks with an availability query whether the series exists, because a structure
+    lists the codes of each dimension and not which combinations of codes have a series;
+  - never uses a data query to find a series, because a broad data query returns the data points
+    of every series it finds;
+  - queries the matching series for the requested period, and when several matching series differ
+    only in parts that the query and the approved plan do not name, queries only the most
+    appropriate ones;
+  - queries the dataset also when a publication gives a value, and also when the query or the
+    approved plan names another source, unless the user explicitly limits research to the sources
+    that they name;
+  - when no dataset has a matching series, checks with availability queries what each dataset that
+    has the indicator gives for each part that differs, and never queries the data of a near-match
+    series.
+- **Research review:** unless the user explicitly limits research to other sources, each of these
+  is a gap:
+  - a requested figure in a dataset that can hold its indicator, where the structures do not show
+    that a needed code is missing and research made no availability query for its series;
+  - a requested fact with a matching series, where research queried no matching series for the
+    requested period;
+  - a requested fact with no matching series, where research did not check with availability
+    queries what a dataset that has the indicator gives for each part that differs.
 
-- **WHEN** the question asks how a forecast evolved and the research found four editions that give
-  it
-- **THEN** the report SHALL give the value of every edition, each with its stated date and
-  citation
+  The same applies to each indicator of a query about an effect, a cause or a relation. Research
+  review never asks for a data query of a near-match series.
+
+The rule sets no report-writer part. How the report gives a dataset value beside a publication
+value is specified in rule 2, and how it gives what a near-match series offers in rule 9.
+
+#### Scenario: A code the structure shows is missing
+
+- **WHEN** a dataset structure lists every code of its geography dimension, and the requested
+  country is not among them
+- **THEN** the research agent's prompt SHALL tell it to make no availability query for that
+  country's series in that dataset
+
+#### Scenario: A named publication does not replace the dataset query
+
+- **WHEN** the query asks for the 2026 GDP growth forecast "according to the World Economic
+  Outlook", IMF:WEO has a matching series, and research made no data query of it
+- **THEN** research review SHALL report a gap asking for a query of that series
+
+#### Scenario: No matching series
+
+- **WHEN** the requested fact is the unemployment rate for all ages, and a dataset gives that rate
+  only for each age group
+- **THEN** research SHALL check with availability queries what the dataset gives, and research
+  review SHALL NOT ask for a data query of an age-group series
+
+### Requirement: Rule 5 — other periods and earlier values are given only when asked for
+
+The rule SHALL be named "Other periods and earlier values only when asked", and its parts SHALL
+tell each step the following.
+
+- **Research agent:** gets each value that the query or the approved plan asks for. When the query
+  or the approved plan asks how a value was revised, it gets each earlier value in the date range
+  that it gives. It does not get an earlier value, or a value for another period, that the query or
+  the approved plan does not ask for. This limit does not apply to a near match that rule 9
+  requires or allows.
+- **Research review:** a value that the query or the approved plan asks for, and that is not in the
+  findings, is a gap until research makes a reasonable attempt. An earlier value, or a value for
+  another period, that the query or the approved plan does not ask for is never a gap.
+- **Report writer:** gives each value that the query or the approved plan asks for. For a question
+  about the current forecast, it gives the current forecasts and no earlier forecast. For a
+  question about how a forecast was revised, it gives each earlier value with its stated date. It
+  does not give an earlier value, or a value for another period, that nobody asked for, except a
+  near match that rule 9 requires or allows.
 
 #### Scenario: The current forecast
 
-- **WHEN** the question asks for the current forecast of an indicator and the previous edition
-  gave another value
-- **THEN** the report SHALL lead with the latest forecast and SHALL give the previous edition's
-  value as context
+- **WHEN** the question asks for the current 2026 forecast of an indicator, and an earlier edition
+  of the publication gave another value
+- **THEN** the report SHALL give the current forecasts and SHALL NOT give the earlier edition's
+  value
 
-#### Scenario: A previous forecast known only from a later edition's quote
+#### Scenario: How a forecast was revised
 
-- **WHEN** the question asks for the current forecast of an indicator, and the latest edition says
-  the forecast is "down from 1.5%" while the findings hold no read of the previous edition
-- **THEN** research review SHALL report a gap asking for the previous edition, so that the previous
-  forecast's stated date can be given
+- **WHEN** the question asks how the 2026 GDP growth forecast was revised during 2025, and the
+  research found four editions that give it
+- **THEN** the report SHALL give the value of every edition, each with its stated date and its
+  citation
+
+#### Scenario: A trend is not a revision
+
+- **WHEN** the question asks how the euro-area unemployment rate changed from 2020 to 2025
+- **THEN** each year SHALL be a requested fact of its own, and research review SHALL NOT report an
+  earlier edition's value for any of those years as a gap
 
 #### Scenario: A one-off event
 
 - **WHEN** the question asks for the losses of one past event
 - **THEN** research review SHALL NOT treat a missing value for a previous period as a gap
 
-#### Scenario: A dataset forecast has no previous release to find
+### Requirement: Rule 6 — supporting context is included, and requested omissions are honoured
 
-- **WHEN** a data query gives a forecast and no client rule says the dataset keeps earlier releases
-- **THEN** research review SHALL NOT plan a search for the dataset's previous release
+The rule SHALL be named "Supporting context and omitted content", and its parts SHALL tell each
+step the following.
 
-### Requirement: Rule 4 — a dataset holding the indicator is queried and is always cited
+- **Research agent:** searches for the requested facts, and does no search only for supporting
+  context. The stated date, the described period and the qualifying context of a value in the
+  findings are exceptions, which rules 7 and 8 require. The dataset series of each indicator that
+  a query about an effect, a cause or a relation names are an exception too, which rule 4 requires.
+- **Research review:** missing supporting context is never a gap. The stated date, the described
+  period and the qualifying context of a value of supporting context are not supporting context,
+  and rules 7 and 8 decide whether they are a gap. The dataset series of each indicator that a
+  query about an effect, a cause or a relation names are not supporting context, and rule 4 decides
+  whether they are a gap.
+- **Report writer:** includes supporting context, but includes an item only when it can say in one
+  clause how the item bears on the answer, and that clause states only what a source states, or a
+  comparison. It omits the content that the term "Supporting context" excludes. When the query or
+  the approved plan asks to omit some content, it omits that content, keeps what another rule
+  requires next to a value, such as its described period, and does not say that it omitted part of
+  the request.
+- **Report review:** an account of the search, as the term defines it, is a violation. Content that
+  the query or the approved plan asks to omit is a violation, unless another rule requires it next
+  to a value.
 
-The rule's parts SHALL tell each step the following.
+#### Scenario: An account of the search
 
-- **Research agent:** when a dataset holds the indicator, queries it, even when a publication
-  gives a value.
-- **Research review:** an indicator of a fact the question asks about, held by a dataset that was
-  never queried for it, is a gap.
-- **Report writer:** cites the data query that returned the dataset value, even when a newer
-  publication gives a different value, because a dataset is an independent source. A dataset value
-  never replaces a publication's value either: the report gives both, each with its citation and
-  its stated date, unless the publication's value is obviously outdated or irrelevant. When a
-  publication gives the same figure, the dataset is primary, and a publication that only repeats it
-  may be left out.
+- **WHEN** a draft says "research checked the datasets and three publications"
+- **THEN** report review SHALL report a violation
 
-#### Scenario: A publication and a dataset give the same figure
+#### Scenario: A requested omission
 
-- **WHEN** a publication and a data query give the same value for the same fact
-- **THEN** the report SHALL cite the data query for it and MAY leave the publication out
+- **WHEN** the query asks to leave out forecasts
+- **THEN** the report SHALL give no forecast, SHALL keep the described period of each value it
+  gives, and SHALL NOT say that it left out the forecasts
 
-#### Scenario: A newer publication gives another value
+#### Scenario: Missing supporting context is not a gap
 
-- **WHEN** a dataset last updated in April gives a 2026 growth forecast of 3.4% and a publication
-  from June gives 3.2% for the same fact
-- **THEN** the report SHALL give both values, each with its source named, its citation and its
-  stated date, and SHALL NOT drop the dataset value as superseded
+- **WHEN** the findings answer every requested fact, and no retrieved page gives the drivers of the
+  values
+- **THEN** research review SHALL NOT report the missing drivers as a gap
 
-#### Scenario: A newer dataset value does not replace a publication's value
-
-- **WHEN** a publication from January gives a 2026 growth forecast of 3.2% and a dataset last
-  updated in April gives 3.4% for the same fact
-- **THEN** the report SHALL give both values, each with its citation and its stated date, and SHALL
-  NOT drop the publication's value as superseded by the dataset's
-
-### Requirement: Rule 5 — the qualifying context that changes how a value is read is retrieved
+### Requirement: Rule 7 — the qualifying context of each value is retrieved
 
 Where a client documents methodology differs by client, so a channel's client rules say it. The
-rule is named "Qualifying context": a value's methodology is one kind of qualifying context, and its
-assumptions, scenario conditions, limitations and caveats are the others (see the term in "The
-source-selection terms are given to every step").
+rule SHALL be named "Finding the qualifying context of each value", and its parts SHALL tell each
+step the following.
 
-The rule's parts SHALL tell each step the following.
+- **Research agent:** for each value that the report can use, the values of supporting context
+  included, gets its qualifying context from the sources. Without it, the agent cannot know whether
+  two values are for the same requested fact, or whether they are measured differently. When a
+  retrieved page refers to qualifying context, such as a methodology section or an appendix, the
+  agent reads that context.
+- **Research review:** qualifying context that a retrieved page refers to, and that research did
+  not read, is a gap. Qualifying context that no source gives is not a gap.
 
-- **Research agent:** for every value the report may use, retrieves its qualifying context,
-  wherever the sources document it, such as methodology pages, boxes, footnotes
-  and notes under tables and charts. Without it a superseded forecast cannot be told from a
-  disagreement.
-- **Research review:** for a value of a fact the question asks about, qualifying context the
-  findings show is documented, because a page that was read or a search result points to it, and
-  that was
-  not read, is a gap.
-- **Report writer:** gives a value's qualifying context with the value, where it materially
-  affects how the value is read.
+The rule sets no report-writer part. Giving the qualifying context next to its value is specified
+in **faithful-relay**, the rule "Qualifying context next to its value", and giving the qualifying
+context of two values that are measured differently in rule 2.
 
-#### Scenario: Two values differ in definition
+#### Scenario: A referred-to appendix is not read
 
-- **WHEN** two sources give different values for a country's unemployment rate, and the
-  methodology of one counts only urban areas
-- **THEN** the report SHALL state that difference in definition beside the two values
+- **WHEN** a retrieved page gives a forecast and refers to an appendix for its assumptions, and the
+  findings show no read of that appendix
+- **THEN** research review SHALL report a gap asking to read the appendix
 
-#### Scenario: A forecast's assumption is given with it
+#### Scenario: Qualifying context that no source gives
 
-- **WHEN** a publication gives a GDP growth forecast and states that its baseline assumes unchanged
-  policies
-- **THEN** the research agent's prompt SHALL ask for that assumption to be retrieved, and the
-  report SHALL give it with the forecast
+- **WHEN** no retrieved page states or refers to the assumptions of a forecast
+- **THEN** research review SHALL NOT report the missing assumptions as a gap
 
-### Requirement: Rule 6 — every relevant value is kept, and a difference is explained
+### Requirement: Rule 8 — every value carries its described period
 
-The rule's parts SHALL tell each step the following.
+The rule SHALL be named "Stated date and described period", and its parts SHALL tell each step the
+following.
 
-- **Research agent:** looks for other sources that give a value for the same fact, and for what
-  explains any difference between them.
-- **Research review:** the rule's only gap is a difference already found in the findings whose
-  explanation was not looked for. Research review never plans a search for further sources that
-  might disagree, because such a search has no natural end. This limit applies to rule 6 alone:
-  the gaps the other rules define, including the checks rules 2 and 4 require, still stand.
-- **Report writer:** gives every differing value, naming its source in the text and citing it,
-  and says why the values differ or that the sources do not explain it. "The forecast was updated
-  between the two dates" is a valid reason, and so is a methodology change between two editions,
-  which leaves neither value superseded. Values are never averaged or merged, and a value is left
-  out only when it is obviously outdated or irrelevant. Omitting a relevant value costs more than
-  including one.
-- **Report review:** judges only what the draft shows. A range or an average spanning two sources'
-  values for the same fact is a violation, and so are two values for the same fact that the draft
-  presents as differing unless each carries its own citation and a reason, or the statement that the
-  sources do not explain the difference. A figure computed from values of different facts, such as
-  the difference between two indicators' growth rates, merges no values for one fact and is outside
-  this check; report review's "No calculations" check covers it (see **report-composition**,
-  "Reports contain no calculations"). Whether a figure carrying two citations hides a disagreement
-  is not report review's to judge, because it cannot see the sources.
+- **Research agent:** gets the stated date and the described period of each value that the report
+  can use, the values of supporting context included, from the tool results. It gets the stated
+  date of a publication from the document metadata that a tool gives, and never from the page text,
+  because the page text can carry an old template date.
+- **Research review:** a value that the report can use, without its stated date, is a gap until
+  research gets the date. A value that the report can use, without its described period, is a gap
+  until research makes a reasonable attempt.
+- **Report writer:**
+  - gives the described period of each value;
+  - does not write the stated date in the text, because the citation of each source shows it,
+    unless the answer needs it, such as when the query or the approved plan asks how a value was
+    revised. The title of a table of one source may give the stated date of that source;
+  - when it writes a stated date in the text, takes it only from the metadata of the source: the
+    publication date of a publication in the findings, or the last update of a dataset in the
+    findings or the data sources. It never takes a date from the page text or a page image, and
+    never infers one.
+- **Report review:** a value without its described period is a violation. Report review never asks
+  for the stated date of a value, because its citation shows it, and a stated date in the title of
+  a table of one source is not a violation. A year column or a row label in a table gives the
+  described period of each value in it, so report review does not ask to mark such values as
+  historical or actual.
 
-#### Scenario: Two editions with a methodology change
+#### Scenario: A forecast cited without a stated date in the text
 
-- **WHEN** two editions of one publication give different values for the same fact and the later
-  one changed its sample
-- **THEN** the report SHALL give both values, each with its citation and stated date, and SHALL
-  say that the methodology changed between the editions
+- **WHEN** a draft says "GDP is forecast to grow by 3.2% in 2026" with a citation and no stated date
+- **THEN** report review SHALL NOT report a violation
 
-#### Scenario: Differing values merged into a range
+#### Scenario: A value without its described period
 
-- **WHEN** a draft states "growth is forecast at 3.2% to 3.4% in 2026" and cites one source for
-  each end of the range
-- **THEN** report review SHALL report a violation asking for each value on its own, with its
-  citation and the reason for the difference, or the statement that the sources do not explain it
+- **WHEN** a draft says "growth is forecast at 3.2%" with a citation and no period
+- **THEN** report review SHALL report a violation asking for the described period
 
-#### Scenario: A difference between two indicators is not a merged value
+#### Scenario: A written stated date comes from the metadata
 
-- **WHEN** a draft gives a column of differences between export growth and GDP growth, each
-  computed from two cited values of different indicators
-- **THEN** report review SHALL NOT report the column under this rule as a range or an average of
-  differing values, and SHALL report it under report review's "No calculations" check as figures
-  computed from other figures
+- **WHEN** the query asks how a forecast was revised, and a publication's page text carries a date
+  that differs from its publication date of 20 November 2025 in the document metadata
+- **THEN** the report SHALL take that publication's stated date from the publication date in the
+  metadata, although the page text is also in the findings
 
-#### Scenario: Research review does not start an open-ended search
+### Requirement: Rule 9 — only the nearest matches are given when no exact match exists
 
-- **WHEN** the findings hold one value for a fact and no other source was found
-- **THEN** research review SHALL NOT plan a search for further sources that might disagree
+The rule SHALL be named "Nearest matches when no exact match exists", and its parts SHALL tell each
+step the following.
 
-### Requirement: Rule 7 — every value carries its dates
+- **Research agent:** when it finds no exact match for a requested fact, it searches the same
+  sources for the nearest matches. For each part that can differ, the nearest match is:
+  - for a period, the nearest periods before and after it;
+  - for a geography, the smallest region or group of countries that contains it, then a wider
+    region, then the world, stopping at the first geography that gives a value;
+  - for a group of countries that no source aggregates, a few key member countries;
+  - for a scope, the smallest scope that contains it;
+  - for a frequency that the query or the approved plan names, the other frequencies that the
+    sources give;
+  - for a scenario, or for a definition or basis, the other values that the sources give.
 
-The rule's parts SHALL tell each step the following.
+  It searches the nearest periods in the same geography before it searches a wider geography, and
+  it searches for no other near matches. For a near-match series of a dataset, the list does not
+  apply: the agent checks with availability queries what the dataset gives for each part that
+  differs, and never queries the data of a near-match series.
+- **Research review:** a requested fact without an exact match is a gap until research has searched
+  its nearest periods in the same geography and the next wider geography. Research review asks only
+  for the nearest matches, which are few, so this search has an end. For the datasets, availability queries that show what a
+  dataset gives for each part that differs close this gap. Research review never asks for a data
+  query of a near-match series.
+- **Report writer:**
+  - when the findings hold no exact match for a requested fact, says that the sources give no exact
+    match, and then gives only its nearest matches: the nearest periods, the smallest geography
+    that gives a value, a few key members of a group that no source aggregates, the smallest scope
+    that contains the requested scope, the values for other frequencies when a frequency is named,
+    and the values for other scenarios, definitions or bases;
+  - treats a near match that differs in fewer parts as nearer, and a near match for a different
+    period as nearer than one for a wider geography;
+  - gives the other near matches in the findings only when none of these nearest matches exists;
+  - says how each near match differs from the requested fact;
+  - gives no value of a near-match series of a dataset, and instead says what the dataset gives for
+    each part that differs, with the dataset cited;
+  - when an exact match exists for a requested fact, gives no near match for it, also when the near
+    match agrees with the exact match, unless the near match is supporting context (rule 6).
+- **Report review:**
+  - a near match without a statement of how it differs from the requested fact is a violation;
+  - a near match that the draft gives as an answer next to an exact match for the same requested
+    fact is a violation, and a near match in Additional context is supporting context, not a
+    violation;
+  - a value that the draft gives for a requested fact from a dataset series that the draft says
+    differs from that fact is a violation. A value of the same series for another requested period
+    that the series covers is not a violation, and neither is a named series that the draft
+    describes and cites without giving a value from it. A series that differs only in its unit,
+    with the unit stated, and a forecast for a period that has ended, labelled as a forecast, are
+    not violations either.
 
-- **Research agent:** makes sure the findings carry the stated date and the described period of
-  every value it may use. A dataset value's stated date is the dataset's last update, which the
-  data sources or the data-query result give. A publication's stated date is the publication date
-  in the document metadata a tool returns — never a date in the page text, which can carry a stale
-  template date, and never an edition name. The document listing returns documents with the
-  metadata fields the channel makes filterable, but may return one page of results at a time and
-  may not look a document up by id. So when the research uses a publication, the agent lists the
-  documents once per research, narrowed
-  by a publication-date filter where the plan allows rather than by publication type, which would
-  hide a later value of another type (rule 2), with a limit that covers every matching document or
-  by paging through them, and reads the date of each document it uses from that list. It lists
-  again, without the filter or with the next page, only for a document the list does not include.
-  One listing entry settles a document's stated date: when the entry carries no date, the date is
-  missing (rule 1). A channel whose publication date the listing does not return names another
-  source for it in a client rule.
-- **Research review:** a value for a fact the question asks about, given in the findings without
-  one of its dates, is a gap. A listing entry for a document settles that document's stated date,
-  whether it carries a date or not. A publication's stated date is its publication date, so
-  research review never asks for a separate forecast vintage, data cut-off or as-of date.
-- **Report writer:** every value states its described period. The stated date is stated where it
-  makes a difference: for a forecast, for an estimate, and for a value shown beside a value for
-  the same fact stated on another date. It is written as a date, never as an edition name alone,
-  and a publication's is taken from the document metadata in the findings, never from a date
-  printed on its pages.
-- **Report review:** a value without its described period, or a forecast or an estimate without
-  its stated date, is a violation. This includes a previous forecast the draft gives only as the
-  starting point of a revision, such as "revised down from 1.5%". An edition name alone is not a
-  stated date. A table's year column or row label states the described period of every value in
-  it, so report review does not ask to mark such values as historical or actual.
+#### Scenario: Nearer periods before a wider geography
 
-#### Scenario: A forecast without its stated date
-
-- **WHEN** a draft says "GDP is forecast to grow by 3.2% in 2026" with a citation and no date on
-  which the forecast was made
-- **THEN** report review SHALL report a violation asking for the forecast's stated date
-
-#### Scenario: An edition name instead of a date
-
-- **WHEN** a draft gives a forecast "from the third issue of 2025" and no date
-- **THEN** report review SHALL report a violation asking for the stated date
-
-#### Scenario: A publication date is taken from the metadata
-
-- **WHEN** the research uses a figure from a publication whose page text carries a date different
-  from its publication date in the document metadata
-- **THEN** the report SHALL give the publication date from the metadata as the stated date, although the page text is also in the findings
-
-#### Scenario: A listing's first page misses a used document
-
-- **WHEN** the document listing returns its first page and a document the research uses is not on
-  it
-- **THEN** the research agent SHALL list again, without the filter or with the next page, and SHALL
-  take the document's stated date from the entry it finds, or treat the date as missing when no
-  entry is found
-
-### Requirement: Rule 8 — near matches are labelled when no exact match exists
-
-The rule's parts SHALL tell each step the following.
-
-- **Research agent:** when no exact match exists, looks for the nearest matches by scope,
-  geography and period, such as the smallest region or grouping that contains a country or the
-  nearest years, in the same sources it searches for the exact match.
-- **Research review:** a fact the question asks about with no exact match in the findings, and no
-  search for its nearest matches, is a gap. The nearest matches are few, so research review asks
-  only for those. The part exists because the evals showed the research agent skipping near
-  matches when nothing asked for them, and a search for the nearest matches has a natural end,
-  unlike rule 6's search for further sources.
-- **Report writer:** presents the near matches found, labels each with how it differs from what was
-  asked, and states the limitation.
-- **Report review:** a near match presented without how it differs is a violation.
-
-#### Scenario: Research review asks for the nearest region
-
-- **WHEN** the question asks for a figure for a country, the findings show no value for it, and
-  no search for the region that contains the country
-- **THEN** research review SHALL report a gap asking for that region's value
+- **WHEN** the question asks for a country's figure for 2025, no source gives it, and the findings
+  show no search for that country's figures for 2024 or 2026
+- **THEN** research review SHALL report a gap asking for those periods in the same country, and
+  the research agent SHALL search them before the region that contains the country
 
 #### Scenario: Only a narrower geography is available
 
-- **WHEN** the question asks for a figure for a region, and the research found it only for one
-  country of that region
-- **THEN** the report SHALL present the country figure, say that it covers only that country, and
-  state that the regional figure was not found
+- **WHEN** the question asks for a figure for a region, the findings hold no nearest match for it,
+  and the research found the figure only for one country of that region
+- **THEN** the report SHALL say that the sources give no exact match, MAY give the country figure,
+  and SHALL say that it covers only that country
+
+#### Scenario: A near-match series is described, not quoted
+
+- **WHEN** the requested fact is the unemployment rate for all ages, and a dataset gives the rate
+  only for each age group
+- **THEN** the report SHALL say that the dataset gives the rate for each age group but not for all
+  ages, SHALL cite the dataset, and SHALL NOT give a value of an age-group series
+
+#### Scenario: A near match beside an exact match
+
+- **WHEN** a draft gives the euro-area unemployment rate for 2025 as the answer, and next to it, as
+  a second answer, the rate for Germany
+- **THEN** report review SHALL report a violation, and SHALL NOT report one when the rate for
+  Germany appears in Additional context
+
+### Requirement: Rule 10 — missing evidence is stated only for what the user asked for
+
+The rule SHALL be named "When to say that evidence is missing", and its parts SHALL tell each step
+the following.
+
+- **Research agent:** makes a reasonable attempt to find each item of evidence that a rule asks
+  for, qualifying context and dates included. When the attempt finds nothing, it continues without
+  that item.
+- **Research review:** a gap for an item of evidence stays open until the findings show a
+  reasonable attempt to find that item. After that attempt the item is missing, and a missing item
+  is not a gap.
+- **Report writer:**
+  - says that evidence is missing when no retrieved source gives an item that the user asked for
+    in the query or in the approved plan, and names that item;
+  - when the query or the approved plan asks for a figure that needs the missing item, such as a
+    change over time, says that the report cannot give that figure;
+  - does not say that other evidence is missing, and does not say that a stated date is missing;
+  - when the datasets give a value for a requested fact and the publications give none, says that
+    the publications give no value for it, but only when the findings show two or more searches in
+    the publications that found no value;
+  - never names the datasets as sources that do not give a requested fact, a figure or a finding
+    in words. A statement about all the sources together is allowed. A statement of what a dataset
+    gives for each part that differs from a requested fact, with the dataset cited, is the
+    exception, and rule 9 decides when to give it;
+  - when one source gives a requested fact, does not say that another source of the same kind does
+    not give it.
+- **Report review:** when the draft says that the sources do not give an item, that statement
+  satisfies every check that asks for the item. A statement that names the datasets as sources that
+  do not give a requested fact is a violation, and a statement about all the sources together is
+  not. A statement of what a dataset gives for each part that differs, with the dataset cited, is
+  the exception.
+
+#### Scenario: Missing qualifying context stops being a gap
+
+- **WHEN** the findings show two differently worded searches for the assumptions of a forecast,
+  neither of which found them
+- **THEN** research review SHALL NOT plan a further search for them
+
+#### Scenario: The publications give no value
+
+- **WHEN** a data query of IMF:WEO gives the 2025 value of a requested fact, and the findings show
+  two searches in the publications that found no value for it
+- **THEN** the report SHALL say that the publications give no value for 2025
+
+#### Scenario: A draft names the datasets as lacking a value
+
+- **WHEN** a draft says "the datasets do not give the 2025 value"
+- **THEN** report review SHALL report a violation, and SHALL NOT report one for "No source gives
+  the 2025 value"
+
+#### Scenario: A statement that an item is missing satisfies the check
+
+- **WHEN** a draft says that the sources do not state which definition a value uses
+- **THEN** report review SHALL NOT report the missing definition as a violation
 
 ### Requirement: Source selection is verified by evals
 
 The effect of these rules on research and reports depends on model behavior, which unit tests
 cannot establish. Unit tests SHALL establish what each step's prompt carries. The behavior SHALL
-be checked by running questions on a local stack, including at least one question about how a
-forecast evolved, and by the Deep Research eval's test cases. Their ground truth follows these
+be checked by running questions on a local stack, including at least one question that asks how a
+forecast was revised, and by the Deep Research eval's test cases. Their ground truth follows these
 rules.
 
-#### Scenario: A question about how a forecast evolved
+#### Scenario: A question about how a forecast was revised
 
-- **WHEN** a local stack is asked how a periodic forecast evolved
-- **THEN** the report SHALL give several editions' values, each with its citation and stated date,
-  and the research findings SHALL show a document listing from which the dates were taken
+- **WHEN** a local stack is asked how a periodic forecast was revised over a given date range
+- **THEN** the report SHALL give the value of each edition in that range, each with its citation
+  and its stated date, and each stated date SHALL come from the source's metadata

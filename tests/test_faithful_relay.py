@@ -221,8 +221,8 @@ def test_the_four_prompts_take_the_generic_rules_through_one_placeholder() -> No
 
 
 def test_report_review_gets_no_part_of_no_distortion() -> None:
-    assert "### No distortion" not in _review_prompt()
-    assert "### No distortion" in _writer_prompt()
+    assert "### No exaggeration or distortion of a source" not in _review_prompt()
+    assert "### No exaggeration or distortion of a source" in _writer_prompt()
 
 
 def test_no_prompt_allows_the_reports_own_inference() -> None:
@@ -243,13 +243,16 @@ def test_research_review_says_nobody_calculates() -> None:
 def test_the_writer_outrank_list_carries_the_faithful_relay_prohibitions() -> None:
     text = _words(_writer_prompt())
     assert (
-        'the "No calculations" rule, the rules that exclude content, these three source-selection'
-        " rules" in text
-        and "these two faithful-relay rules: infer nothing, and keep every figure as its source"
-        in text
+        '- "No calculation by research or the report"; - every rule that excludes content;' in text
     )
-    assert 'does not override the "No calculations" rule or those two faithful-relay rules' in text
-    assert "is a statement about the evidence, not an explanation of a declined request" in text
+    assert '- infer nothing (the rule "No conclusion that no source states");' in text
+    assert (
+        "- keep every figure as its source gives it, apart from the changes that the rule" in text
+    )
+    assert (
+        'does not override "No calculation by research or the report", "infer nothing" or "keep'
+        ' every figure as its source gives it" either' in text
+    )
 
 
 def test_the_writer_names_a_publication_series_in_words() -> None:
@@ -266,9 +269,16 @@ def test_the_research_agent_is_told_why_a_search_summary_is_not_evidence() -> No
 
 
 def test_the_restated_query_keeps_formatting_requests() -> None:
-    assert "Keep the user's formatting requests in it, such as rounding figures" in _words(
-        PREP_AGENT_SYSTEM
+    assert "Keep the user's formatting requests in it, such as a unit" in _words(PREP_AGENT_SYSTEM)
+
+
+def test_a_rounding_request_does_not_change_the_precision() -> None:
+    figures = next(r for r in FAITHFUL_RELAY_RULES if r.name.startswith("Each figure"))
+    assert "Two changes are allowed" in _words(figures.report_writer or "")
+    assert "Do this also when the research question or the plan asks to round figures" in _words(
+        figures.report_writer or ""
     )
+    assert "not rounded" not in (figures.report_review_blind or "")
 
 
 def test_the_default_sections_ask_for_no_inference() -> None:
@@ -277,9 +287,9 @@ def test_the_default_sections_ask_for_no_inference() -> None:
     assert "bottom line" not in descriptions
 
 
-def test_source_selection_points_a_computed_figure_at_no_calculations() -> None:
-    other_sources = next(r for r in SOURCE_SELECTION_RULES if r.name.startswith("Other sources"))
-    assert 'this check does not cover it, and the check "No calculations" does' in _words(
+def test_source_selection_leaves_a_computed_figure_out_of_its_merge_check() -> None:
+    other_sources = next(r for r in SOURCE_SELECTION_RULES if r.name.startswith("Every current"))
+    assert "merges no values. This check does not cover it." in _words(
         other_sources.report_review_blind or ""
     )
 
@@ -310,10 +320,15 @@ def test_the_check_carries_the_terms_and_the_writer_parts() -> None:
 
 def test_the_check_and_the_writer_share_the_no_calculations_rule() -> None:
     prompt = _check_prompt()
-    assert f"## No calculations\n\n{NO_CALCULATIONS_WRITER_RULE}" in prompt
-    assert f"## No calculations\n\n{NO_CALCULATIONS_WRITER_RULE}" in _writer_prompt()
+    assert f"## No calculation by research or the report\n\n{NO_CALCULATIONS_WRITER_RULE}" in prompt
+    assert (
+        f"## No calculation by research or the report\n\n{NO_CALCULATIONS_WRITER_RULE}"
+        in _writer_prompt()
+    )
     # The rule follows every policy block, so it never reads as part of the last one.
-    assert prompt.index("## Language and style, judged") < prompt.index("## No calculations")
+    assert prompt.index("## Language and style, judged") < prompt.index(
+        "## No calculation by research or the report"
+    )
 
 
 def test_the_check_carries_no_blind_part() -> None:
@@ -323,7 +338,7 @@ def test_the_check_carries_no_blind_part() -> None:
         if blind_part:
             assert blind_part not in prompt
     assert "<client_rules>" not in prompt
-    assert "Glossary terminology" not in prompt
+    assert "\n## Glossary terms\n" not in prompt
     assert "**Section content.**" not in prompt
     assert "## Removal checks" not in prompt
 
@@ -332,28 +347,34 @@ def test_the_check_carries_the_grounded_parts_and_the_client_grounded_parts() ->
     client_rule = QualityRule(name="Units", report_review_grounded="Check the units.")
     blind_rule = QualityRule(name="Dates", report_review_blind="Check the dates.")
     prompt = _check_prompt(client_rules=[client_rule, blind_rule])
-    assert "### Names, not codes\n\nA codelist code or a dataset id outside a citation" in prompt
+    assert "### Codelist values by name\n\nA codelist code in the draft is a violation." in prompt
     assert "### Accurate and consistent terms\n\nThese are violations:" in prompt
-    assert "### Verbatim names\n\nA verbatim name is" in prompt
+    assert "### Verbatim names\n\n- **Verbatim name**: a publication title" in prompt
     assert "<client_rules>\n### Units\n\nCheck the units.\n</client_rules>" in prompt
     assert "Check the dates." not in prompt
-    assert prompt.index("## No calculations") < prompt.index("## Client-specific checks")
+    assert prompt.index("## No calculation by research or the report") < prompt.index(
+        "## Client-specific checks"
+    )
 
 
-def test_the_check_leaves_same_meaning_terms_to_the_channels_rules() -> None:
+def test_the_check_judges_which_term_the_report_uses() -> None:
     text = _words(_check_prompt())
-    assert "which of two terms with the same meaning the report uses for a concept" in text
+    assert "which of two terms with the same meaning the report uses for a concept" not in text
     assert "When the findings hold such a value and the draft leaves it out, report it" in text
     assert "you are not shown" not in text
 
 
 def test_the_answer_example_parses_into_two_items() -> None:
     prompt = _check_prompt()
-    example = prompt[prompt.index("1. No inference:") : prompt.index("\n\nIf the draft breaks")]
+    example = prompt[
+        prompt.index("1. No conclusion that no source states:") : prompt.index(
+            "\n\nIf the draft breaks"
+        )
+    ]
     items = parse_review_items(example)
     assert len(items) == 2
-    assert items[0].startswith("No inference:")
-    assert items[1].startswith("Names, not codes:")
+    assert items[0].startswith("No conclusion that no source states:")
+    assert items[1].startswith("Codelist values by name:")
 
 
 def test_the_checks_messages_and_their_roles() -> None:

@@ -4,8 +4,8 @@
 
 How the report names concepts: each technical term with the meaning its source gives it, a glossary
 term only where it names exactly the same concept, one term per concept throughout, and a research
-search that finds a glossary concept under either of its phrasings. The glossary-terminology rule
-itself stays owned by **report-composition**.
+search that finds a glossary concept under either of its phrasings. The rule "Glossary terms" that
+the writer and the blind review follow stays owned by **report-composition**.
 
 ## Requirements
 
@@ -28,6 +28,11 @@ rule SHALL say so in its own text.
 
 ### Requirement: Rule 1 — research searches under both phrasings of a glossary term
 
+The rule is named "Glossary terms". The writer's and the blind review's glossary rule, owned by
+**report-composition**, has the same name on purpose. No prompt carries both rules: the research
+agent receives only this rule, and the writer and the blind review receive only the rule of
+**report-composition**.
+
 On a channel that configures a glossary, when a plan item refers to a concept that a glossary term
 names, the research agent SHALL search for it in two ways: by the term's name, and by a short phrase
 of a few words from its definition, because a question or a source can use either one. It SHALL NOT
@@ -47,6 +52,11 @@ data-sources instruction's (see **data-sources-discovery**).
 - **WHEN** the channel configures a glossary and the app's fetch of its terms failed
 - **THEN** the research agent's prompt SHALL carry the glossary search rule and the instruction to
   call the list-terms tool, and no sentence of the rule SHALL tell it not to call a glossary tool
+
+#### Scenario: The research agent's prompt names the rule
+
+- **WHEN** the research agent's prompt is rendered on a channel that configures a glossary
+- **THEN** its terminology block SHALL carry the rule under the name "Glossary terms"
 
 ### Requirement: Rule 2 — terms are accurate and consistent
 

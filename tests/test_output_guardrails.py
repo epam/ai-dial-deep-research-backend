@@ -83,7 +83,7 @@ def test_the_research_steps_get_no_language_or_removal_block(step: RuleStep) -> 
 def test_language_and_style_reaches_the_report_steps_with_its_terms() -> None:
     for step in _REPORT_STEPS:
         block = render_policy(LANGUAGE_AND_STYLE_POLICY, step, glossary=False)
-        assert "### Verbatim names\n\nA verbatim name is a publication title" in block
+        assert "### Verbatim names\n\n- **Verbatim name**: a publication title" in block
     writer = render_policy(LANGUAGE_AND_STYLE_POLICY, RuleStep.REPORT_WRITER, glossary=False)
     blind = render_policy(LANGUAGE_AND_STYLE_POLICY, RuleStep.REPORT_REVIEW_BLIND, glossary=False)
     grounded = render_policy(
@@ -91,8 +91,11 @@ def test_language_and_style_reaches_the_report_steps_with_its_terms() -> None:
     )
     assert "### Neutral register" in writer and "### Neutral register" in blind
     assert "### Neutral register" not in grounded
-    assert "### Names, not codes" in writer and "### Names, not codes" in grounded
-    assert "### Names, not codes" not in blind
+    assert "### Codelist values by name" in writer and "### Codelist values by name" in grounded
+    assert "### Codelist values by name" not in blind
+    assert (
+        "### Datasets by name, cited once" in writer and "### Datasets by name, cited once" in blind
+    )
     assert "These checks are rules, not wording preferences." in _words(blind)
 
 
@@ -112,7 +115,7 @@ def test_the_removal_rule_never_mentions_an_excluded_topic() -> None:
 
 def test_terminology_reaches_its_steps() -> None:
     agent = render_policy(TERMINOLOGY_POLICY, RuleStep.RESEARCH_AGENT, glossary=True)
-    assert "### Glossary terms in searches" in agent
+    assert "### Glossary terms\n" in agent
     writer = render_policy(TERMINOLOGY_POLICY, RuleStep.REPORT_WRITER, glossary=True)
     assert "### Accurate and consistent terms" in writer
     assert "### Glossary terms and source terms" in writer
@@ -298,7 +301,7 @@ def test_the_research_agent_gets_the_glossary_search_rule_on_a_glossary_channel(
         client_rules=[],
         glossary=glossary,
     )
-    assert ("### Glossary terms in searches" in captured["system_prompt"]) is present
+    assert ("### Glossary terms\n" in captured["system_prompt"]) is present
 
 
 def test_a_figure_no_source_gives_is_not_excluded_content() -> None:
@@ -360,7 +363,9 @@ def test_the_grounded_review_reads_the_client_writer_rules_as_context() -> None:
         in prompt
     )
     assert "Check the dates." not in prompt
-    assert prompt.index("## No calculations") < prompt.index("## This deployment's writer rules")
+    assert prompt.index("## No calculation by research or the report") < prompt.index(
+        "## This deployment's writer rules"
+    )
     assert prompt.index("## This deployment's writer rules") < prompt.index("## Data sources")
 
 

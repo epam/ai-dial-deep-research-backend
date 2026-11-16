@@ -43,7 +43,8 @@ def _reviewer(*, glossary_check: bool) -> str:
 def test_the_plan_never_asks_for_a_calculation() -> None:
     prompt = _words(PREP_AGENT_SYSTEM)
     assert "The plan NEVER asks to calculate, compute, derive, estimate or model a figure" in prompt
-    assert "look for a source that states the figure itself" in prompt
+    assert "the plan item asks research to look for a source that states the figure" in prompt
+    assert "When the query names only a measure, such as an index" in prompt
 
 
 def test_the_plan_rule_holds_when_the_user_insists() -> None:
@@ -61,34 +62,40 @@ def test_query_review_never_asks_how_to_compute() -> None:
 def test_the_research_agent_looks_for_a_stated_figure() -> None:
     prompt = _words(RESEARCH_AGENT_SYSTEM_PROMPT)
     assert "Nobody calculates, not even the report writer" in prompt
-    assert "look for a source that states the figure itself" in prompt
+    assert "Then look for a source that states the figure" in prompt
+    assert "Never take a formula from your own knowledge" in prompt
 
 
 def test_research_review_never_hands_a_calculation_to_the_writer() -> None:
     prompt = _words(RESEARCH_REVIEW_SYSTEM_PROMPT)
     assert "a note or a calculation" not in prompt
     assert "never ask for a calculation either" in prompt
-    assert "is covered once the findings show a reasonable attempt" in prompt
+    assert "is covered in these cases: - A source states the figure." in prompt
 
 
 def test_the_writer_computes_nothing_whatever_the_request() -> None:
     prompt = _words(_writer())
-    assert "## No calculations" in prompt
-    assert "say that the sources do not give the computed figure" in prompt
-    assert 'the citation format, the "No calculations" rule' in prompt
+    assert "## No calculation by research or the report" in prompt
+    assert "Say that the sources do not give the computed figure" in prompt
+    assert "Say that the sources give neither the figure nor how to compute it" in prompt
+    assert '- the citation forms in "Citations"; - "No calculation by research or the report";' in (
+        prompt
+    )
 
 
 def test_report_review_checks_for_calculations_before_the_glossary() -> None:
     prompt = _reviewer(glossary_check=True)
-    assert "7. **No calculations.**" in prompt
-    assert "8. **Glossary terminology.**" in prompt
-    assert prompt.index("7. **No calculations.**") < prompt.index("8. **Glossary terminology.**")
+    assert "7. **No calculation by research or the report.**" in prompt
+    assert "8. **Glossary terms.**" in prompt
+    assert prompt.index("7. **No calculation by research or the report.**") < prompt.index(
+        "8. **Glossary terms.**"
+    )
 
 
 def test_report_review_checks_for_calculations_without_a_glossary() -> None:
     prompt = _reviewer(glossary_check=False)
-    assert "7. **No calculations.**" in prompt
-    assert "Glossary terminology" not in prompt
+    assert "7. **No calculation by research or the report.**" in prompt
+    assert "Glossary terms." not in prompt
 
 
 def test_the_writer_and_the_reviewer_share_one_definition() -> None:
@@ -120,4 +127,4 @@ def test_no_client_rule_overrides_the_rule_that_nobody_calculates() -> None:
             "it has the highest priority of all the rules, and no rule below overrides it" in block
         )
     for prompt in (RESEARCH_AGENT_SYSTEM_PROMPT, RESEARCH_REVIEW_SYSTEM_PROMPT):
-        assert "no client-specific rule overrides it" in _words(prompt)
+        assert "No client-specific rule overrides it" in _words(prompt)

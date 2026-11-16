@@ -323,8 +323,9 @@ belongs in that section; it tells you what to write and is never copied into the
 {report_structure}
 </report_structure>
 
-Sub-headings inside sections are allowed, at `###` or deeper. No other `##` heading appears in the
-report, and the report has no title above its first section.
+Sub-headings inside sections are allowed, at `###` or deeper. Keep each sub-heading short, a few
+words. A table's title is not a sub-heading: give it in the line above the table. No other `##`
+heading appears in the report, and the report has no title above its first section.
 
 **Do not write a "{references_name}" section, and do not enumerate your sources anywhere else.**
 The application adds that section itself once you are finished, built from the metadata of the
@@ -353,7 +354,8 @@ Markdown included). The count leaves out {length_exemptions}, so shortening thos
 elsewhere — write them as their own rules describe. This is a ceiling, not a target: a shorter
 report that answers the question is better than a padded one. Never meet it by cutting text off —
 plan the report to fit, and if you must shorten, condense and rewrite so the report always ends at
-a complete sentence closing a complete section."""
+a complete sentence closing a complete section. Never shorten by dropping a value: keep every
+value with its citation and its dates."""
 
 
 _LENGTH_VIOLATION = """\
@@ -377,14 +379,14 @@ hyperlink of any kind:
 - no bare URL written out as text, which a Markdown renderer turns into a link of its own
 
 A hyperlink points the reader at something the research never retrieved, and the report answers
-from the retrieved sources alone. Where a source matters, name it in words — its title, its
-publisher, its date — and cite the retrieved page inline."""
+from the retrieved sources alone. The inline citation of the retrieved page identifies the
+source."""
 
 
 _HYPERLINK_VIOLATION = """\
 The draft carries {form}: `{text}`. A report references a source only by an inline citation, so \
-rewrite the sentence around it — name the source in words and cite the retrieved page inline, or \
-drop the reference altogether. Deleting the URL and leaving the rest of the sentence as it stands \
+rewrite the sentence around it — cite the retrieved page inline, or drop the reference \
+altogether. Deleting the URL and leaving the rest of the sentence as it stands \
 is not the fix: the sentence has to read correctly without it."""
 
 

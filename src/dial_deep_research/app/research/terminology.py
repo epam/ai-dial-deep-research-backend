@@ -1,7 +1,7 @@
 """The terminology rules: a glossary concept is searched under both of its phrasings, and the report
 uses each term with its source's meaning and one term per concept.
 
-The glossary-terminology rule the writer and the blind review follow is `GLOSSARY_TERMINOLOGY_RULE`
+The rule "Glossary terms" the writer and the blind review follow is `GLOSSARY_TERMINOLOGY_RULE`
 in `prompts.py`. These rules add the research agent's search under glossary terms and the boundary
 between a glossary term and a source's term, both rendered only on a channel that configures a
 glossary, and the rule on accurate and consistent terms, which every channel gets. That rule is
@@ -41,7 +41,7 @@ inside a verbatim name, such as a publication title or a quotation.""",
 # what the app's fetch of the glossary obtained.
 TERMINOLOGY_GLOSSARY_RULES: tuple[QualityRule, ...] = (
     QualityRule(
-        name="Glossary terms in searches",
+        name="Glossary terms",
         research_agent="""\
 A glossary term has a name and a definition. A question or a source can use either one. So when a
 plan item refers to a concept that a glossary term names, search for it in two ways:

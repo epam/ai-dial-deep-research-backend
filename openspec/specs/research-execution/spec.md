@@ -140,7 +140,8 @@ include only genuinely uncovered work judged against the existing findings, and
 SHALL NOT expand scope to manufacture new iterations. What counts as uncovered work is the plan's
 items and the gaps that the research-review parts of the quality rules define (see
 **source-selection** and **faithful-relay**): a gap such a rule defines, such as a fact with no
-check for a later edition, or a figure the findings hold only in a search answer,
+search of the publications for its latest value, or a figure the findings hold only in a
+search answer,
 is part of fulfilling the plan and SHALL NOT be treated as new scope. Every text that tells the
 model when research is complete SHALL say so: the prompt's task sentence, its list of gaps, its
 sentence on returning an empty next plan, its scope paragraph and its "prefer to finish" guidance,
@@ -170,9 +171,9 @@ instruction.
 
 #### Scenario: A source-selection gap is not new scope
 
-- **WHEN** every plan item has evidence, but a forecast the plan asks about was found in one
-  publication and the findings show no check for a later edition
-- **THEN** research-review SHALL return a next plan asking for that check, even though the plan
+- **WHEN** every plan item has evidence, but the findings show no search of the publications for
+  the latest value of a forecast the plan asks about
+- **THEN** research-review SHALL return a next plan asking for that search, even though the plan
   does not name it
 
 ### Requirement: Research looks for a stated figure rather than planning to compute one
@@ -186,13 +187,22 @@ This rule has the highest priority of all the rules: no client rule, section des
 research question or plan overrides it, and each step's prompt SHALL say so.
 
 - **Research agent.** Its prompt SHALL say that nobody calculates, not even the report writer.
-  When the question or the plan asks for a figure that only a calculation would give, the research
-  agent SHALL look for a source that states the figure itself and, only when no source states it,
-  SHALL retrieve the figures it would be computed from.
-- **Research review.** It SHALL never ask for a calculation. A figure that only a calculation would
-  give SHALL count as covered by a source that states it. When no source states it, the figure SHALL
-  count as covered once the findings show a reasonable attempt to find one (the term the
-  source-selection rules define), and hold the figures it would be computed from.
+  When the question or the plan asks for a figure that only a calculation gives, the research agent
+  SHALL look for a source that states the figure. Only when no source states it SHALL the research
+  agent retrieve the figures it is computed from:
+  - When the question names these figures, the research agent SHALL retrieve them. For an
+    elasticity of X to Y, it retrieves the series X and Y.
+  - When the question names only a measure, such as an index, the research agent SHALL look for a
+    source that states how to compute it, and then retrieve the figures that this source names.
+    It SHALL NOT take a formula from its own knowledge.
+- **Research review.** It SHALL never ask for a calculation. A figure that only a calculation gives
+  SHALL count as covered in these cases (a reasonable attempt is the term the source-selection rules
+  define):
+  - a source states the figure;
+  - the findings show a reasonable attempt to find the figure, and they hold the figures it is
+    computed from;
+  - the question names only a measure, such as an index, and the findings show a reasonable attempt
+    to find the figure and how to compute it.
 
 #### Scenario: The question asks for an elasticity no source states
 
@@ -215,6 +225,20 @@ research question or plan overrides it, and each step's prompt SHALL say so.
   full states it
 - **THEN** research review SHALL treat that plan item as covered without the two growth series, and
   SHALL NOT return a next step asking to retrieve them for a calculation
+
+#### Scenario: An index that no source defines
+
+- **WHEN** the plan asks for a trade-openness index for Germany, and the findings show a reasonable
+  attempt to find a stated value of the index and a stated way to compute it, and neither was found
+- **THEN** research review SHALL treat that plan item as covered, and SHALL NOT return a next step
+  asking for input figures that no source names
+
+#### Scenario: The research agent takes no formula from its own knowledge
+
+- **WHEN** the research agent's system prompt is rendered
+- **THEN** it SHALL tell the agent that, for a measure the question names without its inputs, it
+  looks for a source that states how to compute the measure and never takes a formula from its own
+  knowledge
 
 ### Requirement: Every research review's findings are visible as a DIAL stage
 
@@ -384,12 +408,12 @@ the first draft and each subsequent revision; on a revision it SHALL also receiv
 instructions and the draft they refer to.
 
 Citations SHALL use inline `[doc <id>, page <ix>]` for document-sourced facts,
-`[data_query <id>]` for facts drawn from a data query, and `[dataset <urn>]` for facts about a
-dataset as a whole that no data query produced — such as when a dataset was last updated, or what
-it covers. **Every fact drawn from a data query SHALL be cited `[data_query <id>]`**, never
-`[dataset <urn>]`, even though the query's result names its dataset too: the query citation is the
-one that opens the cited data, and the dataset it ran against still reaches the References section
-through it (see **report-citations**).
+`[data_query <id>]` for facts drawn from a data query, and `[dataset <urn>]` for statements about a
+dataset or one of its series that no data query produced — such as when a dataset was last
+updated, what it covers, or which periods a series covers. **Every fact drawn from a data query
+SHALL be cited `[data_query <id>]`**, never `[dataset <urn>]`, even though the query's result names
+its dataset too: the query citation is the one that opens the cited data, and the dataset it ran
+against still reaches the References section through it (see **report-citations**).
 
 **On a channel that configures a glossary, a fact taken from a glossary definition SHALL be cited
 `[glossary <term>]`**, where `<term>` is the term as the glossary spells it: for example
@@ -436,6 +460,13 @@ Naming these is what separates the citation forms from a formatting convention. 
 from the shape of a marker which values belong in it, and a writer that puts a dataset's display
 name where its URN belongs, or omits a page from a document citation, produces a citation that
 parses into nothing and silently loses its pill.
+
+**Every fact SHALL be cited inline, with two exceptions.** The instructions SHALL name both: a cell
+of a table that holds values from one source and cites that source in its title, and a cell of a
+table that combines sources, as the source-selection rule "Every current value, with its own
+source" says. The instructions SHALL also say that the report carries no footnotes and no numbered
+references, such as `[1]`, and that a single figure carries one citation. A list of several
+brackets is for a statement that draws on several sources.
 
 **How the writer gets from a tool's attribution to those forms is owned by the
 **source-attribution** capability**, and its rule bears on this prompt directly: the instructions
@@ -553,6 +584,19 @@ that row's name exactly as it loses the source's inline citations.
   rather than from a data query
 - **THEN** the report SHALL cite that statement as `[dataset <urn>]`
 
+#### Scenario: The periods a series covers cite the dataset when no data query gave them
+
+- **WHEN** the report states which years a series of `IMF:WEO(1.0.0)` covers, and no data query of
+  the turn produced that statement
+- **THEN** the writer's instructions SHALL allow citing it as `[dataset IMF:WEO(1.0.0)]`
+
+#### Scenario: A one-source table cites its source in its title
+
+- **WHEN** the report writer's citation instructions are read
+- **THEN** they SHALL exempt from the inline citation a cell of a table that holds values from one
+  source and cites that source in its title, SHALL forbid footnotes and numbered references, and
+  SHALL say that a single figure carries one citation
+
 #### Scenario: A candidate dataset's query is never cited
 
 - **WHEN** a data-query tool result asks for a dataset to be selected and lists two candidate
@@ -666,9 +710,11 @@ receives the failed-turn note or the preparation agent messages of any turn.
 
 - System prompt: the research-review instructions, filled with today's date.
 - Messages: one human message carrying the query preparation finalized, the rendered findings,
-  and the plans pursued so far: the approved plan, then the next steps of each earlier research
-  review. The earlier reviews' assessments are NOT included. The findings rendering carries the instructions given, the name and arguments
-  of every tool call, any notes research-agent wrote, and the **text** of every tool result.
+  and the plans pursued so far, each headed `Plan <n>:`. The approved plan comes first, headed
+  `Plan 1 (the approved plan):`, then the next steps of each earlier research review. The earlier
+  reviews' assessments are NOT included. The findings rendering carries the instructions given,
+  the name and arguments of every tool call, any notes research-agent wrote, and the **text** of
+  every tool result.
 - **Images are NOT included**: an image-carrying tool result is rendered with a marker noting an
   image was returned, and the image itself is omitted. This call therefore judges coverage
   without seeing what research-agent saw in charts, tables, and figures.
@@ -684,9 +730,10 @@ receives the failed-turn note or the preparation agent messages of any turn.
   and, when a rule of the channel's `prompts.client_rules` has
   a research-review part, those parts in a `<client_rules>` block after them (see
   **source-selection**).
-- Model: the default chat model with reasoning effort `medium`, where the other research calls
-  use none. The gaps the quality rules define need the call to weigh each fact of the question
-  against the findings, and without reasoning it closed research on a listing or a title alone.
+- Model: the default chat model with reasoning effort `medium`. Research-agent is the one research
+  call that runs at reasoning effort `none`, the default of the model configuration. The gaps the quality rules define need the call to weigh
+  each fact of the question against the findings, and without reasoning it closed research on a
+  listing or a title alone.
 - Output: a structured verdict — the assessment, then the next-iteration steps (empty means
   research is complete). The whole verdict is appended to the state's `research_reviews`; the next
   steps alone feed the next iteration's instruction, the plans later calls list, and the routing.
@@ -711,8 +758,11 @@ receives the failed-turn note or the preparation agent messages of any turn.
   `<client_rules>` block after them (see **source-selection**).
 - Messages: the transcript **including images** (already clamped by
   the image budget) with the `update_status` calls and their acknowledgements removed, then the
-  report request carrying the aligned query and the plans pursued. Removal is deterministic, so
-  successive report calls in a run still share a byte prefix (see **prompt-caching**).
+  report request. The report request carries the aligned query and the plans pursued, rendered as
+  for research-review, with Plan 1 headed as the approved plan. It asks for a report that covers
+  the research question and every item of the approved plan, which it names as Plan 1. Removal is
+  deterministic, so successive report calls in a run still share a byte prefix (see
+  **prompt-caching**).
 - **The status announcements are NOT included**: what research told the user it was doing is not
   evidence, and SHALL NOT reach the model that writes the report.
 - On a revision, additionally: the draft being revised (the latest of the state's `reports`), the
@@ -724,6 +774,7 @@ receives the failed-turn note or the preparation agent messages of any turn.
   never issued without one (see **report-composition**). These SHALL be **appended after** the
   original report request rather than replacing it, so the byte prefix is unchanged and the
   provider's prompt cache can serve it (see **prompt-caching**).
+- Model: the default chat model with reasoning effort `medium`.
 - Tools bound: none.
 - Output: the report text, appended to the state's `reports`. It is not streamed to the assistant content (see the report-node
   requirement below).
@@ -733,8 +784,8 @@ receives the failed-turn note or the preparation agent messages of any turn.
 - System prompt: the report-review instructions, filled with today's date — what to check and what
   not to — and the turn's data-sources string in a `<data_sources>` block, the same string
   research-agent receives. When the glossary fetch listed at least one term, or research-agent
-  obtained a successful glossary tool result, the checks include the glossary-terminology check
-  (see **report-composition**).
+  obtained a successful glossary tool result, the checks include the report-composition rule
+  "Glossary terms" (see **report-composition**).
 - System prompt, additionally, on a channel that configures a glossary: the text of every
   **successful** result of the two configured glossary tools (the list-terms tool and the
   term-definitions tool) that research-agent obtained during the turn, in the order they were
@@ -792,8 +843,9 @@ receives the failed-turn note or the preparation agent messages of any turn.
   — source selection, opened by the statement of the kinds of source the channel's configured
   servers give it, with its terms and its rules' **report-writer** parts; faithful relay, with its
   terms and its rules' **report-writer** parts; and terminology and language and style with their
-  rules' **grounded-review** parts — then call 3's "No calculations" section, then, when a rule of
-  the channel's `prompts.client_rules` has a grounded-review part, those parts in a
+  rules' **grounded-review** parts — then call 3's "No calculation by research or the report"
+  section, then, when a rule of the channel's `prompts.client_rules` has a grounded-review part,
+  those parts in a
   `<client_rules>` block, then, when a client rule has a report-writer part, those parts as context
   it does not check, in a `<client_writer_rules>` block, then the turn's data-sources string in a
   `<data_sources>` block, the
@@ -842,6 +894,18 @@ receives the failed-turn note or the preparation agent messages of any turn.
   report request as the first draft's, with the draft, the instructions, and the counts appended
   after them
 
+#### Scenario: The approved plan is labelled for research-review and the writer
+
+- **WHEN** research-review returned next steps once, and the report call then runs
+- **THEN** research-review's second call and the report request SHALL each list the plans as
+  `Plan 1 (the approved plan):` followed by `Plan 2:`, and the report request SHALL ask the writer
+  to cover the research question and every item of Plan 1
+
+#### Scenario: The report call reasons at medium effort
+
+- **WHEN** the report node writes a first draft or a revision
+- **THEN** its model call SHALL use the default chat model with reasoning effort `medium`
+
 #### Scenario: Status announcements reach research-agent but no other call
 
 - **WHEN** research-agent has announced several steps with `update_status` during an iteration
@@ -870,7 +934,7 @@ receives the failed-turn note or the preparation agent messages of any turn.
   sets a `description`
 - **THEN** the system prompts of research-agent, research-review, the report call and
   report-review SHALL each carry that description, and no prompt of the research graph SHALL carry
-  a datasets section, a glossary or the glossary-terminology rule
+  a datasets section, a glossary or the report-composition rule "Glossary terms"
 
 #### Scenario: Every research graph call receives the datasets section
 

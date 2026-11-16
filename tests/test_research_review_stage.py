@@ -206,7 +206,7 @@ async def test_each_iteration_plan_is_counted_and_reaches_the_writer_numbered(
     assert request.content == REPORT_REQUEST.format(
         query="q",
         plans=(
-            "Plan 1:\n1. step one\n\n"
+            "Plan 1 (the approved plan):\n1. step one\n\n"
             "Plan 2:\n1. Open the source page.\n2. Confirm the 2025 figure there."
         ),
     )

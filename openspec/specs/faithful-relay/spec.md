@@ -17,7 +17,8 @@ block of their own in each step's system prompt, under a heading that names fait
 the source-selection block and before the other generic policies and the client rules. The blind
 review's block SHALL present the rules' parts as checks. The grounded review's block SHALL carry
 the rules' report-writer parts (see "The grounded review checks the draft against the sources"). The
-rules SHALL name no client, dataset, publication or tool.
+rules SHALL name no client, dataset, publication or tool. The terms MAY name a search tool and a
+retrieval tool as examples, such as `rag_search` and `retrieve_text_chunks`.
 
 The block SHALL open with the definitions of the terms the rules use, under a name distinct from
 the source-selection terms, presented as definitions rather than as a rule, and every step, the
@@ -27,36 +28,35 @@ definitions SHALL say that the source-selection terms, such as value, stated dat
 and described period, apply here too, which is why the faithful-relay block comes after the
 source-selection block that defines them.
 
-- **Source**: the result of a research tool call, or the data sources the prompt carries, such as
-  the knowledge base's descriptions and what the application fetched from the dataset server. A
-  search tool's answer is not a source: it summarises pages, and a summary can change, distort or
-  invent what the pages say, such as a value, a sum or a characterisation that no page states. It
-  only points at where the evidence lives, and the page is read instead. A page read as text or as
-  an image, and a chunk a retrieval tool returns word for word, are sources.
+- **Source**: the result of a research tool call, or the data sources every prompt carries: the
+  knowledge base's descriptions, and the list of datasets and their structures. The answer of a
+  search tool that summarises pages, such as `rag_search`, is not a source. A model that follows
+  none of these rules writes it, and it can state a sum or a characterisation that the pages do
+  not state. It only points at where the evidence lives. A page read as text or as an image, and a
+  chunk a retrieval tool returns word for word, such as `retrieve_text_chunks`, are sources.
 - **Claim**: a sentence or a table cell of the report that states a fact, a figure or a finding.
 - **Summary**: a claim that restates, condenses or groups what cited claims of the report say and
-  adds nothing to them.
+  adds nothing to them, such as "both sources expect growth to slow in 2026".
 - **Comparison**: a claim that relates figures the sources give and produces no new number: which
   value is larger, which series grew faster, a rank, whether a value is above or below another, or
   the direction of a change.
-- **Calculation**: arithmetic or modelling that produces a number no source gives: a growth rate
-  derived from two levels, a difference or a gap in percentage points, a ratio, a multiple such as
-  "twice as large", a share, a sum, an average, an elasticity or a regression estimate. A comparison
-  is not a calculation, and neither is writing a value in another notation, such as a fraction as a
-  percentage, or rounding a value given with more digits than a reader can use. This is the
-  definition of **report-composition**, "Reports contain no calculations", in the terms' own
-  wording.
+- **Calculation**: arithmetic that produces a number no source gives: a growth rate derived from
+  two levels, a difference or a gap in percentage points, a ratio, a multiple such as "twice as
+  large", a share, a sum or an average. A comparison is not a calculation. Writing a value in the
+  unit its source states for it, such as a fraction written as the percentage its series name
+  states, is not a calculation either.
 - **Inference**: a conclusion no source states: a causal link, a forecast, an extrapolated trend,
   an implication, a recommendation, or a position attributed to an organisation.
-- **Forecast** and **estimate**: a value its source calls a forecast, a projection, an outlook, an
-  estimate or a preliminary figure, or a value for a period that had not ended when the source
-  stated it, such as a figure "for 2023" in a note of December 2023, or growth "in 2026" in a report
-  of April 2026.
-- **Certainty**: how firmly a source states a finding: as an established fact, a forecast, an
-  expectation, a possibility, a condition or a scenario.
+- **Forecast**: a value that its source labels as a forecast, a projection or an outlook. A value
+  for a period that ends on or after the stated date of its source is also a forecast, unless its
+  source labels it as observed. For example, a publication dated 20 November 2025 that says
+  exports "reached USD 250 billion in 2025" gives a forecast, because 2025 was not over. The past
+  tense does not make the value observed.
 - **Statement about the evidence**: a sentence that says what the research covered, as a section's
   description may ask, that the sources do not give some evidence, or that the report does not
   cover a topic. It states no fact from a source, so it needs no citation.
+- **Certainty**: how firmly a source states a finding: as an established fact, a forecast, an
+  expectation, a possibility, a condition or a scenario.
 
 #### Scenario: Every step receives the terms
 
@@ -71,10 +71,18 @@ source-selection block that defines them.
 - **THEN** its faithful-relay block SHALL introduce the parts below it as checks to judge the draft
   against, and SHALL come before its "Not your job" section
 
+#### Scenario: The forecast term carries a generic example
+
+- **WHEN** the faithful-relay terms are rendered
+- **THEN** the forecast term SHALL give as its example a publication dated 20 November 2025 that
+  says exports "reached USD 250 billion in 2025", and SHALL define no estimate term
+
 ### Requirement: Rule 1 — everything the report states comes from a source
 
-The model's own knowledge SHALL add no fact, figure or finding to the report, and where it differs
-from a source, the source wins. The report SHALL carry no general background, labelled or not.
+The rule is named "Facts only from the sources". The model's own knowledge SHALL add no fact,
+figure or finding to the report, and where it differs from a source, the source wins. The report
+SHALL carry no general background, labelled or not, and no sentence that it labels as its own
+inference or synthesis.
 
 - **Research agent:** a search tool's answer summarises pages, and a summary can change, distort or
   invent what they say, so the agent uses it only to find which pages to read, and reads the page
@@ -82,7 +90,10 @@ from a source, the source wins. The report SHALL carry no general background, la
   use is taken from a page read as text or as an image, or from a chunk returned word for word.
 - **Research review:** a value, a finding or a characterisation that the findings hold only in a
   search answer, on no page read and in no chunk returned word for word, is a gap: the page must be
-  read.
+  read. A search answer cites the page of each statement. When research has read the cited page,
+  the statement is not a gap. This holds even when the page text that research review sees does
+  not contain the statement, because the page can give it only in its image, which research review
+  does not see.
 - **Report writer:** never takes a value, a finding or a characterisation from a search tool's
   answer, because a summary can change, distort or invent what the pages say; it takes it from the
   page that was read. It cites the source of every claim. A summary or a comparison carries the
@@ -90,17 +101,31 @@ from a source, the source wins. The report SHALL carry no general background, la
   in an opening overview or a conclusion, repeats their citations. A sentence that can be
   neither cited nor built from cited claims, and is not a statement about the evidence, is left
   out. A fact from the description of a publication series, which has no citation form, names the
-  series as its source in words.
-- **Report review:** a claim without a citation is a violation, unless it is a summary or a
-  comparison standing directly after the cited claims it rests on, a fact that names a publication
-  series as its source, or a statement about the evidence. A sentence the draft labels as its own
-  inference, synthesis or general background is a violation too.
+  series as its source in words. A cell of a table that combines sources needs no citation when a
+  passage next to the table cites its sources, as the source-selection rule "Every current value,
+  with its own source" allows. A cell of a table that holds values from one source needs no
+  citation when the title of the table cites that source.
+- **Report review:** a claim without a citation is a violation, with these exceptions:
+  - a summary or a comparison of cited claims beside it;
+  - a fact that names a publication series as its source;
+  - a statement about the evidence;
+  - a cell of a table whose sources a passage right before or right after the table cites;
+  - a cell of a table that holds values from one source and cites that source in its title.
+
+  A sentence the draft labels as its own inference, synthesis or general background is a violation
+  too.
 
 #### Scenario: A figure only a search answer states is a gap
 
 - **WHEN** a search answer says that the G7 economies "together produced 44%" of world output, and
   no page read and no chunk returned states 44%
 - **THEN** research review SHALL return a next step that reads the page the answer cites
+
+#### Scenario: A statement from a cited page that was read is not a gap
+
+- **WHEN** a search answer attributes a figure to a page, research has read that page, and the page
+  text that research review sees does not contain the figure
+- **THEN** research review SHALL NOT report the figure as a gap
 
 #### Scenario: A labelled inference is sent back
 
@@ -123,13 +148,20 @@ from a source, the source wins. The report SHALL carry no general background, la
 #### Scenario: A summary away from its claims repeats their citations
 
 - **WHEN** a draft's Overview answers the question in one sentence that summarises two forecasts
-  the Detailed Analysis cites, and the sentence carries no citation
+  that a later section cites, and the sentence carries no citation
 - **THEN** report review SHALL report it as an uncited claim, and the writer's part SHALL have asked
   for the two citations to be repeated
 
+#### Scenario: A table of one source is cited in its title
+
+- **WHEN** a draft's table holds values from one data query, its title ends with
+  `[data_query dq_0123abcd45]`, and its cells carry no citation
+- **THEN** report review SHALL NOT report the cells as uncited claims
+
 ### Requirement: Rule 2 — the report infers nothing
 
-The report MAY summarise and compare what the sources say, and SHALL infer nothing.
+The rule is named "No conclusion that no source states". The report MAY summarise and compare what
+the sources say, and SHALL infer nothing.
 
 - **Research agent:** when the question asks why something happened or what it will lead to, looks
   for sources that state the cause or the effect. A movement in the data is not its own
@@ -158,26 +190,28 @@ The report MAY summarise and compare what the sources say, and SHALL infer nothi
   states the driver
 - **THEN** research review SHALL return a next step that searches for it
 
-### Requirement: Rule 3 — the grounded review judges the "No calculations" rule
+### Requirement: Rule 3 — the grounded review judges the "No calculation by research or the report" rule
 
 The rule that neither research nor the report calculates is owned by **research-execution**,
 "Research looks for a stated figure rather than planning to compute one", by
 **clarification-and-plan-alignment**, "The plan never asks for a calculation", and by
-**report-composition**, "Reports contain no calculations". It SHALL NOT be a faithful-relay quality
-rule, so the faithful-relay block SHALL carry no part of it at any step.
+**report-composition**, "Reports contain no calculations". The writer's section that states it is
+named "No calculation by research or the report". It SHALL NOT be a faithful-relay quality rule, so
+the faithful-relay block SHALL carry no part of it at any step.
 
-The grounded review SHALL judge the draft against the writer's "No calculations" rule as well as
-against the faithful-relay rules: its instructions SHALL carry the writer's "No calculations"
-section in the one wording the writer receives, as a section of its own after the generic policy
-blocks and before the client rules, which never override it. The
-blind review's "No calculations" check can judge only a number the draft presents as computed;
-the grounded review can also find a computed number the draft presents as stated, because it sees
-that no source gives it.
+The grounded review SHALL judge the draft against the writer's "No calculation by research or the
+report" rule as well as against the faithful-relay rules. Its instructions SHALL carry the writer's
+"No calculation by research or the report" section in the one wording the writer receives, as a
+section of its own after the generic policy blocks and before the client rules, which never
+override it. The blind review's "No calculation by research or the report" check can judge only a
+number the draft presents as computed. The grounded review can also find a computed number that the
+draft presents as stated, because it sees that no source gives it.
 
 #### Scenario: The grounded review and the writer share the rule's wording
 
 - **WHEN** the grounded review's instructions and the writer's system prompt are rendered
-- **THEN** both SHALL carry the writer's "No calculations" section in the same wording
+- **THEN** both SHALL carry the writer's "No calculation by research or the report" section in the
+  same wording
 
 #### Scenario: A computed gap presented as stated is found
 
@@ -187,9 +221,9 @@ that no source gives it.
 
 ### Requirement: Rule 4 — figures keep their source's value, unit and period
 
-Every figure SHALL keep its source's value, unit, currency and period, and SHALL say whether it is
-nominal or real where the source says so. Three changes are allowed, and none of them is a
-calculation:
+The rule is named "Each figure with its source's value, unit and period". Every figure SHALL keep
+its source's value, unit, currency and period, and SHALL say whether it is nominal or real where the
+source says so. Two changes are allowed, and neither of them is a calculation:
 
 - **One notation.** Values from different sources may be brought to one notation: a scale word, a
   currency symbol or code, a thousands separator, or a fraction written as a percentage. A
@@ -197,19 +231,20 @@ calculation:
 - **Usable precision.** A value with more digits than a reader can use, such as `0.0473918265`, is
   rounded to a usable precision: the precision the publications use for the same indicator, or what
   the context needs, such as 4.74%.
-- **Requested rounding.** A figure is rounded as the research question or the plan asks.
 
-Otherwise the report SHALL keep each figure's precision.
+Otherwise the report SHALL keep each figure's precision. This holds also when the research question
+or the plan asks to round figures or to give a number of decimals.
 
-The preparation agent keeps the user's formatting requests, such as rounding, in the restated
-query, so that the writer and report review can see them (see
-**clarification-and-plan-alignment**). This is a sentence of the preparation prompt, not a part of
-the rule, because quality rules have no preparation step.
+The preparation agent keeps the user's formatting requests, such as a unit, in the restated query,
+because the report is written from that query (see **clarification-and-plan-alignment**). This is
+a sentence of the preparation prompt, not a part of the rule, because quality rules have no
+preparation step.
 
-- **Report writer:** keeps each figure as its source gives it, apart from the three changes.
+- **Report writer:** keeps each figure as its source gives it, apart from the two changes, whatever
+  rounding the research question or the plan asks for.
 - **Report review:** a figure without its unit or its currency is a violation, and so is a figure
-  with more digits than a reader can use, and a figure not rounded as the research question or the
-  plan asks. Whether a figure matches its source is not the blind review's to judge.
+  with more digits than a reader can use. Whether a figure matches its source is not the blind
+  review's to judge.
 
 #### Scenario: An over-precise dataset value is rounded
 
@@ -217,66 +252,92 @@ the rule, because quality rules have no preparation step.
 - **THEN** the report SHALL give it at a usable precision, such as 2.2% or 2.16%, and report review
   SHALL report a draft that prints all six decimals
 
-#### Scenario: A requested rounding is followed
+#### Scenario: A requested rounding does not change the precision
 
-- **WHEN** the research question asks for figures rounded to whole percentages
-- **THEN** report review SHALL report a figure the draft gives with a decimal
+- **WHEN** the research question asks for figures rounded to whole percentages, and a source gives
+  a growth rate of 2.4%
+- **THEN** the report SHALL give 2.4%, and report review SHALL NOT report the decimal
 
-### Requirement: Rule 5 — forecasts and estimates are named as such
+### Requirement: Rule 5 — forecasts are named as such
 
-A forecast or an estimate SHALL be named as one, in the source's own terms, and never presented as
-an observed value. A dataset's stated date is its last update, so its values for any later period
-are forecasts.
+The rule is named "Forecasts named as such". A forecast SHALL be named as a forecast and SHALL NOT
+be written as what happened.
 
-- **Report writer:** names a forecast as a forecast and an estimate as an estimate, such as "the
-  publication forecasts" or "a preliminary estimate". A dataset's values for any period after its
-  last update are named as forecasts and written in the future or conditional tense, such as "the
-  dataset's forecast for 2030", never "grew by 3% in 2030".
-- **Report review:** a value for a period that had not ended by its stated date, or has not ended
-  today, stated as observed, such as "exports grew 3% in 2027", is a violation. Where the draft
-  states a dataset's last update, a value from that dataset for a later period is a forecast, and
-  stating it as observed is a violation. A forecast named as a forecast is correct wording, never
-  speculative wording. A table names its values as forecasts or estimates when its title, the
-  sentence introducing it, a column label or a note says so; each cell needs no label of its own.
+- **Report writer:**
+  - Names a forecast as a forecast. When its source labels it, the writer uses the source's own
+    word, such as "the publication forecasts" or "projects".
+  - When a source labels a value as observed or as a forecast, the writer uses that label. A label
+    is an explicit word, such as "actual", "historical", "forecast" or "projection", or an
+    observation status of a dataset value that says that the value is observed or a forecast. The
+    tense of a sentence is not a label, and the word "estimate" is not a label either.
+  - For a value that its source does not label, the date test decides. The value is a forecast
+    when its period ends on or after the stated date of its source. When neither the findings nor
+    the data sources give a stated date for the source, today's date takes its place. A dataset's
+    stated date is its last update, as the source-selection terms define it.
+  - Writes a forecast so that it reads as a forecast, such as "the forecast for 2030", "is
+    expected to grow by 3% in 2030" or "the publication expected growth of 3% in 2025". It never
+    writes a forecast as what happened, such as "grew by 3% in 2030".
+  - Names the type of a forecast, such as "baseline" or "scenario", only when a source names it.
+  - Names the values of a table as forecasts in its title, the sentence that introduces it, a
+    column label or a note. Each cell then needs no label of its own.
 
-#### Scenario: A future value stated as observed
+The rule SHALL have no blind-review part. The grounded review judges it against the writer part,
+because the label and the stated date of a value show only in the findings.
 
-- **WHEN** today is in 2026 and a draft says "exports grew 3% in 2027"
-- **THEN** report review SHALL report it as a violation
+#### Scenario: A past-tense value for an unfinished period is a forecast
+
+- **WHEN** a publication dated 20 November 2025 says that exports "reached USD 250 billion in
+  2025", and a draft says "exports reached USD 250 billion in 2025", citing it
+- **THEN** the grounded review SHALL report the sentence as a forecast written as what happened
+
+#### Scenario: A dataset value after its last update is a forecast
+
+- **WHEN** a dataset was last updated on 2026-06-15, its values carry no observation status, and a
+  draft says "real GDP grew 3.1% in 2026", citing it
+- **THEN** the grounded review SHALL report it, and the writer's part SHALL have asked for wording
+  that reads as a forecast, such as "the forecast for 2026"
+
+#### Scenario: An observation status labels a value as observed
+
+- **WHEN** a dataset was last updated on 2026-06-15, and its value for 2026 carries an observation
+  status that says that the value is observed
+- **THEN** the writer SHALL state the value as observed, and the grounded review SHALL NOT report it
+
+#### Scenario: The word "estimate" is not a label
+
+- **WHEN** a publication dated 2025-03-10 calls its value for 2025 a "preliminary estimate"
+- **THEN** the date test SHALL decide, and the writer SHALL name the value as a forecast
 
 #### Scenario: A forecast table needs no label per cell
 
 - **WHEN** a draft introduces a table as "the publication's forecasts" and its columns are years up
   to 2027
-- **THEN** report review SHALL NOT report its cells as values stated as observed
+- **THEN** the grounded review SHALL NOT report its cells as values stated as observed
 
-#### Scenario: A value for the current year stated as observed
+#### Scenario: No baseline that the source does not name
 
-- **WHEN** today is 30 September 2026 and a draft says "exports grew 3% in 2026", citing a source
-  published in April 2026
-- **THEN** report review SHALL report it as a violation, because the year has not ended today
+- **WHEN** a publication gives one forecast and does not call it a baseline
+- **THEN** the writer SHALL NOT call it "the baseline forecast"
 
-#### Scenario: A dataset value after its last update is a forecast
+#### Scenario: The blind review carries no part of the rule
 
-- **WHEN** a draft says that a dataset was last updated in April 2025 and, citing it, that
-  "real GDP grew 3.1% in 2026"
-- **THEN** report review SHALL report it as a value stated as observed, and the writer's part SHALL
-  have asked for "the dataset's forecast for 2026" in the future or conditional tense
+- **WHEN** the blind review's system prompt is rendered
+- **THEN** it SHALL NOT carry the rule "Forecasts named as such"
 
 ### Requirement: Rule 6 — a finding keeps its source's certainty
 
-A hypothetical or conditional finding SHALL stay hypothetical or conditional, a view a source states
-as its own SHALL stay attributed to that source, and no finding SHALL be stated more firmly than its
-source states it.
+The rule is named "No finding stated more firmly than its source". A hypothetical or conditional
+finding SHALL stay hypothetical or conditional, a view a source states as its own SHALL stay
+attributed to that source, and no finding SHALL be stated more firmly than its source states it.
 
 - **Report writer:** keeps a finding's hedging, its conditions and its scenario, and names the
   scenario of a scenario value. A view a source states as its own, such as "in our view" or "we
-  expect", stays attributed to that source and keeps its tense: a view about what will happen is
-  never written as what happened. "Inflation will ease next year, in our view" is relayed as "the
-  publication expected inflation to ease the following year", never as "inflation eased". The writer
-  adds no promissory or guarantee-style wording that the source does not use, such as "will
-  certainly" or "is guaranteed". Relaying a source's own hedging is not a certainty label, which the
-  "never include" list bans.
+  expect", stays attributed to that source. A forecast, as Rule 5 decides, is never written as what
+  happened, even when its source writes it in the past tense. "Inflation will ease next year, in
+  our view" is relayed as "the publication expected inflation to ease the following year", never as
+  "inflation eased". The writer adds no promissory or guarantee-style wording that the source does
+  not use, such as "will certainly" or "is guaranteed". Relaying a source's own hedging is not a
+  certainty label, which the "never include" list bans.
 - **Report review:** wording that promises or guarantees an outcome is a violation, and so is a
   value the draft calls conditional or a scenario in one place and states as an established fact in
   another. A source's hedging relayed in prose, such as "the publication expects", is correct
@@ -300,7 +361,8 @@ source states it.
 
 ### Requirement: Rule 7 — the report does not distort a source
 
-The report SHALL NOT exaggerate or distort what a source says.
+The rule is named "No exaggeration or distortion of a source". The report SHALL NOT exaggerate or
+distort what a source says.
 
 - **Report writer:** relays each finding with the weight and the scope its source gives it. It
   keeps the direction of a source's verdict: where a source calls something slight, low or limited,
@@ -327,22 +389,22 @@ against the source. The grounded review, which sees the sources, judges it.
 
 ### Requirement: Rule 8 — missing evidence is stated, not filled
 
-Where the sources lack the evidence, the report SHALL state the limitation instead of filling the
-gap.
+The rule is named "The limitation stated where evidence is missing". Where a source-selection rule
+requires a statement that evidence is missing, the report SHALL also state what cannot be concluded,
+and SHALL NOT fill the gap.
 
-- **Report writer:** says what is missing and what therefore cannot be concluded, and never fills
-  the gap with its own knowledge or an inference.
+- **Report writer:** where the source-selection rule "When to say that evidence is missing"
+  requires a statement that evidence is missing (see **source-selection**), also says what the
+  reader therefore cannot conclude. It never fills the gap with its own knowledge or an inference.
 - **Blind review:** a fact that the research question or the approved plan asks for, and that the
   draft neither answers nor declares unavailable, is a violation. A plan item that names a source is
-  answered when its fact is answered, from that source or from another, since the source-selection
-  rules let the report leave out a source that only repeats another. A fact that a rule excludes
+  answered when its fact is answered, from that source or from another. A fact that a rule excludes
   from the report is the exception: leaving it out without comment is correct, and mentioning it is
-  a violation of
-  the removal rule (see **prohibited-content**). The blind review judges this because it sees the
-  client rules that exclude content. This blind part is the one faithful-relay text this change
-  rewrites. The sentence it replaces accepted a "does not cover" sentence as declaring a part,
-  which the removal rule forbids for excluded content. A part that is not excluded is declared
-  unavailable by saying that the sources do not give it.
+  a violation of the removal rule (see **prohibited-content**). The blind review judges this
+  because it sees the client rules that exclude content. For excluded content, a sentence saying
+  that the report does not cover it is a violation of the removal rule (see **prohibited-content**).
+  The source-selection rule "When to say that evidence is missing" makes the blind review accept a
+  statement that the sources do not give an item.
 
 #### Scenario: An unanswered part of the question
 
@@ -465,49 +527,51 @@ The grounded review's instructions SHALL carry, in this order:
 
 - that it is the report check of a deep-research assistant, today's date, and that it judges the
   draft against the rules below and nothing else;
-- that it works claim by claim: every sentence and table cell that states a figure, a forecast or
-  an estimate, a comparison, a cause or a characterisation of what a source found is compared with
-  the source passage it relays, and every claim its source does not support as written is reported
-  — such as a figure no source gives or one for another scope than the source's, a comparison or a
-  finding that reverses or outweighs the source, a forecast, an estimate or a source's own view
-  written as an observed fact, and a conclusion, a cause or an explanation no source states — and
-  that it then checks the rest of the rules against the whole draft before answering;
+- that it works claim by claim: every sentence and table cell that states a figure, a forecast, a
+  comparison, a cause or a characterisation of what a source found is compared with the source
+  passage it relays, and every claim its source does not support as written is reported — such as
+  a figure no source gives or one for another scope than the source's, a comparison or a finding
+  that reverses or outweighs the source, a forecast or a source's own view written as an observed
+  fact, and a conclusion, a cause or an explanation no source states — and that it then checks the
+  rest of the rules against the whole draft before answering;
 - a sentence, before every rule block, saying that each rule below says what the report must do
   or what counts as a violation, that the transcript before the instructions is the findings, and
-  that the draft is judged against them and every passage that breaks a rule is reported; and that
+  that the draft is judged against them and every passage that breaks a rule is reported; that
   when a rule asks the report to give a value or its context, such as both a dataset value and a
   publication value, and the findings hold it but the draft leaves it out, the grounded review
-  reports it and asks for it to be added, unless a rule keeps that content out of the report;
+  reports it and asks for it to be added, unless a rule keeps that content out of the report; and
+  that it never asks to add supporting context, because the writer decides which supporting
+  context to include;
 - the generic policies' blocks, in the policy order (see **source-selection**): the
   source-selection block, with the source-selection terms and every source-selection rule's
   **report-writer** part; the faithful-relay block, with the faithful-relay terms and every
   faithful-relay rule's **report-writer** part; and the **grounded** parts of the other policies'
-  rules, such as "Names, not codes" (see **language-and-style**) and "Accurate and consistent
-  terms" (see **terminology**). The source-selection and faithful-relay rules are given in their
-  writer parts, as what the report must do, because their blind parts assume a reviewer who cannot
-  see the sources;
-- the writer's "No calculations" section, as a section of its own (see Rule 3);
+  rules, such as "Codelist values by name" (see **language-and-style**) and "Accurate and
+  consistent terms" (see **terminology**). The source-selection and faithful-relay rules are given
+  in their writer parts, as what the report must do, because their blind parts assume a reviewer
+  who cannot see the sources;
+- the writer's "No calculation by research or the report" section, as a section of its own (see
+  Rule 3);
 - the grounded parts of the channel's client rules, in a `<client_rules>` block, when a client rule
   sets one;
 - the writer parts of the channel's client rules, in a `<client_writer_rules>` block under its own
   heading, when a client rule sets one, introduced as context and not as checks: the grounded
   review does not report a passage under them unless a client check names it, uses them to know
   which content the report must leave out and which terms it must use, and never asks for content
-  they keep out of the report. This is how the grounded review can ask for a missing value without
-  asking for content a client rule excludes; the client rules' blind parts, which judge exclusions,
-  stay with the blind review;
+  they keep out of the report. Where one of them is more specific than a rule above, the grounded
+  review follows it: it does not report a passage that the client rule requires, and does not ask
+  to remove it. This is how the grounded review can ask for a missing value without asking for
+  content a client rule excludes; the client rules' blind parts, which judge exclusions, stay with
+  the blind review;
 - the turn's data-sources string in a `<data_sources>` block, which counts as a source;
 - that the transcript before the instructions is the findings, to be used for every check that
   compares the report with its sources, and that a claim the findings hold only in a search tool's
   summarising answer is not supported by a source;
-- what is not its job: whether the research was thorough; whether the draft answers every part of
-  the question and the plan, which the blind review judges and which the channel's own rules may
-  narrow; whether a claim carries a citation or where a citation stands, which the blind review
-  judges; which of two terms with the same meaning the report uses for a concept, which the
-  channel's own rules may set; the report's sections, headings, Markdown and citation format,
-  which the blind review judges; the length, hyperlinks, and whether a cited identifier exists,
-  which the app checks itself; it never asks for more research, more sources, a different
-  analysis, a rewrite or wording it would prefer;
+- what is not its job: whether the research was thorough; whether a claim carries a citation or
+  where a citation stands, which the blind review judges; the report's sections, Markdown and
+  citation format, which the blind review judges; the headings, the length, hyperlinks, and whether
+  a cited identifier exists, which the app checks itself; it never asks for more research, more
+  sources, a different analysis, a rewrite or wording it would prefer;
 - that it answers with a numbered list, one item per violation, naming the rule it breaks, the
   passage quoted exactly, what the source says instead and what to change, where a violation the
   draft repeats in several places is one item that quotes every place; or with exactly
@@ -524,8 +588,8 @@ review misses:
 - the two checks of the faithful-relay rules were evaluated together, so dropping either one risks
   a regression;
 - the blind parts carry sentences whose only job is to stop a review from flagging a correct draft,
-  such as "a table's year column states the described period of every value in it", which the
-  grounded review does not receive;
+  such as "A year column or a row label in a table gives the described period of each value in
+  it", which the grounded review does not receive;
 - a failed review call does not fail the turn, so the blind review still checks a draft when the
   grounded call fails.
 
@@ -569,18 +633,26 @@ An empty answer SHALL count as a failed grounded review, not as an approval.
   `<client_writer_rules>` block introduced as context, and SHALL carry no rule's blind part, no
   client rule's research part, no glossary rule and none of the blind review's numbered checks
 
-#### Scenario: A term with the same meaning set by a channel rule is not a violation
+#### Scenario: A term that a channel rule sets is not a violation
 
-- **WHEN** a channel's own rule makes the writer use another term than a source's for one concept,
-  with the same meaning, and the draft does so
-- **THEN** the grounded review's instructions SHALL have said that which of two terms with the same
-  meaning the report uses is not its to judge
+- **WHEN** a channel's writer rule makes the report use another term than a source's for one
+  concept, with the same meaning, and the draft does so
+- **THEN** the grounded review's instructions SHALL carry that rule as context, and SHALL say that
+  a client writer rule more specific than a rule above is followed, and that a passage it requires
+  is not reported
 
 #### Scenario: A missing value is asked for
 
 - **WHEN** the findings hold a publication value and a dataset value for one fact, and the draft
   gives only the dataset value
 - **THEN** the grounded review SHALL report the missing publication value and ask for it to be added
+
+#### Scenario: Supporting context is not asked for
+
+- **WHEN** the findings hold a driver of a value that a source states, and the draft gives the
+  value without that driver
+- **THEN** the grounded review's instructions SHALL have said never to ask to add supporting
+  context, because the writer decides which supporting context to include
 
 #### Scenario: An excluded value is not asked for
 
@@ -666,16 +738,17 @@ in the same way.
 The text the prompts already carry SHALL NOT contradict the faithful-relay rules:
 
 - **Report writer.** Its citations section SHALL NOT allow a sentence flagged as the writer's own
-  synthesis or inference: an uncitable sentence stays only where rule 1 allows it, and the section
-  SHALL refer to rule 1 rather than restate its exemptions. Its "never include" list SHALL NOT ask
-  it to say when a statement is its own inference. Its rules that outrank the request SHALL include,
-  after the "No calculations" rule of **report-composition** and the source-selection prohibitions,
-  two faithful-relay rules: inferring nothing, and keeping every figure as its source gives it apart
-  from the allowed changes. A statement that the sources do not give a figure or an explanation is a
-  statement about the evidence, not an explanation of a declined request. A section's description,
-  default or configured, SHALL NOT override the "No calculations" rule or these two rules: where a
-  description asks for implications, recommendations or a computed figure, the rules win and the
-  rest of the description still applies.
+  synthesis or inference: an uncitable sentence stays only where rule 1, "Facts only from the
+  sources", allows it, and the section SHALL refer to rule 1 by its name rather than restate its
+  exemptions. Its "never include" list SHALL NOT ask it to say when a statement is its own
+  inference. Its rules that outrank the request SHALL include, after "No calculation by research or
+  the report" of **report-composition**, the rules that exclude content and the source-selection
+  prohibitions, two faithful-relay rules, each named in the list: inferring nothing ("No conclusion
+  that no source states"), and keeping every figure as its source gives it apart from the changes
+  that "Each figure with its source's value, unit and period" allows. A section's description,
+  default or configured, SHALL NOT override "No calculation by research or the report" or these two
+  rules: where a description asks for implications, recommendations or a computed figure, the rules
+  win and the rest of the description still applies.
 - **Report review.** Its section-content check SHALL accept uncited text only where rule 1's check
   accepts it, referring to that check rather than restating it, and SHALL NOT accept text flagged as
   the report's own inference.
@@ -709,12 +782,20 @@ The text the prompts already carry SHALL NOT contradict the faithful-relay rules
 - **THEN** its tools guidance SHALL say that a search summary can change, distort or invent a
   figure, and that every figure is taken from a page that was read
 
+#### Scenario: The outrank list names the faithful-relay rules
+
+- **WHEN** the writer's system prompt is rendered
+- **THEN** its list of rules that outrank the request SHALL name "No conclusion that no source
+  states" and "Each figure with its source's value, unit and period"
+
 ### Requirement: The default sections ask for no inference
 
 No default section description SHALL ask for more than summaries and comparisons of what the
-sources say. The default "Detailed Analysis" section SHALL ask for what the sources say and how
-their findings compare, and the default "Conclusion" section for a summary of what the findings
-answer and what they cannot answer, with no new facts.
+sources say. The default Overview SHALL ask for the question as research understood it and the
+kinds of source research covered, and SHALL NOT ask for the answer. The default Key Findings SHALL
+ask for the direct answer and the values for the requested facts. The default Additional context
+SHALL ask for supporting context from the sources, with one clause on how each item bears on the
+answer, and for no value for a requested fact.
 
 #### Scenario: The defaults are rendered
 
@@ -724,18 +805,54 @@ answer and what they cannot answer, with no new facts.
 
 ### Requirement: Faithful relay is verified by evals
 
-The faithful-relay rules and the grounded review SHALL be measured offline and on live runs before
-the change is released, against the severe faithful-relay violations of a test set of judged drafts:
-a number no source gives, a reversed comparison or finding, a forecast, estimate or hedged view
-stated as observed, a conclusion or cause no source states, or a figure for another scope than the
-source's. Report review with the grounded review SHALL find at least 70% of the severe violations,
-pooled over two repeats, and at least 70% of the grounded review's items SHALL name a real
-violation. The live runs SHALL report the severe violations per draft, the time per turn and per
-review round, and the grounded review's cached input tokens on later rounds.
+The faithful-relay rules and the grounded review SHALL have eval coverage before they are
+released. The eval SHALL cover the severe faithful-relay violations: a number no source gives, a
+reversed comparison or finding, a forecast or a hedged view stated as observed, a conclusion or
+cause no source states, and a figure for another scope than the source's.
 
-#### Scenario: The thresholds are measured
+#### Scenario: The severe violations are covered
 
-- **WHEN** the change is ready for release
-- **THEN** its offline severe recall and the grounded review's precision SHALL have been measured
-  against the test set, and a result under either threshold SHALL be reported with the violations
-  the review missed
+- **WHEN** a change to the faithful-relay rules or the grounded review is ready for release
+- **THEN** the eval SHALL have covered each kind of severe faithful-relay violation
+
+### Requirement: Rule 9 — qualifying context stands next to its value
+
+The rule is named "Qualifying context next to its value". It SHALL have a report-writer part only.
+The grounded review judges it against that part, and the blind review's prompt SHALL carry no part
+of it.
+
+- **Report writer:**
+  - For each value the report gives, gives the qualifying context that its source states. The
+    writer keeps it short, and keeps its figures and conditions exact. It leaves out the
+    qualifying context of values that the report does not give.
+  - Gives the qualifying context of a value in the same sentence or table row as the value. When
+    the same qualifying context applies to every row of a table, it MAY give it one time, in the
+    table title or in a note under the table. It never gives qualifying context in a separate
+    section, bullet or paragraph.
+  - Does not define a measure that the query names. The exception is a query or an approved plan
+    that asks for the measure's definition or methodology. Then the writer gives only what the
+    sources say about it, and says so when no source gives it.
+  - Does not apply the methodology of one source to a value from a different source. The exception
+    is a first source that says that its methodology applies to that value.
+
+#### Scenario: Qualifying context stands in the value's sentence
+
+- **WHEN** a source gives a growth forecast of 2.1% "assuming no further tariff increases"
+- **THEN** the writer SHALL give the condition in the sentence that gives 2.1%, and SHALL NOT give
+  it in a separate paragraph
+
+#### Scenario: A measure that the query names is not defined
+
+- **WHEN** the query asks for the current account balance and does not ask what it is
+- **THEN** the writer SHALL NOT explain what the current account balance is
+
+#### Scenario: One source's methodology is not applied to another source's value
+
+- **WHEN** a publication describes how it adjusts its own series, and the report gives a value from
+  the dataset IMF:WEO
+- **THEN** the writer SHALL NOT describe the IMF:WEO value with the publication's methodology
+
+#### Scenario: The blind review carries no part of the rule
+
+- **WHEN** the blind review's system prompt is rendered
+- **THEN** it SHALL NOT carry the rule "Qualifying context next to its value"

@@ -884,7 +884,7 @@ def test_render_protected_section_names_lists_only_the_protected_ones() -> None:
     assert render_protected_section_names(_CUSTOM_SECTIONS) == "Evidence"
     # References is protected and still left out: the app writes it, so no user instruction the
     # precedence rule governs could drop it in the first place.
-    assert render_protected_section_names(DEFAULT_REPORT_STRUCTURE) == "Overview"
+    assert render_protected_section_names(DEFAULT_REPORT_STRUCTURE) == "Key Findings"
     two_protected = [
         _CUSTOM_SECTIONS[0],
         _CUSTOM_SECTIONS[1],

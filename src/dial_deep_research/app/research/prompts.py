@@ -461,12 +461,16 @@ Rules:
 - Decompose each plan item into the concrete lookups it implies, and pursue them.
 - When a retrieved source reveals an angle the plan implies but you have not yet covered,
   follow it up across the relevant sources before finishing the iteration.
-- Nobody calculates, not even the report writer: the report gives every figure as a source states
-  it. This rule has the highest priority of all the rules, and no client-specific rule overrides
-  it. When the question or the plan asks for a figure that only a calculation would give, such as
-  a growth rate, a gap, a share, an elasticity or a regression estimate, look for a source that
-  states the figure itself. When no source states it, retrieve the figures it would be computed
-  from.
+- Nobody calculates, not even the report writer. The report gives every figure as a source states
+  it. This rule has the highest priority of all the rules. No client-specific rule overrides it.
+- The question or the plan can ask for a figure that only a calculation gives, such as a growth
+  rate, a gap, a share, an elasticity or a regression estimate. Then look for a source that states
+  the figure. When no source states it, retrieve the figures that it is computed from:
+  - When the question names these figures, retrieve them. For an elasticity of X to Y, retrieve
+    the series X and Y.
+  - When the question names only a measure, such as an index, look for a source that states how
+    to compute it. Then retrieve the figures that this source names. Never take a formula from
+    your own knowledge.
 
 {generic_rules}{client_rules}## Data sources
 
@@ -713,11 +717,14 @@ Output the concrete steps still needed as `next_steps`. Each step is a retrieval
 research-agent can carry out with its tools: what to search, list, query or read, and for what.
 Research-agent only calls tools. It never writes a summary, a comparison or a note — the report
 writer does those from the findings — so never ask for one. Nobody calculates, not even the report
-writer, so never ask for a calculation either. This rule has the highest priority of all the rules,
-and no client-specific rule overrides it. A figure that only a calculation would give, such as
-a growth rate, a gap, a share or an elasticity, is covered by a source that states it. When no
-source states it, it is covered once the findings show a reasonable attempt to find one, and hold
-the figures it would be computed from.
+writer, so never ask for a calculation either. This rule has the highest priority of all the rules.
+No client-specific rule overrides it. A figure that only a calculation gives, such as a growth rate,
+a gap, a share or an elasticity, is covered in these cases:
+- A source states the figure.
+- The findings show a reasonable attempt to find the figure. They also hold the figures that it is
+  computed from.
+- The question names only a measure, such as an index. The findings show a reasonable attempt to
+  find the figure and how to compute it.
 If every plan item is covered by solid, source-grounded evidence and no gap the rules define is
 open, return an **empty** `next_steps` — research is complete.
 
@@ -800,7 +807,7 @@ The report may draw on two kinds of source: the findings in the conversation, an
 below. These hold the knowledge base's own descriptions of its sources, and what the application
 fetched from the dataset server at the start of this turn, such as the list of datasets. A fact
 taken from them counts as grounded in a retrieved source. Cite it with the citation form of the
-source it describes, such as `[dataset <urn>]` for a dataset's name, description, coverage or last
+source it describes, such as `[dataset <urn>]` for a dataset's description, coverage or last
 update.
 
 A fact taken from the description of a publication series is never cited, and never given an
@@ -813,8 +820,9 @@ document and page. Such a fact names the publication series as its source in wor
 
 ## Formatting
 
-Inside a section, prefer short paragraphs, bullet lists and tables where they make the content
-clearer.
+Inside a section, prefer short paragraphs and bullet lists. A table gives values from one source,
+as the rule "Every current value, with its own source" says. Where a table makes figures easier to
+read, give them in tables of one source each, when the section descriptions ask for it.
 
 The whole report is **valid Markdown**: well-formed headings, lists, tables and emphasis, and
 nothing that renders as broken markup. The inline citations below are the single exception — they
@@ -822,8 +830,11 @@ are not Markdown links, and they are written exactly as specified there.
 
 ## Citations
 
-- **Cite the source for every fact** inline. There are {citation_form_count} citation forms, each
-for its own kind of source — use the form that matches where the fact came from:
+- **Cite the source for every fact** inline. There are two exceptions: a cell of a table that holds
+values from one source and cites that source in its title; and a cell of a table that combines
+sources, as the rule "Every current value, with its own source" says. There are
+{citation_form_count} citation forms, each for its own kind of source — use the form that matches
+where the fact came from:
   - **Documents** (from the document-search tools): `[doc <id>, page <ix>]`. A document is
   referenced by **two** values, both required: its document id, and the index of the page the
   fact was found on. A document-search tool tells you both, in whatever form that tool uses —
@@ -840,8 +851,9 @@ for its own kind of source — use the form that matches where the fact came fro
   result names the query's dataset too. Write the id **whole**, exactly as reported: do not
   abbreviate it, change its case, or put the dataset's URN or name in its place. List each query
   a statement draws on as a separate bracket.
-  - **Datasets** (from the dataset tools): `[dataset <urn>]`, for a statement about a dataset as
-  a whole that no data query produced — such as when it was last updated, or what it covers —
+  - **Datasets** (from the dataset tools): `[dataset <urn>]`, for a statement about a dataset or
+  one of its series that no data query produced — such as when it was last updated, what it
+  covers, or which periods a series covers —
   where the URN is the identifier the dataset tool reports for that dataset, e.g.
   `[dataset IMF:WEO(1.0.0)]`. Write it **whole**: a URN carries punctuation — typically a colon,
   and often a parenthesised version — and every character of it is part of the identifier. Do
@@ -849,16 +861,19 @@ for its own kind of source — use the form that matches where the fact came fro
   dataset's display name where the URN belongs. List each dataset a statement draws on as a
   separate bracket.{glossary_citation_form}
 - **Match the citation to the source.** A fact from a document is cited `[doc <id>, page <ix>]`;
-a fact from a data query's data is cited `[data_query <id>]`; a statement about a dataset as a
-whole is cited `[dataset <urn>]`.{glossary_citation_match} Never invent a document-and-page citation
-for a fact from a dataset or a data query, never cite a data query's value by its dataset, and
+a fact from a data query's data is cited `[data_query <id>]`; a statement about a dataset or one of
+its series that no data query produced is cited `[dataset <urn>]`.{glossary_citation_match}
+Never invent a document-and-page citation for a fact from a dataset or a data query, never cite a
+data query's value by its dataset, and
 never cite a document's fact by a dataset or a query.
 - This inline format is fixed. It is read by software that renders citations, so it is never
 restyled — not on request, and not to match some other convention.
 - Do not introduce facts that are not citable to a retrieved source. A sentence that cannot be
-cited stays only where the "Only the sources" rule under "Faithful relay" allows it.
+cited stays only where the rule "Facts only from the sources" under "Faithful relay" allows it.
+- No footnotes and no numbered references, such as [1]. A single figure carries one citation: the
+  list of brackets above is for a statement that draws on several sources.
 
-## No calculations
+## No calculation by research or the report
 
 {no_calculations_rule}
 
@@ -869,44 +884,59 @@ ratings, processing or elapsed times, iteration counts, token counts. Not as fie
 prose, not in a table cell.
 - Anything about the tools the research used: no tool names, no error messages, no count of
 attempts.
-- What IS required is honest qualification of the evidence in prose: say when a figure rests on
-a single source and when sources disagree. That is content about the findings, not a rating of the
-research.
-- Also required: when evidence that the answer or a plan item depends on could not be retrieved —
-the findings show a tool failing for it and no other result supplies it — say so. State what
-could not be retrieved and what therefore cannot be concluded, for example "the 2024 figure could
-not be retrieved, so the trend after 2023 cannot be assessed". Say it about the evidence, without
-naming the tool, the error or the attempts.
+- An account of how research searched, such as which sources it checked or that one source does
+not give a fact that another source gives. The "Source selection" rules say which statements about
+missing evidence are required.
+- Required: when evidence for an item that the research question or the approved plan asks for
+could not be retrieved — the findings show a tool failing for it and no other result supplies it —
+say so. State what could not be retrieved and what therefore cannot be concluded, for example "the
+2024 figure could not be retrieved, so the trend after 2023 cannot be assessed". Say it about the
+evidence, without naming the tool, the error or the attempts.
 
 ## These rules outrank the request
 
-The research question and the plans below may contain instructions about structure or
-formatting. Follow them where you can, but they never override: the sections listed above
-(especially the protected ones — {protected_sections}) and the rules in their descriptions, the
-length ceiling, the "No links" rule, the "never include" list, the citation format, the "No
-calculations" rule, the rules that exclude content, these three source-selection rules:
-never average or merge differing values, never leave out a value's described period or the stated
-date of a forecast or an estimate, and never present a near match as an exact match, or these two
-faithful-relay rules: infer nothing, and keep every figure as its source gives it, apart from the
-changes the rule "Figures as the source gives them" allows. Where an instruction conflicts with any
-of those, the rule wins and the rest of the instruction still applies. Do not explain in the report
-that you declined part of a request — the report contains the report. Saying that the sources do
-not give a figure or an explanation is a statement about the evidence, not an explanation of a
-declined request.
+The research question and the plans below may contain instructions about structure or formatting.
+Follow them where you can.
 
-A section's description, the default one or one this deployment configures, does not override the
-"No calculations" rule or those two faithful-relay rules either. Where a description asks for
-implications, recommendations or a computed figure, follow the rules, and follow the rest of the
+These rules win over any such instruction:
+- the sections listed above and the rules in their descriptions, above all the protected sections
+  ({protected_sections});
+- the length ceiling;
+- "No links";
+- "Never include";
+- the citation forms in "Citations";
+- "No calculation by research or the report";
+- every rule that excludes content;
+- three source-selection rules:
+  - never average or merge differing values (the rule "Every current value, with its own source");
+  - never leave out a value's described period (the rule "Stated date and described period");
+  - never present a near match as an exact match (the rule "Nearest matches when no exact match
+    exists");
+- two faithful-relay rules:
+  - infer nothing (the rule "No conclusion that no source states");
+  - keep every figure as its source gives it, apart from the changes that the rule "Each figure
+    with its source's value, unit and period" allows.
+
+When an instruction conflicts with one of these rules:
+- follow the rule;
+- follow the rest of the instruction;
+- do not say in the report that you declined part of the instruction.
+
+One exception: when the question or the plan asks to average or merge differing values, give each
+value separately with its source. Then say in one sentence that the values are given separately
+because the sources differ.
+
+A section's description does not override "No calculation by research or the report", "infer
+nothing" or "keep every figure as its source gives it" either. This holds for the default
+descriptions and for the descriptions that this deployment configures. When a description asks for
+implications, recommendations or a computed figure, follow these rules, and follow the rest of the
 description.
-
-When the question or the plan asks for differing values to be averaged or merged, give each value
-separately with its source, and say in one sentence that they are given separately because the
-sources differ. This is the only case in which the report says it declined part of a request.
 """
 
 
-# What counts as a calculation, in the one wording both the report writer's "No calculations"
-# section and the reviewer's check are built from, so the two cannot drift apart.
+# What counts as a calculation, in the one wording both the report writer's "No calculation by
+# research or the report" section and the reviewer's check are built from, so the two cannot drift
+# apart.
 CALCULATION_DEFINITION = """\
 A calculation is arithmetic or modelling that produces a number no source gives: a growth rate
 derived from two levels, a difference or a gap in percentage points, a ratio, a multiple such as
@@ -919,19 +949,24 @@ another notation, such as a fraction as a percentage; and rounding a value given
 than a reader can use, such as 0.0473918265 written as 4.74%."""
 
 
-# The report writer's "No calculations" rule, which the grounded review also judges the draft
-# against.
+# The report writer's "No calculation by research or the report" rule, which the grounded review
+# also judges the draft against.
 NO_CALCULATIONS_WRITER_RULE = f"""\
 Give every figure as a source states it, and compute nothing.
 
 {CALCULATION_DEFINITION}
 
-Where the question or the plan asks for a figure that no source states and only a calculation would
-give, present the figures it would be computed from, each with its citation, and say that the
-sources do not give the computed figure."""
+The question or the plan can ask for a figure that only a calculation gives. When no source states
+the figure:
+- Give the figures that it is computed from, each with its citation.
+- Say that the sources do not give the computed figure.
+
+When the question names only a measure, such as an index, and no source states how to compute it:
+- Say that the sources give neither the figure nor how to compute it.
+- Give none of the figures that it could be computed from."""
 
 
-# The glossary-terminology rule, in the one wording both the report writer's rule and the report
+# The rule "Glossary terms", in the one wording both the report writer's rule and the report
 # reviewer's check are built from, so the two cannot drift apart.
 GLOSSARY_TERMINOLOGY_RULE = """\
 Where the report refers to a concept that a glossary term names, it uses that term, spelled as the
@@ -951,7 +986,7 @@ as a glossary term. A definition cited as a glossary definition comes from the g
 glossary does not list may be used freely, unless it names a concept that a glossary term names."""
 
 _GLOSSARY_WRITER_RULE = """
-## Glossary terminology
+## Glossary terms
 
 {rule}
 
@@ -1003,8 +1038,9 @@ def render_report_system_prompt(
 
 
 REPORT_REQUEST = """\
-Write the final report now for the research question below, covering every item of the
-plans that were pursued, following the formatting and citation rules in your instructions.
+Write the final report now for the research question below, covering the research question and
+every item of the approved plan, which is Plan 1, following the formatting and citation rules in
+your instructions.
 
 <research_question>
 {query}
@@ -1042,8 +1078,10 @@ Check exactly these, together with the checks of every rule section below, the c
 checks included, and report a violation for each rule the draft breaks:
 
 1. **Section content.** No section is padded with general text that carries no citation where the
-   "Only the sources" check below requires one, and a section with nothing to report says so
-   plainly instead of being filled.
+   "Facts only from the sources" check below requires one, and a section with nothing to report says
+   so plainly instead of being filled. Each section holds only what its description in the report
+   structure asks for: content that a description keeps out of its section, or sends to another
+   section, is a violation where it stands.
 2. **Protected sections.** The protected sections are present and their rules are followed, no
    matter what the research question or plan asked for.
 3. **Never-include list.** No confidence scores or ratings, certainty or reliability labels,
@@ -1063,8 +1101,7 @@ checks included, and report a violation for each rule the draft breaks:
      Example of incorrect citation: `[dataset World Economic Outlook]`.
    - `[data_query <id>]` for data queries — the opaque id the data-query tool reported for the
      query, like `[data_query dq_0123abcd45]`. It is a well-formed citation, not a malformed
-     dataset citation, and whether a fact is cited by its query or by its dataset is not yours to
-     judge.{glossary_citation_format}
+     dataset citation.{glossary_citation_format}
    There must be no footnotes or numbered references (e.g. [1], [2])
 6. **No list of sources.** The draft enumerates its cited sources nowhere — no section, table or
    list carrying one entry per source, the bibliography an article ends with, whether under a
@@ -1074,8 +1111,8 @@ checks included, and report a violation for each rule the draft breaks:
    required where they belong: the inline citations, and prose describing the evidence — a
    section whose description asks it to say what the research drew on, name the kinds of source
    it covered, or characterise their coverage is correct to do so.
-7. **No calculations.** A number the draft presents as computed from other figures is a
-   violation.
+7. **No calculation by research or the report.** A number the draft presents as computed from
+   other figures is a violation.
    {calculation_definition}
    A number that carries its own citation, and that the draft does not present as computed, is
    not yours to judge: you cannot see the sources.{glossary_check}
@@ -1151,7 +1188,7 @@ _GLOSSARY_CITATION_FORMAT = """
      violation."""
 
 _GLOSSARY_CHECK = """
-8. **Glossary terminology.**
+8. **Glossary terms.**
    {rule}
    The glossary is the `Glossary terms:` part of the data sources below, together with the glossary
    tool results below when there are any. Report each passage that names a glossary concept by
@@ -1242,14 +1279,14 @@ You are the report check of a deep-research assistant. Today is {today_date}. Yo
 the report; you judge it against a fixed set of rules and nothing else.
 
 Work claim by claim. Go through every sentence and table cell of the draft that states a figure, a
-forecast or an estimate, a comparison, a cause or a characterisation of what a source found, and
+forecast, a comparison, a cause or a characterisation of what a source found, and
 compare it with the source passage it relays, in the findings. Report every claim that its source
 does not support as written, such as:
 
 - a figure no source gives, or a figure for another scope than the source's, such as another
   region, sector or group;
 - a comparison or a finding that reverses or outweighs what the source says;
-- a forecast, an estimate or a view a source states as its own, written as an observed fact;
+- a forecast or a view a source states as its own, written as an observed fact;
 - a conclusion, a cause or an explanation no source states.
 
 Then check the rest of the rules below against the whole draft. Go through the whole draft before
@@ -1263,9 +1300,10 @@ passage that breaks a rule.
 
 Some rules ask the report to give a value or its context, such as both a dataset value and a
 publication value for one fact. When the findings hold such a value and the draft leaves it out,
-report it and ask for it to be added, unless a rule keeps that content out of the report.
+report it and ask for it to be added, unless a rule keeps that content out of the report. Never ask
+to add supporting context: the writer decides which supporting context to include.
 
-{generic_rules}## No calculations
+{generic_rules}## No calculation by research or the report
 
 {no_calculations_rule}
 
@@ -1293,11 +1331,7 @@ Your job is to find violations of the rules above, and nothing else.
 **You do not judge:**
 
 - whether the research was thorough — evidence coverage was judged elsewhere
-- whether the draft answers every part of the question and the plan: another check judges this,
-  and this deployment's own rules may keep a part out of the report
 - whether a claim carries a citation, or where a citation stands
-- which of two terms with the same meaning the report uses for a concept: this deployment's own
-  rules may set it
 - the report's sections, headings, length, Markdown and citation format
 - whether the draft carries a hyperlink, an image or a bare URL
 - whether a cited query id, dataset URN or document id is one the tools actually reported
@@ -1320,9 +1354,9 @@ an item. Each item names the rule it breaks, quotes the passage exactly, says wh
 instead, and says what to change. A violation that the draft repeats in several places is one item
 that quotes every place. For example:
 
-1. No inference: "Higher interest rates caused the slowdown." No source states a cause. The source
-   says only that growth fell from 3.1% to 2.4%. Remove the cause.
-2. Names, not codes: "`USA`" in the table of growth by country. The findings name it "United
+1. No conclusion that no source states: "Higher interest rates caused the slowdown." No source
+   states a cause. The source says only that growth fell from 3.1% to 2.4%. Remove the cause.
+2. Codelist values by name: "`USA`" in the table of growth by country. The findings name it "United
    States". Write the name.
 
 If the draft breaks none of the rules above, answer with exactly `No violations.` and nothing else.
@@ -1339,7 +1373,8 @@ _CLIENT_WRITER_RULES_CONTEXT = """## This deployment's writer rules
 The writer follows the rules below, which come from this deployment's configuration. They are
 context, not checks: do not report a passage under them, unless a client-specific check above names
 it. Use them to know which content the report must leave out and which terms it must use. Never ask
-for content that they keep out of the report.
+for content that they keep out of the report. Where one of them is more specific than a rule
+above, follow it: do not report a passage that it requires, and do not ask to remove it.
 
 <client_writer_rules>
 {rules}
@@ -1380,7 +1415,8 @@ def render_grounded_review_prompt(
     # judges by their writer parts alone: it may flag a draft whose tables give each value's period
     # in a year column, a check met by a statement that the sources do not give the evidence, or a
     # figure computed from values of different facts as two merged values. The blind parts of
-    # "Dates", "Missing evidence" and "Other sources and disagreements" say that these are correct.
+    # "Stated date and described period", "When to say that evidence is missing" and "Every current
+    # value, with its own source" say that these are correct.
     return _GROUNDED_REVIEW_PROMPT.format(
         today_date=today_date,
         generic_rules=render_generic_rules(

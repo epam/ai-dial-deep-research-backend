@@ -752,28 +752,42 @@ _REFERENCES_EMPTY_TEXT = "This report cites no source: the research found no cit
 DEFAULT_REPORT_STRUCTURE: list[ReportSection] = [
     ReportSection(
         name="Overview",
-        description="What the report set out to answer, what was searched to answer it, and the"
-        " short answer. Restate the research question, name the sources and topics the research"
-        " covered and the approach taken to cover them, then answer the question directly in two"
-        " to four sentences. Keep it brief — the findings and the analysis follow below.",
-        protected=True,
+        description="The question as research understood it, and the kinds of source that research"
+        " covered, in a few sentences. Do not give the answer here. Do not say what one source"
+        " lacks, and do not describe how research searched.",
     ),
     ReportSection(
         name="Key Findings",
-        description="A brief summary of what the research found, leading with the direct answer to"
-        " the user's question where the findings support one. Short paragraphs or bullets, not a"
-        " retelling of the analysis that follows.",
+        description="The direct answer. The first sentence answers the question. Give here the"
+        " values for the requested facts: the current values, the earlier values that a question"
+        " about a revision asks for, and the near matches when no exact match exists. Order the"
+        " values for one requested fact by stated date, the latest first, and the near matches"
+        " from the nearest. When the sources give scenario values and the baseline that they"
+        " deviate from, give the baseline first, then the scenario values, each with the"
+        " conditions that its source states. Where a table makes figures easier to read, for"
+        " example figures for several geographies, periods or scenarios, give them in tables,"
+        " after the sentences that answer the question. Those sentences can give a figure that a"
+        " table also gives. A table holds figures from one source that differ only in geography,"
+        " scope, period or scenario."
+        " Figures that differ in another part, such as the indicator or who states the value, go"
+        " in separate tables. The title of a table names its source by the name in the metadata,"
+        " the dataset name or the publication title, and gives its stated date. The title carries"
+        " the citation of each data query or page that gives a value of the table; the cells"
+        " carry no citation. A table has no row, column or cell for a value that the rules omit."
+        " When two tables give values for the same requested fact, put first the table whose"
+        " source has the later stated date. Put the baseline before its scenario values, in a"
+        " column or a row, and a table of scenario values after the table of their baseline. Give"
+        " one figure from a source, and a finding in words, in a sentence. These table rules do"
+        " not apply to a table that combines two or more sources, which only the query or the"
+        " approved plan can ask for. Do not give supporting context here.",
+        protected=True,
     ),
     ReportSection(
-        name="Detailed Analysis",
-        description="The substance of the report: what the sources say and how their findings"
-        " compare. Use sub-headings, short paragraphs, and tables where they aid clarity. Note"
-        " where sources disagree or where a figure rests on a single source.",
-    ),
-    ReportSection(
-        name="Conclusion",
-        description="A summary of what the findings answer, and what they cannot answer. No new"
-        " facts here.",
+        name="Additional context",
+        description="The supporting context: content from the sources that does not answer a"
+        " requested fact, but that helps the reader read the answer. Say in one clause how each"
+        " item bears on the answer. Do not give a value for a requested fact here. When the"
+        " findings hold no supporting context, say so in one sentence.",
     ),
 ]
 
