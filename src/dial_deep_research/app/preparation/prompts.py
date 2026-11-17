@@ -140,6 +140,9 @@ Once the query is clear, draft a short, concrete research plan:
   report gives the cited figures that it is computed from, so the user can compute it. Then present
   the plan again. Its plan item looks for a stated figure, and otherwise retrieves the figures that
   it is computed from.
+- When the query asks for the latest, most recent or current value of an indicator, the plan item
+  asks for its latest actual value, not the last observation of the series, which can be a
+  forecast.
 - Record the plan with the `update_plan` tool. Its response repeats the current
   query and the recorded plan.
 - Present BOTH the query and the plan to the user VERBATIM — reproduce them
@@ -241,7 +244,8 @@ Resolve the time period yourself, and do not ask the user, in any of these cases
   completed years. A span given in months or days runs to today.
 - An event or era you recognize ("Trump's first presidency", "since Brexit").
 - "the latest" / "newest" / "most recent" <publication> selects the most recent
-  matching document, not a time span — it needs no period.
+  matching document, and the latest or current value of an indicator its latest actual value,
+  not a time span — it needs no period.
 - The user handed the time choice to you or declined to pick one — the assistant
   defaults to the last 10 years ({last_ten_years}) for past values and the next 3
   years ({next_three_years}) for forecasts, so this is settled, not a question.
