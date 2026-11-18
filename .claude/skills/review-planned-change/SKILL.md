@@ -1,9 +1,9 @@
 ---
-name: review-plan
+name: review-planned-change
 description: Run the adversarial review loop on the plan of an active OpenSpec change, before it is implemented — spawn a critic subagent that judges whether the change makes sense, then hunts gaps, then checks coherence; verify every finding against the real code, apply the safe fixes, escalate approach-level findings to the user, and record everything in review-log.md. Use ONLY when the user explicitly asks to review or critique the plan of a SPECIFIC named change (e.g. "review the plan for add-user-auth"). Do not trigger without a concrete target. Reads and refines planning artifacts only — it never reviews or writes code, and it is not for archived changes; for reviewing implemented code against its artifacts use /opsx:verify, and for a code diff review use /code-review.
 ---
 
-# review-plan
+# review-planned-change
 
 ## HARD CONSTRAINT — PLANNING ARTIFACTS ONLY
 
@@ -20,7 +20,8 @@ You MUST NOT:
 - Write or edit any file outside the change directory reported by `openspec status`
 - Modify source code, build files, configs, or the README
 - Create artifacts that do not exist yet — that is `/opsx:continue`'s job
-- Create the `tasks` artifact, even if the schema says it is ready
+- Create the `tasks` artifact, even if the schema says it is ready, or edit it if
+  it exists
 - Run builds or tests, or make git writes
 - Begin implementation
 
@@ -47,6 +48,9 @@ Target: `$ARGUMENTS` — a change name, optionally followed by a max pass count
 5. If the `design` artifact does not exist, say so and continue on the artifacts
    that do. Level-1 review will be much weaker without it; suggest the user create
    it via `/opsx:continue` first. Do not create it yourself.
+6. If the `tasks` artifact exists (`/opsx:propose` and `/opsx:ff` write it), do
+   not edit it. Your edits to the specs and the design can make it stale. Say so
+   in Phase 3.
 
 ## Phase 1: Structural pass (before spending critic budget)
 
@@ -58,6 +62,21 @@ Fix what it reports — it catches the mechanical class for free, including
 scenarios written with three hashtags instead of four, which are otherwise
 silently ignored. Report what you fixed. The critic's attention then goes to
 semantics, not formatting.
+
+`validate` does not compare the delta headers with the main specs. A mismatch
+makes `openspec archive` fail much later. So check each delta spec against
+`openspec/specs/<capability>/spec.md`:
+
+- Each `MODIFIED` and `REMOVED` header, and each `RENAMED` `FROM` name, must match
+  an existing requirement name exactly.
+- Each `ADDED` header and each `RENAMED` `TO` name must not exist yet.
+- If the main spec does not exist, the capability is new, and only `ADDED`
+  headers are allowed.
+
+Fix a header that is a typo of an existing name. Log every other mismatch as a
+verified level-3 High finding of pass 1. An `ADDED` requirement whose name already
+exists is such a mismatch: it is a conflict with an existing requirement. Run this
+check again in 2f, so that a finding held by a level-1 stop comes back.
 
 ## Phase 2: Review loop
 
@@ -72,7 +91,7 @@ together. Levels never cost a pass each.
 ### 2a. Spawn the critic
 
 One `Agent` (`subagent_type: general-purpose`) per pass. Its prompt is the
-brief in `.claude/skills/review-plan/CRITIC_PROMPT.md`, followed by:
+brief in `.claude/skills/review-planned-change/CRITIC_PROMPT.md`, followed by:
 
 - the **full current text** of the proposal, every spec file, and the design
 - on passes after the first: what changed since the last round
@@ -97,6 +116,7 @@ judgment filters the critic, and the user can interject on any pass.
 |---------|-------------|--------|
 | any level 1 | **the user** | escalate, with a suggested action |
 | any **Critical** at level 2 or 3 | **the user** | escalate, with the fix you propose |
+| level 2 or 3 that needs a decision: an Open Question that changes the specs, the approach or the tasks, and that the code does not settle | **the user** | escalate, with a suggested action |
 | level 2 or 3, High and below | you | Accept / Reject / Defer, then apply |
 
 **Any verified level-1 finding stops the pass.** Level 1 is approach, alternatives
@@ -127,6 +147,10 @@ Reject (one-line reason), or Defer (out of scope; note it) — and report all of
 in Phase 3. If a level-2 fix would materially change scope, it *is* a level-1
 finding; escalate it.
 
+When the right answer is to accept a risk, log the finding as **Accepted** and
+write the risk into the design's Risks / Trade-offs. **Rejected** means that the
+finding is wrong.
+
 ### 2d. Apply fixes, keeping the artifacts coherent
 
 Edit the artifacts to apply every accepted fix. A fix rarely lands in one file —
@@ -137,9 +161,9 @@ after each edit, check the others **in both directions**:
 - a changed design decision may invalidate scenarios written against the old one
 - a widened Impact list may imply new spec coverage
 
-Only edit files in `existingOutputPaths`. Do not create new spec files for
-capabilities the proposal does not list — add the capability to the proposal
-first, or defer.
+Only edit files in `existingOutputPaths`, and never `tasks.md`. Do not create new
+spec files for capabilities the proposal does not list — add the capability to the
+proposal first, or defer.
 
 ### 2e. Record the pass
 
@@ -167,7 +191,9 @@ or "none"}
 ### 2f. Re-validate and check convergence
 
 Re-run `openspec validate "<name>" --strict --json` — your own edits can break
-spec structure.
+spec structure. Re-run the delta-header check from Phase 1 too. Fix a typo at
+once. Log any other mismatch as a level-3 High finding of the next pass. While such
+a mismatch is open, the loop does not stop on convergence.
 
 Stop when **any** of these holds, and say which fired:
 
@@ -195,6 +221,8 @@ Tell the user:
 - **Level-1 findings awaiting their decision**, stated plainly — these are the
   reason to read the log
 - Anything Deferred that an implementer would otherwise assume is in scope
+- If `tasks.md` exists and you changed the specs or the design: it can be stale,
+  and `/opsx:update` brings it in line
 - **What the loop did not cover**: cap reached with findings still arriving,
   findings that could not be verified either way, artifacts missing. A loop that
   reports clean when it merely ran out of passes is worse than no loop.
@@ -204,7 +232,8 @@ Tell the user:
   deleted on approval. Anything in it that an implementer will still need must
   already be folded into the artifacts themselves: a Deferred item belongs in the
   design's Non-Goals, a rejected alternative belongs in the relevant decision's
-  rationale. Check this before you present, because the log is about to disappear.
+  rationale, and an accepted risk or a hidden assumption belongs in Risks /
+  Trade-offs. Check this before you present, because the log is about to disappear.
 
 ## Phase 4: Remove the log on approval
 
@@ -221,7 +250,10 @@ loop's memory and the evidence the user is reading to decide.
 ## Rules
 
 - Planning artifacts and `review-log.md` only. Never source code, never builds,
-  never git writes.
+  never git writes. Never `tasks.md`.
+- Evidence from live output, eval data or a private repository never goes into an
+  artifact or into `review-log.md`. Write the generic equivalent
+  (`no_sensitive_info.md`).
 - The critic is a subagent; **you** own verification and every edit. No unverified
   claim reaches an artifact.
 - Level-1 findings go to the user, always.
