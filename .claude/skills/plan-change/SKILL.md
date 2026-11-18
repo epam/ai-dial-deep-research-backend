@@ -25,7 +25,7 @@ CLI and the `openspec-*` skills are the authority on how each artifact is writte
 What this skill adds is the part OpenSpec lacks: a scope conversation with the user
 up front, an explicit stop before `tasks`, and a design written to be argued with.
 
-The artifacts are read later by an adversarial critic (`/review-plan`) and by an
+The artifacts are read later by an adversarial critic (`/review-planned-change`) and by an
 implementing agent. Include enough context that neither has to re-research the
 codebase from scratch.
 
@@ -160,7 +160,7 @@ Tell the user:
 - Every assumption you made and every open question left in the artifacts
 - Validation result
 
-Then state the next step: **`/review-plan <name>`** runs the adversarial loop —
+Then state the next step: **`/review-planned-change <name>`** runs the adversarial loop —
 one critic subagent judging whether the change makes sense at all, then hunting
 gaps, then checking coherence. Do not run it yourself; the user decides when the
 draft is worth reviewing. `tasks` comes after that review and the user's approval.

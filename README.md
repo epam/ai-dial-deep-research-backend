@@ -420,19 +420,20 @@ Two Claude Code skills wrap the planning half, so the approach is settled — an
 challenged — before any code exists:
 
 ```
-/plan-change <description>   clarify scope with the user, then write
-                             proposal → specs → design
-/review-plan <name>          adversarial loop: a critic subagent asks whether the
-                             change makes sense at all, then hunts gaps, then checks
-                             the artifacts against each other; every finding is
-                             verified against the real code and logged to the
-                             change's review-log.md
-       ↓                     you read the artifacts + review log, and approve;
-                             the review log is scratch and is deleted on approval
-/opsx:continue               tasks
-/opsx:apply                  implement
-/opsx:verify                 implementation vs artifacts
-/opsx:archive                fold the delta into openspec/specs/
+/plan-change <description>      clarify scope with the user, then write
+                                proposal → specs → design
+/review-planned-change <name>   adversarial loop: a critic subagent asks whether the
+                                change makes sense at all, then hunts gaps, then checks
+                                the artifacts against each other and against the
+                                existing specs; every finding is verified against
+                                the real code and logged to the change's
+                                review-log.md
+       ↓                        you read the artifacts + review log, and approve;
+                                the review log is scratch and is deleted on approval
+/opsx:continue                  tasks
+/opsx:apply                     implement
+/opsx:verify                    implementation vs artifacts
+/opsx:archive                   fold the delta into openspec/specs/
 ```
 
 `/plan-change` deliberately stops before `tasks`: it depends on both specs and design,
