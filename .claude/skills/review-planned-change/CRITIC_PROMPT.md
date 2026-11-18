@@ -71,24 +71,41 @@ Assume the approach is sound and attack completeness.
   duplicated, out-of-order inputs. Boundary values in any threshold or limit.
 - **Failure modes:** what happens when a dependency times out, returns an error,
   returns a partial result, or is unavailable. Is the error path specified?
+- **Hidden assumptions:** something the plan relies on but does not state.
+  Examples: the output format of another service or tool, a field that is always
+  present in a response, the order of events in a stream, a setting that is always
+  set. If that thing changes, the change fails, and no artifact warns about it.
+  Report an assumption only when its failure is likely or costly. Say what breaks
+  when it fails. Always recommend an entry in the design's Risks / Trade-offs that
+  names the assumption, what breaks and the mitigation.
+  When the change must handle the failure, also recommend a scenario for the
+  failure path. Skip an assumption that the design already states.
 - **Missed call sites:** other places in the code that need the same change and
-  are not in the plan's Impact list. Grep for them.
+  are not in the plan's Impact list.
 - **State and concurrency:** shared mutable state, ordering assumptions, retries,
   idempotency, two requests interleaving.
 - **Compatibility and migration:** existing persisted data, existing config, other
-  callers, rollback. Does the change break something already contracted in
-  `openspec/specs/`?
+  callers, rollback. Breaks of existing requirements are checked at level 3.
 - **Convention obligations:** updates the project's own rules require alongside
   this change (docs and env tables kept in sync, generated artifacts regenerated,
-  schema tables updated) that the plan omits.
+  schema tables updated) that the plan omits. Example: a new or changed LLM call
+  whose spec does not state its inputs, its outputs and what it deliberately does
+  not receive.
 - **Verification adequacy:** does any scenario actually exercise the risky part,
   or only the happy path?
 
-For each gap, name **where it belongs**: a new `#### Scenario:` under an existing
-requirement, a new `### Requirement:`, a design decision, or a Non-Goal if the
-right answer is to exclude it explicitly.
+For each gap, name **where it belongs**:
 
-### Level 3 — Do the artifacts agree with each other?
+- a new `#### Scenario:` under an existing requirement, or a new
+  `### Requirement:`, for behavior the change must have
+- a design decision
+- a Non-Goal, if the right answer is to exclude the case explicitly
+- the design's Risks / Trade-offs, as `[Risk] → Mitigation`, for a risk, a limit
+  or a hidden assumption that the change accepts
+- the design's Open Questions, only for an unknown that can wait without changing
+  the specs, the approach or the tasks
+
+### Level 3 — Do the artifacts agree with each other and with the existing specs?
 
 Structural validation has already run, so ignore formatting and check semantics:
 
@@ -105,15 +122,25 @@ Structural validation has already run, so ignore formatting and check semantics:
   iterative: a revision that changes a budget, a threshold, a set of accepted
   values or the name of a state usually edits some of the requirements that
   state it and leaves the rest asserting the superseded rule. Each one then
-  reads fine alone.
+  reads fine alone. Also check that no scenario or decision requires something
+  that the proposal or the design lists as a Non-Goal.
+- **No Open Question in the design changes the specs, the approach or the
+  tasks.** OpenSpec requires such a question to be resolved before tasks are
+  written.
 - **Every figure repeated across artifacts agrees** — counts, budgets, limits,
   timings, cost estimates. A number restated in the proposal, the design and a
   spec is three places to update and the likeliest thing to be left stale.
-- No requirement contradicts an existing requirement in `openspec/specs/`.
+- **The change updates, removes or follows every existing requirement it
+  affects,** in every capability in `openspec/specs/`, including the capabilities
+  that the change does not list. To update or remove a requirement, the change
+  needs a `MODIFIED` or `REMOVED` delta. A break of an existing requirement with
+  no delta is Critical: it silently breaks a contracted behavior.
 
 ## Output format
 
-Return findings only. **Do not edit any file. Do not write code.** Emit a list;
+Return findings only. **Do not edit any file. Do not write code.** Quote the code
+and the specs of this repository freely. Do not quote live output, eval data or
+files from a private repository: describe them in generic terms. Emit a list;
 for each finding:
 
 - **Level** — 1, 2, or 3
