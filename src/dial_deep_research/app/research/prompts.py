@@ -1053,8 +1053,12 @@ your instructions.
 
 
 REPORT_REVISION_REQUEST = """\
-The draft below was reviewed and needs revision. Rewrite it in full, addressing every point,
-and keeping everything the draft already got right. Output only the revised report.
+The draft below was reviewed and needs revision. Apply each change listed below to the draft, and
+change nothing else:
+- When an item asks to add a value, add it with its citation where the item says.
+- When an item asks to correct or remove a passage, change only that passage.
+- Keep every other sentence, table row and citation of the draft as it is.
+Output the whole revised report, and only the report.
 
 Measured length of the draft: {word_count} words — a count that already leaves out
 {length_exemptions}. Ceiling: {max_words} words.
