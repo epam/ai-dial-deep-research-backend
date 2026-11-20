@@ -76,7 +76,9 @@ and focus — SHALL be explicitly settled by the user before the request passes,
 the check SHALL NOT assume or invent a default for a missing dimension. Vague time
 references (e.g. "latest", "recent", "current") SHALL be treated as unsettled and
 clarified by asking the user for a concrete period; the check SHALL NOT resolve them
-itself. Time references anchored to a named event or era (e.g. "Trump's first
+itself. The latest, most recent or current value of an indicator is not such a reference: it is
+the indicator's latest actual value, it is settled and needs no period. Time references
+anchored to a named event or era (e.g. "Trump's first
 presidency") SHALL instead be resolved by proposing concrete dates from the
 assistant's own knowledge for the user to confirm, counting as settled only once the
 user confirms them. A material dimension that was previously asked but
@@ -106,6 +108,10 @@ writer and report review see the user's request only as this query restates it (
 #### Scenario: Vague time reference is clarified
 - **WHEN** the request uses a vague time reference (e.g. "latest" or "recent") with no concrete period
 - **THEN** the clarity check SHALL record a question asking the user to pin down a concrete period, and SHALL NOT resolve it itself
+
+#### Scenario: The current value of an indicator needs no period
+- **WHEN** the request asks for the current unemployment rate of Canada, with no period given
+- **THEN** the clarity check SHALL record no question about the time period
 
 #### Scenario: Event-anchored period is resolved for confirmation
 - **WHEN** the request anchors the time period to a named event or era (e.g. "Trump's first presidency") rather than concrete dates
@@ -305,6 +311,36 @@ result.
 - **THEN** the preparation agent SHALL say that research does not compute figures and that the
   report will give the cited figures the calculation needs where no source states it, and no
   recorded plan item SHALL ask to calculate the elasticity or promise a calculated result
+
+### Requirement: The plan asks for the latest actual value of an indicator
+
+When the query asks for the latest, most recent or current value of an indicator, the plan item
+SHALL ask for its latest actual value, not the last observation of the series, because a dataset
+series can run past today with forecasts. The plan SHALL name no year for that value: which period
+is the latest actual one depends on the series. A query for a forecast, or for a stated period,
+SHALL be planned as asked.
+
+#### Scenario: The most recent value is planned as the latest actual value
+
+- **WHEN** the user asks for the most recent real GDP growth rate of Canada from the World Economic
+  Outlook dataset, whose series run several years past today with forecasts
+- **THEN** the plan SHALL ask for Canada's latest actual real GDP growth rate, and SHALL NOT ask
+  only for the latest observation of the series
+
+#### Scenario: The plan names no year for the latest actual value
+
+- **WHEN** the user asks for the current inflation rate of Canada
+- **THEN** the plan SHALL ask for the latest actual value without fixing it to one calendar year
+
+#### Scenario: A forecast query is planned as a forecast
+
+- **WHEN** the user asks for the furthest-ahead forecast of Canada's real GDP growth
+- **THEN** the plan SHALL ask for that forecast, and SHALL NOT ask for the latest actual value
+
+#### Scenario: A stated period is planned as asked
+
+- **WHEN** in March 2031 the user asks for Canada's real GDP growth rate last year
+- **THEN** the plan SHALL ask for the value for 2030
 
 ### Requirement: approve_plan independently verifies approval and plan integrity
 
