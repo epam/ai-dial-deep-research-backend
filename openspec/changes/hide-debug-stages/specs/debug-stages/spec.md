@@ -9,13 +9,18 @@ people who run Deep Research, and lets each deployment decide whether the second
 
 ### Requirement: The deployment decides whether debug stages are emitted
 
-The app SHALL read a boolean environment variable `SHOW_DEBUG_STAGES`, default `true`. When it is
+The app SHALL read a boolean environment variable `SHOW_DEBUG_STAGES`, default `false`. When it is
 `true`, the app SHALL emit every debug stage. When it is `false`, the app SHALL emit no debug stage
 at all, in every deployment the process serves. A turn cannot change this setting.
 
-#### Scenario: Debug stages are shown by default
+#### Scenario: Debug stages are hidden by default
 
 - **WHEN** `SHOW_DEBUG_STAGES` is unset and a research turn calls a tool
+- **THEN** the turn SHALL emit no `[TOOL]` result stage
+
+#### Scenario: A deployment that shows debug stages emits them
+
+- **WHEN** `SHOW_DEBUG_STAGES` is `true` and a research turn calls a tool
 - **THEN** the turn SHALL emit the tool's `[TOOL]` result stage
 
 #### Scenario: A deployment that hides debug stages emits none

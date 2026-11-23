@@ -26,6 +26,14 @@
 - [x] 3.1 Run `make format`, `make lint` and `make test`, and verify all pass
 - [x] 3.2 Run `openspec validate hide-debug-stages --strict` and verify it passes
 
+## 4. Hidden by default
+
+- [x] 4.1 Change the default of `show_debug_stages` to `False` in `settings.py`, and update its
+  comment, the README environment-variables table and `.env.example`; verify a unit test checks
+  the default
+- [x] 4.2 Add a shared fixture that turns debug stages on, and use it in the tests that check the
+  content of debug stages; verify `make test` passes
+
 ## Workflow follow-up
 
 - Archive the change once it is merged.

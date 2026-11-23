@@ -33,8 +33,12 @@ several steps, and stays as it is.
 **An environment variable, not an application property.** `settings.py` gives the rule: what varies
 per environment for the same client is an env field, what varies per client is an application
 property. Whether debug stages are shown differs between a client's test and production
-environments, so it is an env field: `show_debug_stages: bool = True`, read from
+environments, so it is an env field: `show_debug_stages: bool = False`, read from
 `SHOW_DEBUG_STAGES`.
+
+**Hidden by default.** A deployment that leaves the variable unset shows users only the activity
+stage, which is the safe way to fail. The people who need debug stages turn them on in the
+environments where they work.
 
 **One function emits a debug stage.** `emit_debug_stage(choice=..., title=..., body=...)` in
 `utils/dial_stages.py` opens the stage, appends the body and closes it, or returns without doing
@@ -55,8 +59,11 @@ application, so a client that relays its stages cannot be the only place that hi
 - [A failure recorded only in a debug stage, such as a failed blind review, is not visible to the
   user when debug stages are hidden] → The same failure is logged as a warning, as the
   report-composition spec already requires. User is not intended to see that message.
+- [Environments that rely on debug stages lose them after the upgrade] → Each of them sets
+  `SHOW_DEBUG_STAGES=true` as part of the upgrade.
 
 ## Migration Plan
 
-The default keeps today's behavior. An environment that should hide debug stages sets
-`SHOW_DEBUG_STAGES=false` and restarts. Rollback is removing the variable.
+The default hides debug stages, so the upgrade changes what every environment shows. An
+environment that should keep showing them, such as a development or review environment, sets
+`SHOW_DEBUG_STAGES=true` and restarts.

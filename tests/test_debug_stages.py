@@ -31,12 +31,12 @@ def _tool_call(call_id: str) -> dict[str, Any]:
     return {"name": "rag_search", "args": {"q": "gdp"}, "id": call_id}
 
 
-def test_debug_stages_are_shown_by_default() -> None:
-    assert Settings.model_fields["show_debug_stages"].default is True
+def test_debug_stages_are_hidden_by_default() -> None:
+    assert Settings.model_fields["show_debug_stages"].default is False
 
 
-def test_a_debug_stage_is_emitted_when_shown(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(settings, "show_debug_stages", True)
+@pytest.mark.usefixtures("debug_stages_shown")
+def test_a_debug_stage_is_emitted_when_shown() -> None:
     choice = ChoiceSpy()
 
     emit_debug_stage(choice=choice, title="[DEBUG] title", body="body")  # type: ignore[arg-type]

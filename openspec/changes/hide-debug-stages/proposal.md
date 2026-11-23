@@ -6,12 +6,13 @@ A research turn shows every stage the app emits: tool calls with their arguments
 research and report reviews, failed revisions and snapshot decisions. These stages help the people
 who run Deep Research, but in a client's production environment they bury the few stages that tell
 the user what is happening. Deep Research is also opened directly as its own application, so a
-caller that relays its stages cannot be the only place that hides them.
+caller that relays its stages cannot be the only place that hides them. Hiding them by default
+means a deployment that leaves the variable unset cannot show them to users.
 
 ## What Changes
 
-- A new environment variable `SHOW_DEBUG_STAGES` (default `true`) decides, per deployment, whether
-  the app emits debug stages. With `false`, the app does not emit them at all.
+- A new environment variable `SHOW_DEBUG_STAGES` (default `false`) decides, per deployment, whether
+  the app emits debug stages. Debug stages are hidden unless a deployment sets it to `true`.
 - The debug stages are: the tool result stages (`[TOOL] …`), the research-review stages
   (`[RESEARCH REVIEW RESULT] …`, the exhausted-budget one included), the report-review stages
   (`[REPORT REVIEW RESULT] …`, the delivered-without-review one included), the failed-revision stage
@@ -38,6 +39,6 @@ caller that relays its stages cannot be the only place that hides them.
   skips it), and the places that emit debug stages: `app/completion.py`,
   `app/research/runner.py`, `app/preparation/runner.py`, `app/playground/runner.py`.
 - Docs: README environment-variables table, `.env.example`.
-- Deployment: environments that should hide debug stages set `SHOW_DEBUG_STAGES=false`. A client
-  that relays Deep Research's stages has to relay all of them, since the
-  filtering happens in Deep Research.
+- Deployment: environments that should show debug stages, such as development and review
+  environments, set `SHOW_DEBUG_STAGES=true`. A client that relays Deep Research's stages has to
+  relay all of them, since the filtering happens in Deep Research.
