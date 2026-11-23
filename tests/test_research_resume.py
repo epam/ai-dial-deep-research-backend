@@ -2435,6 +2435,27 @@ def test_a_reused_snapshot_is_shown_before_research_starts_and_logged(
     assert record == "Snapshot reused: " + " ".join(f"{key}={value}" for key, value in expected)
 
 
+def test_a_deployment_that_hides_debug_stages_resumes_without_the_snapshot_stage(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    turn_dial: _TurnDial,
+    research: type[_ResearchSpy],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(completion_module.settings, "show_debug_stages", False)
+    monkeypatch.setattr(completion_module, "PrepAgentRunner", _prep_runner(_hand_off))
+    caplog.set_level(logging.INFO)
+
+    result = _post_turn(
+        client, _conversation(("yes, go", _failed_research_state()), ("continue", None))
+    )
+
+    [run] = research.runs
+    assert run["resumed"] is not None
+    assert "[DEBUG] reusing snapshot" not in [title for title, _ in result.stages()]
+    assert any("Snapshot reused" in r.getMessage() for r in caplog.records)
+
+
 def test_a_reused_snapshot_at_report_review_shows_the_round(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

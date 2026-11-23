@@ -75,6 +75,11 @@ class Settings(BaseSettings):
     # renders inline citation pills. A demonstration surface, not a product one.
     enable_annotations_demo: bool = False
 
+    # When false, the app emits no debug stage: tool calls, research and report reviews, failed
+    # revisions and snapshot decisions. The activity stage that names the current step stays.
+    # Set it to false where users should see only the research progress.
+    show_debug_stages: bool = True
+
     # opik tracing
     opik_tracing_enabled: bool = False
     opik_project_name: str = Field(default="deep-research", min_length=1)

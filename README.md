@@ -74,6 +74,7 @@ The app authenticates to DIAL Core (LLM calls, file operations, and the deployme
 | `LOG_PAYLOADS_MAX_LENGTH` | `2000` | No | Per-string character cap for payload records when `LOG_PAYLOADS=true`; longer values are truncated with a marker. Inert otherwise. | positive integer |
 | `ENABLE_PLAYGROUND_CHANNEL` | `false` | No | Also register the `deep-research-playground` deployment: a tool-calling agent over the configured MCP servers, with no clarification or research flow, for testing MCP tools. | `true`, `false` |
 | `ENABLE_ANNOTATIONS_DEMO` | `false` | No | Also register the `deep-research-annotations-demo` deployment: a fixed report citing the PDFs the caller attaches, its citations converted into inline citation annotations by the shared citation code, for checking how a client renders them. See [Inline citations demo](#inline-citations-demo). | `true`, `false` |
+| `SHOW_DEBUG_STAGES` | `true` | No | Emit the debug stages: tool calls (`[TOOL]`), research and report reviews (`[RESEARCH REVIEW RESULT]`, `[REPORT REVIEW RESULT]`), failed revisions (`[REPORT REVISION FAILED]`) and snapshot decisions (`[DEBUG]`). Set `false` where users should see only the stage that names the current research step. Applies to every deployment the app serves. | `true`, `false` |
 | **DIAL Core** | | | | |
 | `DIAL_URL` | | ⚠️ Yes | Where the app finds DIAL Core. No built-in default. | |
 | `DIAL_APP_NAME` | `deep-research` | No | OTel service name for traces. | |
