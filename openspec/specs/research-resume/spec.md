@@ -843,9 +843,10 @@ When research starts and the history holds a snapshot, the turn SHALL show one s
 "[DEBUG] reusing snapshot" when the run resumes from the snapshot, and "[DEBUG] existing snapshot
 discarded" when the plan ids differ, the snapshot is marked not resumable, one of its images is
 gone, its format version is not one this code reads, or it cannot be read. Both stages SHALL carry
-only ids, names and counts. They SHALL always be emitted, because "[DEBUG]" is only part of the
-title. No such stage SHALL be shown when no snapshot is found, or when the turn fails before
-deciding: an image that cannot be downloaded fails the turn without a stage.
+only ids, names and counts. They are debug stages (see **debug-stages**), so they SHALL be emitted
+only when the deployment shows debug stages. No such stage SHALL be shown when no snapshot is found,
+or when the turn fails before deciding: an image that cannot be downloaded fails the turn without a
+stage.
 
 #### Scenario: A reused snapshot
 
@@ -871,3 +872,9 @@ deciding: an image that cannot be downloaded fails the turn without a stage.
 - **WHEN** research starts and the latest snapshot's plan id is not a string
 - **THEN** the "[DEBUG] existing snapshot discarded" stage SHALL carry the current plan id and the
   reason that the snapshot is unreadable, and SHALL carry no plan id for the snapshot
+
+#### Scenario: A deployment that hides debug stages shows no snapshot stage
+
+- **WHEN** `SHOW_DEBUG_STAGES` is `false` and research resumes from a snapshot
+- **THEN** the turn SHALL resume from the snapshot and SHALL show no "[DEBUG] reusing snapshot"
+  stage
