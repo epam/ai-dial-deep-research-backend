@@ -29,6 +29,8 @@ from tests.citation_fakes import no_lookups
 from tests.dial_spies import ChoiceSpy
 from tests.mcp_fakes import BOTH_SOURCE_KINDS
 
+pytestmark = pytest.mark.usefixtures("debug_stages_shown")
+
 _STATUS = "update_status"
 
 

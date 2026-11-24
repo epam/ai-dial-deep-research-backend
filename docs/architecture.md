@@ -260,10 +260,10 @@ sequenceDiagram
         K->>K: download the snapshot's images
     end
     alt every image downloaded
-        K-->>C: closed stage "[DEBUG] reusing snapshot"
+        K-->>C: closed stage "[DEBUG] reusing snapshot"<br/>(a debug stage)
         K->>G: enter at the snapshot's resume point,<br/>every channel from the snapshot
     else the plan changed, it is not resumable or cannot be read, or an image is gone (404)
-        K-->>C: closed stage "[DEBUG] existing snapshot discarded"
+        K-->>C: closed stage "[DEBUG] existing snapshot discarded"<br/>(a debug stage)
         K->>G: start fresh from the approved plan, in this turn
     end
     G-->>C: report appended once + state (research_started)
@@ -483,8 +483,8 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   revised and DIAL content is append-only, so no rejected draft ever reaches the user. The same node
   writes the first draft and every revision, branching on whether a draft already exists.
   Research-agent, research-review and report-review output never become assistant content;
-  research-agent tool calls surface as timed DIAL stages. What reaches the user is that draft after
-  the delivery step below, the one permitted transformation between the two.
+  research-agent tool calls surface as timed DIAL debug stages. What reaches the user is that draft
+  after the delivery step below, the one permitted transformation between the two.
 - **Report delivery** (`ResearchRunner._deliver_report`, `app/research/citations.py`,
   `app/research/references.py`, `app/research/file_sharing.py`,
   `app/research/document_metadata.py`,
@@ -676,6 +676,12 @@ The rest of the loop, in brief — each item is specified in the linked specs:
   it stands, without another review call: its verdict could not be acted on. A failed
   report-review call or a failed revision is absorbed rather than failing the turn. `1` skips
   report-review entirely.
+- **Debug stages**: the tool result stages, the research-review and report-review stages, the
+  exhausted-budget stages, the failed-revision stage and the snapshot stages are debug stages. The
+  app emits them only when the `SHOW_DEBUG_STAGES` env var is `true`, and it is `false` by default.
+  The activity stage is always emitted, and logs and state do not depend on the setting. The
+  bullets below describe each stage when it is emitted. See
+  [debug-stages](../openspec/specs/debug-stages/spec.md).
 - **Research-review stage**: each research-review call emits one DIAL stage, titled
   `[RESEARCH REVIEW RESULT]`, carrying the reviewed iteration with the iteration cap, the
   reviewer's assessment, and the next steps as a numbered list — or a line stating that research is
