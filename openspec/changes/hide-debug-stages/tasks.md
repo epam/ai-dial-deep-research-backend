@@ -2,9 +2,9 @@
 
 ## 1. Setting
 
-- [x] 1.1 Add `show_debug_stages: bool = True` to `Settings` in `settings.py`, with a comment saying
-  what it hides, and add `SHOW_DEBUG_STAGES` to the README environment-variables table and to
-  `.env.example`; verify `make lint` passes
+- [x] 1.1 Add `show_debug_stages: bool = True` (task 4.1 changed the default to `False`) to
+  `Settings` in `settings.py`, with a comment saying what it hides, and add `SHOW_DEBUG_STAGES` to
+  the README environment-variables table and to `.env.example`; verify `make lint` passes
 
 ## 2. Emitting debug stages
 

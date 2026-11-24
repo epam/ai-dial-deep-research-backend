@@ -32,13 +32,20 @@ means a deployment that leaves the variable unset cannot show them to users.
 
 - `research-resume`: the snapshot stages ("[DEBUG] reusing snapshot", "[DEBUG] existing snapshot
   discarded") are emitted only when the deployment shows debug stages.
+- `dial-agent-with-mcp`: the `[TOOL]` result stages are emitted only when the deployment shows
+  debug stages.
+- `research-execution`: the research-review stage and the exhausted-budget stage are emitted only
+  when the deployment shows debug stages.
+- `report-composition`: the report-review stage, the unreviewed-delivery stage and the
+  failed-revision stage are emitted only when the deployment shows debug stages. Their INFO
+  records are written either way.
 
 ## Impact
 
 - Code: `settings.py` (new field), `utils/dial_stages.py` (one function that emits a debug stage or
   skips it), and the places that emit debug stages: `app/completion.py`,
   `app/research/runner.py`, `app/preparation/runner.py`, `app/playground/runner.py`.
-- Docs: README environment-variables table, `.env.example`.
+- Docs: README environment-variables table, `.env.example`, `docs/architecture.md`.
 - Deployment: environments that should show debug stages, such as development and review
   environments, set `SHOW_DEBUG_STAGES=true`. A client that relays Deep Research's stages has to
   relay all of them, since the filtering happens in Deep Research.
