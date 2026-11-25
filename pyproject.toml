@@ -25,7 +25,8 @@ dependencies = [
     # mcp 2 moves its HTTP clients to HTTPX2, and tool_failures.py reads an MCP failure's HTTP
     # status from `httpx.HTTPStatusError`, so it stays below 2. 1.30.0 fixes CVE-2026-59951.
     "mcp>=1.30.0,<2.0.0",
-    "langgraph>=1.1,<2",
+    # 1.2.14 fixes CVE-2026-118667.
+    "langgraph>=1.2.14,<2",
     "pyyaml>=6.0.0,<7.0.0",
     # The emoji check matches the Unicode property Extended_Pictographic, which `re` cannot.
     "regex>=2026.6.28",
