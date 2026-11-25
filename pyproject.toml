@@ -33,7 +33,7 @@ dependencies = [
     # Page count of the PDFs the annotations demo is called with. Pure Python, no native build.
     # 6.21.2 fixes CVE-2026-113786, CVE-2026-113789 to CVE-2026-113795, CVE-2026-115572,
     # CVE-2026-115580 and CVE-2026-115585.
-    "pypdf>=6.21.2,<7.0.0",
+    "pypdf>=6.21.4,<7.0.0",
 ]
 
 [project.urls]
