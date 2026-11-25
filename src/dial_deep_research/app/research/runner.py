@@ -58,6 +58,7 @@ from dial_deep_research.utils.dial_stages import (
     DialStageResearchReviewFormatter,
     DialStageToolCallFormatter,
     PendingToolCall,
+    emit_debug_stage,
     log_tool_call_completed,
 )
 
@@ -1016,8 +1017,7 @@ class ResearchRunner:
         body = DialStageToolCallFormatter.format_body(
             args_json=tool_call.args_json, content=msg.content, is_error=is_error
         )
-        with self._choice.create_stage(title) as result_stage:
-            result_stage.append_content(body)
+        emit_debug_stage(choice=self._choice, title=title, body=body)
 
     def _emit_research_review_result_stage(self, outcome: ResearchReviewOutcome) -> None:
         """Render one research review as a DIAL stage.
@@ -1038,8 +1038,7 @@ class ResearchRunner:
             assessment=outcome.assessment,
             next_steps=outcome.next_steps,
         )
-        with self._choice.create_stage(title) as stage:
-            stage.append_content(body)
+        emit_debug_stage(choice=self._choice, title=title, body=body)
 
     def _emit_research_budget_exhausted_stage(self, outcome: ResearchBudgetExhausted) -> None:
         """Announce a coverage review the iteration cap skipped.
@@ -1053,8 +1052,7 @@ class ResearchRunner:
             research_iteration=outcome.research_iteration,
             max_research_iterations=outcome.max_research_iterations,
         )
-        with self._choice.create_stage(title) as stage:
-            stage.append_content(body)
+        emit_debug_stage(choice=self._choice, title=title, body=body)
 
     def _emit_report_review_result_stage(self, outcome: ReportReviewOutcome) -> None:
         """Render one report review as a DIAL stage.
@@ -1080,8 +1078,7 @@ class ResearchRunner:
             grounded_review_error=outcome.grounded_review_error,
             reviews=outcome.reviews,
         )
-        with self._choice.create_stage(title) as stage:
-            stage.append_content(body)
+        emit_debug_stage(choice=self._choice, title=title, body=body)
 
     def _emit_report_budget_exhausted_stage(self, outcome: ReportBudgetExhausted) -> None:
         """Announce a delivery whose draft the version budget left unreviewed.
@@ -1100,8 +1097,7 @@ class ResearchRunner:
             length_exemptions=LENGTH_EXEMPTIONS,
             max_versions=outcome.max_versions,
         )
-        with self._choice.create_stage(title) as stage:
-            stage.append_content(body)
+        emit_debug_stage(choice=self._choice, title=title, body=body)
 
     def _emit_report_revision_failed_stage(self, outcome: ReportRevisionFailure) -> None:
         """Announce a revision the report call could not write, and the draft delivered instead.
@@ -1119,5 +1115,4 @@ class ResearchRunner:
             delivered_draft_number=outcome.delivered_draft_number,
             error=outcome.error,
         )
-        with self._choice.create_stage(title) as stage:
-            stage.append_content(body)
+        emit_debug_stage(choice=self._choice, title=title, body=body)

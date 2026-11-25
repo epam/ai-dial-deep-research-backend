@@ -30,6 +30,7 @@ from dial_deep_research.utils.content import extract_text_from_content
 from dial_deep_research.utils.dial_stages import (
     DialStageToolCallFormatter,
     PendingToolCall,
+    emit_debug_stage,
     log_tool_call_completed,
 )
 
@@ -142,8 +143,7 @@ class PrepAgentRunner:
         body = DialStageToolCallFormatter.format_body(
             args_json=tool_call.args_json, content=msg.content, is_error=is_error
         )
-        with self._choice.create_stage(title) as result_stage:
-            result_stage.append_content(body)
+        emit_debug_stage(choice=self._choice, title=title, body=body)
 
     def _handle_message_chunk(self, chunk: BaseMessage, metadata: dict) -> None:
         # Only stream the main model node's tokens. The nested structured-output
