@@ -35,7 +35,7 @@ from tests.citation_fakes import no_lookups
 from tests.dial_spies import ChoiceSpy
 from tests.mcp_fakes import BOTH_SOURCE_KINDS
 
-pytestmark = pytest.mark.asyncio
+pytestmark = [pytest.mark.asyncio, pytest.mark.usefixtures("debug_stages_shown")]
 
 _ASSESSMENT = "The 2025 figure rests on a search summary rather than on the source page."
 _STEPS = ["Open the source page.", "Confirm the 2025 figure there."]

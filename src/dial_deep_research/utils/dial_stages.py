@@ -4,7 +4,10 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
+from aidial_sdk.chat_completion import Choice
 from pydantic import BaseModel
+
+from dial_deep_research.settings import settings
 
 _RESULT_EMOJI = "✅"
 _ERROR_EMOJI = "❌"
@@ -12,6 +15,18 @@ _WARNING_EMOJI = "⚠️"
 # An outcome that sends a review loop round again. Not a warning: more work following is the loop
 # working as designed, and a warning icon would claim a problem where there is none.
 _IN_PROGRESS_EMOJI = "🔄"
+
+
+def emit_debug_stage(*, choice: Choice, title: str, body: str) -> None:
+    """Emit a closed stage carrying `body`, unless the deployment hides debug stages.
+
+    Use it for every stage that helps the people running Deep Research rather than telling the
+    user what the research is doing (see the debug-stages spec).
+    """
+    if not settings.show_debug_stages:
+        return
+    with choice.create_stage(title) as stage:
+        stage.append_content(body)
 
 
 class PendingToolCall(BaseModel):

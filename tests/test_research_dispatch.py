@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Any, cast
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.types import ValuesStreamPart
@@ -29,6 +30,8 @@ from dial_deep_research.app.research.nodes import ReportBudgetExhausted
 from dial_deep_research.app.research.runner import ResearchRunner
 from dial_deep_research.app_properties import ApplicationProperties
 from tests.dial_spies import ChoiceSpy
+
+pytestmark = pytest.mark.usefixtures("debug_stages_shown")
 
 
 def _make_runner(*, content_already_streamed: bool = False) -> tuple[ResearchRunner, ChoiceSpy]:

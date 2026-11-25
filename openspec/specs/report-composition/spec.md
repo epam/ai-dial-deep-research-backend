@@ -215,11 +215,16 @@ requirement bounds what such a request can ever do, whenever it arrives.
 
 ### Requirement: Every report review is visible as a DIAL stage and summarized in the logs
 
-Each report review of a draft SHALL emit one DIAL stage, so a user can see why a report was
-revised, and one INFO log record, so the loop's behavior is measurable without reading anyone's
-report. The blind review and the grounded review (see the loop requirement below) SHALL each emit
-one INFO log record of their own besides, because every model call gets its own record (see
-**logging-policy**, "LLM call logging").
+Each report review of a draft SHALL emit one DIAL stage, so the people running Deep Research can
+see why a report was revised, and one INFO log record, so the loop's behavior is measurable without
+reading anyone's report. The blind review and the grounded review (see the loop requirement below)
+SHALL each emit one INFO log record of their own besides, because every model call gets its own
+record (see **logging-policy**, "LLM call logging").
+
+The stages this requirement describes are debug stages (see **debug-stages**): the report-review
+stage, the unreviewed-delivery stage and the failed-revision stage. The app SHALL emit them only
+when the deployment shows debug stages, and this requirement describes them when they are emitted.
+The INFO records SHALL be written whether or not the stages are emitted.
 
 **The stage** SHALL carry:
 
@@ -242,9 +247,9 @@ are told apart by their prefixes (see **research-execution**).
 A review that produced no violations SHALL still emit a stage, recording that the draft was approved.
 A review whose **blind review failed** SHALL emit one too, recording the failure — alongside the
 app-measured length violation when the draft is over the ceiling — the same principle as a tool
-error stage: the user sees that a step ran and what came of it. A failed grounded review SHALL be
-recorded in the same stage the same way, naming which of the two reviews failed, beside whatever the
-other one found.
+error stage: the reader of the stage sees that a step ran and what came of it. A failed grounded
+review SHALL be recorded in the same stage the same way, naming which of the two reviews failed,
+beside whatever the other one found.
 
 A draft delivered because the version budget ran out gets no review (see the loop requirement
 below), and that delivery SHALL still emit one stage and one INFO record, so "review approved the
@@ -275,9 +280,9 @@ allowlist.
 **The two channels carry deliberately different amounts, and this asymmetry is the requirement, not an
 oversight.** Violations are LLM response text, which the **logging-policy** capability's content
 allowlist forbids in a log record at any level. A DIAL stage is not a log record: it is part of the
-response, shown to the user who asked for the report, and stage bodies already carry retrieved content
-today. So the violation text SHALL appear in the stage and SHALL NOT appear in any log record — not
-truncated, not summarized, not at DEBUG.
+response, shown to whoever reads the response when the deployment shows debug stages, and tool
+stage bodies already carry retrieved content. So the violation text SHALL appear in the stage and
+SHALL NOT appear in any log record — not truncated, not summarized, not at DEBUG.
 
 Showing violations does not show drafts: the rejected draft itself SHALL still stay out of the
 response (see **research-execution**), and a violation SHALL NOT be padded out into a reproduction of
