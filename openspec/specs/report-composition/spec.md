@@ -577,13 +577,16 @@ report writer, which sees the failed results among its findings.
 The report SHALL give every figure as a source states it, and SHALL compute nothing. A calculation
 is arithmetic or modelling that produces a number no source gives: a growth rate derived from two
 levels, a difference or a gap in percentage points, a ratio, a multiple such as "twice as large", a
-share, a sum, an average, an elasticity or a regression estimate. Three things are not
-calculations and stay allowed: a comparison that produces no new number, such as which value is
-larger, a rank, or the direction of a change; writing a value in another notation, such as a
-fraction as a percentage; and rounding a value given with more digits than a reader can use, such
-as 0.0473918265 written as 4.74%. The writer's rule section and report review's check SHALL be
-built from this definition in one wording (`CALCULATION_DEFINITION`), so the two cannot drift
-apart.
+share, a sum, an average, an elasticity or a regression estimate. A comparison that produces no new
+number, such as which value is larger, a rank, or the direction of a change, is not a calculation
+and stays allowed. A change of unit, scale or notation that needs no rate, such as a fraction
+written as a percentage, and a rounding are not calculations, but they are not allowed either: the
+definition SHALL say that the faithful-relay rule "Each figure with its source's value, unit and
+period" forbids them (see **faithful-relay**, "Rule 4 — figures keep their source's value, unit and
+period"). The definition SHALL NOT list them as allowed. A conversion that needs a rate, such as
+into another currency, SHALL stay a calculation. The
+writer's rule section and report review's check SHALL be built from this definition in one wording
+(`CALCULATION_DEFINITION`), so the two cannot drift apart.
 
 - **Report writer.** Its prompt SHALL carry this rule as a section of its own, headed "No
   calculation by research or the report". Flagging a computed number as the report's own inference
@@ -603,8 +606,8 @@ apart.
 - **Report review.** The blind review's prompt SHALL carry a "No calculation by research or the
   report" check among its numbered checks: a number the draft presents as computed from other
   figures is a violation, even when the draft flags it as its own inference or a section's
-  description or a client-specific rule asked for it. The three allowed things above are not
-  violations. A number that carries its own citation, and that the draft does not present as
+  description or a client-specific rule asked for it. A comparison that produces no new number is
+  not a violation. A number that carries its own citation, and that the draft does not present as
   computed, is not report review's to judge, because report review cannot see the sources. A
   figure computed from values for different requested facts, such as the difference between two
   growth rates, falls within this check. The blind part of the source-selection rule "Every current
@@ -639,11 +642,14 @@ apart.
   number
 - **THEN** report review SHALL NOT report a "No calculation by research or the report" violation
 
-#### Scenario: Rounding is not a calculation
+#### Scenario: The definition allows no rounding and no conversion
 
-- **WHEN** a data query returned 0.0473918265 and the draft gives it as 4.74% with the query's
-  citation
-- **THEN** report review SHALL NOT report a "No calculation by research or the report" violation
+- **WHEN** the writer's "No calculation by research or the report" section and the blind review's
+  check of the same name are rendered
+- **THEN** neither SHALL list a rounding or a change of unit, scale or notation as allowed, both
+  SHALL say that the rule "Each figure with its source's value, unit and period" forbids them, and
+  both SHALL say that a conversion that needs a rate, such as into another currency, is a
+  calculation
 
 #### Scenario: A client rule asks for a computed figure
 

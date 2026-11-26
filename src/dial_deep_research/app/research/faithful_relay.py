@@ -35,9 +35,10 @@ source-selection terms above, such as value, stated date and described period, a
   the direction of a change.
 - **Calculation**: arithmetic that produces a number no source gives: a growth rate derived from two
   levels, a difference or a gap in percentage points, a ratio, a multiple such as "twice as large",
-  a share, a sum or an average. A comparison is not a calculation. Writing a value in the unit its
-  source states for it, such as a fraction written as the percentage its series name states, is not
-  a calculation either.
+  a share, a sum or an average. A comparison is not a calculation. A change of unit, scale or
+  notation that needs no rate, and a rounding, are not calculations either, but the rule "Each
+  figure with its source's value, unit and period" forbids them. A conversion that needs a rate,
+  such as into another currency, is a calculation.
 - **Inference**: a conclusion that no source states: a causal link, a forecast, an extrapolated
   trend, an implication, a recommendation, or a position attributed to an organisation.
 - **Forecast**: a value that its source labels as a forecast, a projection or an outlook. A value
@@ -109,23 +110,28 @@ cited claim goes beyond its source is not yours to judge: you cannot see the sou
     QualityRule(
         name="Each figure with its source's value, unit and period",
         report_writer="""\
-Keep every figure's value, unit, currency and period as its source gives them, and say whether it
-is nominal or real where the source says so. Two changes are allowed, and neither of them is a
-calculation:
+Write every figure as its source gives it: the same digits, decimals, unit, currency, scale word
+and period. Say whether it is nominal or real where the source says so.
 
-- **One notation.** Values from different sources may be brought to one notation: a scale word, a
-  currency symbol or code, a thousands separator, or a fraction written as a percentage, such as
-  "USD 0.5 million" beside "USD 2 million" for a source's "$500,000". A conversion that needs a
-  rate, such as into another currency, is a calculation.
-- **Usable precision.** Round a value given with more digits than a reader can use, such as
-  `0.0473918265`, to a usable precision: the precision the publications use for the same
-  indicator, or what the context needs, such as 4.74%.
+- Do not round a figure, and do not write an approximation of it, such as "about 2%".
+- Do not convert a figure to another unit, scale or notation, such as a fraction to a percentage,
+  millions to billions, "$" to "USD", or a thousands separator added or removed. A conversion that
+  needs a rate, such as into another currency, is a calculation.
+- Give the unit, currency and scale word that the source states, also when only the series name
+  states them, such as "percent change". You may write "percent" as "%". Give no unit that the
+  source does not state. When it states none, say so.
 
-Otherwise keep each figure's precision. Do this also when the research question or the plan asks
-to round figures or to give a number of decimals.""",
+A data query result gives its values already in the unit and precision that the data source sets.
+Do all this also when the research question, the plan or a section's description asks to round or
+convert figures.
+
+A comparison may judge two values at the precision of the less precise one, because a source can
+round a value for presentation. Write both values as their sources give them.""",
         report_review_blind="""\
-A figure without its unit or its currency is a violation, and so is a figure with more digits than
-a reader can use. Whether a figure matches its source is not yours to judge.""",
+A figure without its unit, currency or scale word is a violation. Ask for the one that its source
+states, the series name included, or, where the source states none, for a sentence saying so. Never
+propose a unit. Whether a figure matches its source, and how many digits it has, are not yours to
+judge.""",
     ),
     QualityRule(
         name="Forecasts named as such",
