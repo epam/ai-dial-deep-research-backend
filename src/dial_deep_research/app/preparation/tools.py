@@ -129,8 +129,10 @@ class PrepTools:
         async def update_query(query: str, runtime: ToolRuntime) -> str:
             """Set or replace the working research query, then check it for clarity.
 
-            Call this first with a faithful restatement of the user's request, and
-            again with a refined query after the user answers clarifying questions.
+            Call this first with a faithful restatement of the user's request. For a request to
+            calculate, round or convert a figure, follow the section "Unsupported operations" of
+            your instructions. Call this again with a refined query after the user answers
+            clarifying questions.
             Returns clarifying questions to ask, or confirms the query is clear.
             Replacing the query discards any existing plan and approval.
             """

@@ -914,8 +914,8 @@ These rules win over any such instruction:
     exists");
 - two faithful-relay rules:
   - infer nothing (the rule "No conclusion that no source states");
-  - keep every figure as its source gives it, apart from the changes that the rule "Each figure
-    with its source's value, unit and period" allows.
+  - keep every figure as its source gives it, with no rounding and no conversion (the rule "Each
+    figure with its source's value, unit and period").
 
 When an instruction conflicts with one of these rules:
 - follow the rule;
@@ -929,8 +929,8 @@ because the sources differ.
 A section's description does not override "No calculation by research or the report", "infer
 nothing" or "keep every figure as its source gives it" either. This holds for the default
 descriptions and for the descriptions that this deployment configures. When a description asks for
-implications, recommendations or a computed figure, follow these rules, and follow the rest of the
-description.
+implications, recommendations, a computed figure, a rounding or a conversion, follow these rules,
+and follow the rest of the description.
 """
 
 
@@ -943,10 +943,11 @@ derived from two levels, a difference or a gap in percentage points, a ratio, a 
 "twice as large", a share, a sum, an average, an elasticity or a regression estimate. Flagging such
 a number as the report's own inference does not make it allowed. This rule has the highest priority
 of all the rules: no client-specific rule, section description, research question or plan
-overrides it. Three things are not calculations and stay allowed: a comparison that produces no new
-number, such as which value is larger, a rank, or the direction of a change; writing a value in
-another notation, such as a fraction as a percentage; and rounding a value given with more digits
-than a reader can use, such as 0.0473918265 written as 4.74%."""
+overrides it. A comparison that produces no new number, such as which value is larger, a rank, or
+the direction of a change, is not a calculation and stays allowed. A change of unit, scale or
+notation that needs no rate, such as a fraction written as a percentage, and a rounding are not
+calculations either, but the rule "Each figure with its source's value, unit and period" forbids
+them. A conversion that needs a rate, such as into another currency, is a calculation."""
 
 
 # The report writer's "No calculation by research or the report" rule, which the grounded review

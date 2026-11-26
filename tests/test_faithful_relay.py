@@ -246,9 +246,8 @@ def test_the_writer_outrank_list_carries_the_faithful_relay_prohibitions() -> No
         '- "No calculation by research or the report"; - every rule that excludes content;' in text
     )
     assert '- infer nothing (the rule "No conclusion that no source states");' in text
-    assert (
-        "- keep every figure as its source gives it, apart from the changes that the rule" in text
-    )
+    assert "- keep every figure as its source gives it, with no rounding and no conversion" in text
+    assert "a computed figure, a rounding or a conversion, follow these rules" in text
     assert (
         'does not override "No calculation by research or the report", "infer nothing" or "keep'
         ' every figure as its source gives it" either' in text
@@ -272,13 +271,40 @@ def test_the_restated_query_keeps_formatting_requests() -> None:
     assert "Keep the user's formatting requests in it, such as a unit" in _words(PREP_AGENT_SYSTEM)
 
 
-def test_a_rounding_request_does_not_change_the_precision() -> None:
+def test_the_report_writes_every_figure_as_its_source_gives_it() -> None:
     figures = next(r for r in FAITHFUL_RELAY_RULES if r.name.startswith("Each figure"))
-    assert "Two changes are allowed" in _words(figures.report_writer or "")
-    assert "Do this also when the research question or the plan asks to round figures" in _words(
-        figures.report_writer or ""
-    )
-    assert "not rounded" not in (figures.report_review_blind or "")
+    writer = _words(figures.report_writer or "")
+    assert "Do not round a figure" in writer
+    assert "Do not convert a figure to another unit, scale or notation" in writer
+    assert "also when only the series name states them" in writer
+    assert "the research question, the plan or a section's description asks to round" in writer
+    assert "client" not in writer
+    blind = _words(figures.report_review_blind or "")
+    assert "Never propose a unit" in blind
+    assert "how many digits it has, are not yours to judge" in blind
+
+
+def test_the_plan_never_asks_to_round_or_convert() -> None:
+    text = _words(PREP_AGENT_SYSTEM)
+    assert "## Unsupported operations" in text
+    assert "When the user gives an instruction to round a figure, omit the instruction" in text
+    assert "When the user gives an instruction to calculate a figure, omit the instruction" in text
+    assert "keep the target unit as the unit of the figure" in text
+    assert "in every plan step that looks for the figure" in text
+    assert "For a request to calculate, round or convert a figure, follow the section" in text
+    assert "preferably" not in text
+    assert "The plan does not mention the precision of figures." in text
+    assert "It does not name a series, an indicator or a value" in text
+
+
+def test_the_user_is_told_only_about_the_requested_operations() -> None:
+    text = _words(PREP_AGENT_SYSTEM)
+    assert "Deep Research never calculates, rounds or converts figures." in text
+    assert "tell the user in one sentence, the note" in text
+    assert "does not do the requested operations, and what the report gives instead" in text
+    assert "A request for a figure with no such instruction needs no note" in text
+    assert "Write the note once in a reply." in text
+    assert "write the note directly before the block" in text
 
 
 def test_the_default_sections_ask_for_no_inference() -> None:

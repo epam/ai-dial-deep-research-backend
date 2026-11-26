@@ -2,8 +2,8 @@
 
 DIAL Deep Research: a per-request LangChain tool-calling agent over a generic-RAG MCP server.
 Python 3.13, `poetry`-managed, `src/` layout.
-See `pyproject.toml` for `make`-equivalent targets
-(`make format`, `make lint`, `make test` if present; otherwise `poetry run black/ruff/mypy/pytest`).
+The `Makefile` has the targets `make format`, `make lint` and `make test`. `make help` lists all
+targets.
 
 ## Never commit sensitive info
 
@@ -20,13 +20,12 @@ the verdict reports a problem, fix it and run the subagent again before committi
 
 ## Rules for coding agents (Claude Code, etc)
 
-- Always use simple and clear phrasings, without unnecessary complexity.
-  Including comments, docstrings, git commits and pull requests
 - When you refer to a rule of a Deep Research quality policy, always give the policy name, the
   rule number (if the rule has one) and the rule name, for example: Source selection, rule 2
   "Every current value, with its own source". Never refer to a rule only by its number.
-- Use clear and precise wordings; never abstract and vague ones. Name the real thing instead of a
-  category, prefer one plain sentence to a chain of qualifiers, and cut words that carry no fact.
+- Use simple, clear and precise wordings, also in comments, docstrings, commits and pull requests.
+  Never use abstract and vague ones. Name the real thing instead of a category, prefer one plain
+  sentence to a chain of qualifiers, and cut words that carry no fact.
 - Abstraction is not a cure for wording that is too tied to today's implementation. Blurring it
   ("an agent loop", "the relevant component") only trades a dated sentence for a hollow one.
   Instead state plainly the part that stays true, and keep the precise mechanics in the place
@@ -35,8 +34,9 @@ the verdict reports a problem, fix it and run the subagent again before committi
   the thing; internals belong where they are implemented.
 - If not sure, ask questions. Do not make design decisions based on your assumptions.
   Except for cases when user explicitly asks you to work autonomously or make decisions yourself.
+  Do not ask when a principle of the Deep Research constitution settles the case.
 - Do not cite design docs or other code without naming the source.
-  User is not LLM and does not remember everything by heart.
+  The user is not an LLM and does not remember every document.
 - Do not present plausible reasoning as an observed fact. Anything about how a dependency,
   runtime or protocol actually behaves is a guess until checked, however sound the reasoning
   that produced it — especially quantitative claims: what counts as one unit, what scope a
@@ -51,10 +51,117 @@ the verdict reports a problem, fix it and run the subagent again before committi
   Hand-rolling a step skips rules that live only in the skill — the merge semantics in
   `openspec-sync-specs` are the easiest to miss, since `openspec archive` also updates the main
   specs and the two describe a partial `## MODIFIED` block differently.
+- Keep a single source of truth, and mind staleness (docstrings, comments, READMEs and similar).
+  Keep each fact — a concept, rule, mode, or concrete detail like a URL format, path, or name —
+  in the one place that owns it, usually the code that implements it. Do not restate it in
+  distant prose, which silently drifts when the place that owns it changes. Duplicate only with
+  a clear reason, such as a user-facing schema description that must stand alone.
+- Cross-reference sparingly, and only when motivated: a `see X` earns its place only when it
+  saves the reader real work, and it too goes stale (X gets renamed or moved). Prefer describing
+  a fact where it lives over pointing at it from afar. When unsure whether a reference or a copy
+  will age worse, prefer neither and say less.
 - Reread your draft and ask which sentences you verified and which you inferred. Check the
   inferences, or say plainly that they are unverified — do not state them flatly. A claim about
   to be copied into several places (a spec, a field description, a README) is worth the check
   twice over, since a wrong one then has to be corrected in every copy.
+
+## The Deep Research constitution
+
+The standing principles for design decisions about Deep Research. When a principle settles a case,
+decide without asking, and name the principle. The instruction of the person you work with comes
+first, then the OpenSpec specs and the output-quality policies, then this section. Report a
+conflict between them to the person you work with.
+
+1. **Correctness first.** A correct report outranks work already done: redo work rather than risk
+   misleading the reader.
+2. **Nothing made up.** Do not make up what the sources do not state.
+3. **Do not overfit.** Deep Research serves questions we cannot foresee. A rule states general
+   behaviour, and a change made for one case is weighed by its effect on other cases.
+4. **Broad rules first.** Phrase a rule as broadly as it can be without losing precision. Narrow it
+   only for a stated reason, such as a run that shows the problem.
+5. **Leave room for judgment.** A rule decides the scenarios that we can decide in advance. It does
+   not try to decide every scenario, because:
+   - we cannot foresee every scenario;
+   - in some scenarios, the right choice depends on what the sources hold, for example which near
+     match to give;
+   - in some scenarios, it depends on the intent of the query, for example which frequency to use;
+   - an LLM follows a few clear rules more reliably than many exact ones.
+
+   In such scenarios, the rule states the goal and lets Deep Research choose what is most
+   appropriate for the query. Example: when the query names no frequency, Deep Research chooses the
+   frequency that is most appropriate for the query.
+6. **Sources change.** Do not assume that a source's data, metadata, identifiers or tools stay as
+   they are today.
+7. **Generic core.** Deep Research stays client-agnostic. What depends on one client belongs in that
+   client's application properties.
+8. **Each component owns its concern.** Do not build into Deep Research what another component is
+   responsible for, and do not make other components depend on Deep Research internals.
+9. **Failures stay contained.** A failing check or optional step does not fail the other checks or
+   the rest of the pipeline.
+10. **Judge by the final report.** Judge a change by the whole final report, checked against the
+    sources, not by an intermediate step such as the plan.
+11. **The user knows what happens.** Deep Research tells the user as early as it can what it will
+    not do for a request, for example during preparation. It also tells the user when a run fails
+    and cannot recover.
+
+The section "Writing prompts" has the rules for prompts.
+
+Change this section only with the agreement of the person you work with. Propose a principle
+when a correction shows a standing decision that is not written yet.
+
+## Writing prompts
+
+These rules apply to every LLM call: its prompt text (system prompts, tool descriptions, tool
+responses and injected prompt text), its structured-output schemas and field descriptions, and the
+spec that describes the call.
+
+- **Keep prompts lean.** Add an instruction only when it is needed, and remove one that another
+  instruction already gives. Otherwise prompts grow with every change.
+- **Make every instruction explicit.** Give each case its own sentence that names the case and
+  says what to do. Do not make the model resolve a reference such as "keeps none", "neither does"
+  or "as the rules above say", and do not give an instruction only through an example. A model
+  that has to work out what an instruction means follows it less reliably.
+- **Write new and edited prompt text in Simplified Technical English (ASD-STE100) at about 70%.**
+  Apply its writing rules and relax its dictionary. Text that a change does not touch stays as it
+  is. The writing rules:
+  - Write one instruction in each sentence.
+  - Keep an instruction to at most 20 words, and a description to at most 25.
+  - Use the active voice.
+  - Put the condition before the instruction: "When X, do Y". Write three or more conditions or
+    exceptions as a list.
+  - Keep "a", "an" and "the". Do not stack nouns.
+  - Repeat the noun when a pronoun could point at two things.
+  - Use a single verb instead of a phrasal verb or an idiom: "omit", not "leave out".
+- **Write a prompt as a triple-quoted multiline string.** Do not join adjacent or parenthesized
+  string literals. Do not escape a newline with a trailing backslash to join wrapped lines: let a
+  long line wrap as a real newline, which is harmless inside an LLM prompt. Keep each source line
+  within 100 characters. A leading `"""\` that avoids a blank first line is fine. This keeps the
+  prompt text readable and its diffs small.
+- **Wrap injected prompt content in XML tags.** Any value the app substitutes into a prompt that
+  is long, multi-line, or carries formatting of its own — a report draft, the rendered section
+  structure, a findings log, the user's question, a plan, a topics map — goes inside a named tag
+  (`<draft>…</draft>`, `<report_structure>…</report_structure>`). The tags mark where the value
+  begins and ends, so its headings, bullets or numbering cannot be read as part of the
+  instructions around it. Use lowercase snake_case tag names that say what the value is. Short
+  scalars — a word count, a ceiling, a comma-separated list of names — stay inline; a tag around
+  a number is noise. Do not wrap a tool message that the agent must repeat verbatim to the user,
+  because the tag can leak into the reply.
+- **LLM structured-output schemas put the verdict last.** Put a decision or verdict field after
+  the supporting content that justifies it. The model emits fields in schema order, so a schema
+  that puts the reasoning first yields better decisions. Examples: `questions` before
+  `sufficient`; `revised_plan` or `problems_found` before `approved` or `verdict`. Order the
+  supporting fields by logical precedence: a precondition check comes before a check that matters
+  only once the precondition holds, such as `recorded_plan_matches` before `user_approved_a_plan`.
+  Pydantic v2 allows a required field after defaulted ones, so the order is free.
+- **Every LLM call states its inputs and outputs in the spec that owns it.** When adding an LLM
+  call or changing what an existing one receives, write it down: which system prompt and what
+  fills it, which messages (and whether history is full, filtered, or rendered to text), whether
+  image content is included, which tools are bound, and what comes back (free text, a structured
+  schema, or tool calls only). Name the deliberate omissions too — "this call does not receive
+  the findings" is part of the contract. Inputs are the one thing about an LLM call that code
+  review reliably misses. For example, a review call that judges how well the report covers its
+  images, but does not receive the images, looks correct in the diff and is wrong in production.
+  Nothing fails when a refactor quietly changes what a prompt sees.
 
 ## Sending a query to the DR server
 
@@ -85,18 +192,7 @@ Override `--timeout` as needed.
 
 ## Conventions
 
-- **LLM prompts use triple-quoted multiline strings**, not adjacent/parenthesized string-literal concatenation. Do **not** escape newlines with trailing backslashes to join wrapped lines — let long lines wrap as real newlines (harmless inside an LLM prompt) and keep each source line within the 100-col limit. A leading `"""\` to avoid a blank first line is fine. This keeps prompt copy readable and diff-friendly. Applies to system prompts (`app/preparation/prompts.py`, `app/research/prompts.py`) and any injected/middleware prompt text.
-- **Wrap injected prompt content in XML tags.** Any value the app substitutes into a prompt that
-  is long, multi-line, or carries formatting of its own — a report draft, the rendered section
-  structure, a findings log, the user's question, a plan, a topics map — goes inside a named tag
-  (`<draft>…</draft>`, `<report_structure>…</report_structure>`). The tags mark where the value
-  begins and ends, so its headings, bullets or numbering cannot be read as part of the
-  instructions around it. Use lowercase snake_case tag names that say what the value is. Short
-  scalars — a word count, a ceiling, a comma-separated list of names — stay inline; a tag around
-  a number is noise. One exception to weigh: a tool message the agent is told to reproduce
-  verbatim to the user, where a tag can leak into the reply.
 - **No new aliases on pydantic-settings fields** — rely on the default field-name → env-var mapping (with the class's `env_prefix`). E.g. `heartbeat_interval` under `env_prefix=""` reads `HEARTBEAT_INTERVAL`.
-- **LLM structured-output schemas put the verdict last.** Order fields so a decision/verdict field comes *after* the supporting content that justifies it — the model emits fields in schema order, so reasoning-first yields better decisions. E.g. `questions` before `sufficient`; `revised_plan` (or `problems_found`) before `approved` (or `verdict`). Among the supporting fields themselves, order by logical precedence — a precondition/gating check before any check that only matters once it holds (e.g. `recorded_plan_matches` before `user_approved_a_plan`). Pydantic v2 allows a required field after defaulted ones, so the ordering is free.
 - **Logging follows the `logging-policy` spec** (`openspec/specs/logging-policy/spec.md`):
   level semantics with a single-ERROR ownership rule, the INFO request skeleton, and the
   content allowlist — log structure (names, counts, durations, ids, outcomes), never message
@@ -112,19 +208,10 @@ Override `--timeout` as needed.
   the affected diagram and prose in the same change — don't leave it for later. Write for a
   reader who has neither this codebase's context nor the change history: name the current
   behavior plainly, never how it changed ("previously", "now", "instead of"). The
-  [OpenSpec specs](../openspec/specs) stay the one place that owns a requirement's full wording;
+  [OpenSpec specs](openspec/specs/) stay the one place that owns a requirement's full wording;
   this page links to the spec section and quotes only the short excerpt needed for the diagram,
   never restates a rule at length — a rule duplicated here goes stale the moment the spec changes
   and no one edits both.
-- **Every LLM call states its inputs and outputs in the spec that owns it.** When adding an LLM
-  call or changing what an existing one receives, write it down: which system prompt and what
-  fills it, which messages (and whether history is full, filtered, or rendered to text), whether
-  image content is included, which tools are bound, and what comes back (free text, a structured
-  schema, or tool calls only). Name the deliberate omissions too — "this call does not receive
-  the findings" is part of the contract. Inputs are the one thing about an LLM call that code
-  review reliably misses: a reviewer judging coverage without the images it is judging looks
-  correct in the diff and is wrong in production, and nothing fails when a refactor quietly
-  changes what a prompt sees.
 - **Never name a list-element field `index` in anything persisted to `custom_content.state`.** The DIAL SDK's chunk-merge (`aidial_sdk.utils.merge_chunks` / `_indexed_list`) treats any list of dicts whose elements carry an `index` key as an OpenAI-style indexed streaming delta — it re-slots the elements by `index` and strips the key, corrupting the stored value (a 1-based list comes back as `[{}, {…}, …]` with the key gone). Use another name (e.g. `number`) for an ordinal field on a persisted list element.
 
 ## Code Style
@@ -145,15 +232,5 @@ Override `--timeout` as needed.
   exists is durable, the thing it replaced is not. write the rule and why it holds: not
   "keying on the segment rather than on whether a tool ran", but "every chunk of one message
   carries the same id, so a change in it means a new segment". this covers docstrings and test
-  names and docstrings too: a test asserts current behavior, not the absence of a past bug.
+  names too: a test asserts current behavior, not the absence of a past bug.
 - when writing docstrings, be concise
-- single source of truth, and mind staleness (docstrings, comments, READMEs, and similar):
-  keep each fact — a concept, rule, mode, or concrete detail like a URL format, path, or
-  name — in the one place that owns it, usually the code that implements it. don't restate
-  it in distant prose, which silently drifts when the owner changes. duplicate only with a
-  clear reason — e.g. a user-facing schema description that must stand alone.
-- cross-reference sparingly, and only when motivated: a `see X` earns its place only when
-  it saves the reader real work, and it too goes stale (X gets renamed or moved). prefer
-  describing a fact where it lives over pointing at it from afar; when unsure whether a
-  reference or a copy will age worse, prefer neither and say less.
-- when writing LLM prompts, respect the line length limit of 100 characters. Newlines are fine.
