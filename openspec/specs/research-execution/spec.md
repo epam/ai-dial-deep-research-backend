@@ -242,8 +242,10 @@ research question or plan overrides it, and each step's prompt SHALL say so.
 
 ### Requirement: Every research review's findings are visible as a DIAL stage
 
-Each research-review call SHALL emit one DIAL stage, so a user can see why research ran another
-iteration or stopped. The stage SHALL carry:
+Each research-review call SHALL emit one DIAL stage, so the people running Deep Research can see
+why research ran another iteration or stopped. This stage and the exhausted-budget stage below are
+debug stages (see **debug-stages**). The app SHALL emit them only when the deployment shows debug
+stages, and this requirement describes them when they are emitted. The stage SHALL carry:
 
 - the number of the iteration just reviewed, counting from 1;
 - the reviewer's assessment of which plan items the findings cover and which they do not;

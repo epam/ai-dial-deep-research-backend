@@ -230,11 +230,16 @@ bounds what such a request can ever do, whenever it arrives.
 
 ### Requirement: Every report review is visible as a DIAL stage and summarized in the logs
 
-Each report review of a draft SHALL emit one DIAL stage, so a user can see why a report was
-revised, and one INFO log record, so the loop's behavior is measurable without reading anyone's
-report. The blind review and the grounded review (see the loop requirement below) SHALL each emit
-one INFO log record of their own besides, because every model call gets its own record (see
-**logging-policy**, "LLM call logging").
+Each report review of a draft SHALL emit one DIAL stage, so the people running Deep Research can
+see why a report was revised, and one INFO log record, so the loop's behavior is measurable without
+reading anyone's report. The blind review and the grounded review (see the loop requirement below)
+SHALL each emit one INFO log record of their own besides, because every model call gets its own
+record (see **logging-policy**, "LLM call logging").
+
+The stages this requirement describes are debug stages (see **debug-stages**): the report-review
+stage, the unreviewed-delivery stage and the failed-revision stage. The app SHALL emit them only
+when the deployment shows debug stages, and this requirement describes them when they are emitted.
+The INFO records SHALL be written whether or not the stages are emitted.
 
 **The stage** SHALL carry:
 
@@ -257,9 +262,9 @@ are told apart by their prefixes (see **research-execution**).
 A review that produced no violations SHALL still emit a stage, recording that the draft was approved.
 A review whose **blind review failed** SHALL emit one too, recording the failure — alongside the
 app-measured length violation when the draft is over the ceiling — the same principle as a tool
-error stage: the user sees that a step ran and what came of it. A failed grounded review SHALL be
-recorded in the same stage the same way, naming which of the two reviews failed, beside whatever the
-other one found.
+error stage: the reader of the stage sees that a step ran and what came of it. A failed grounded
+review SHALL be recorded in the same stage the same way, naming which of the two reviews failed,
+beside whatever the other one found.
 
 A draft delivered because the version budget ran out gets no review (see the loop requirement
 below), and that delivery SHALL still emit one stage and one INFO record, so "review approved the
@@ -290,9 +295,9 @@ allowlist.
 **The two channels carry deliberately different amounts, and this asymmetry is the requirement, not an
 oversight.** Violations are LLM response text, which the **logging-policy** capability's content
 allowlist forbids in a log record at any level. A DIAL stage is not a log record: it is part of the
-response, shown to the user who asked for the report, and stage bodies already carry retrieved content
-today. So the violation text SHALL appear in the stage and SHALL NOT appear in any log record — not
-truncated, not summarized, not at DEBUG.
+response, shown to whoever reads the response when the deployment shows debug stages, and tool
+stage bodies already carry retrieved content. So the violation text SHALL appear in the stage and
+SHALL NOT appear in any log record — not truncated, not summarized, not at DEBUG.
 
 Showing violations does not show drafts: the rejected draft itself SHALL still stay out of the
 response (see **research-execution**), and a violation SHALL NOT be padded out into a reproduction of
@@ -572,13 +577,16 @@ report writer, which sees the failed results among its findings.
 The report SHALL give every figure as a source states it, and SHALL compute nothing. A calculation
 is arithmetic or modelling that produces a number no source gives: a growth rate derived from two
 levels, a difference or a gap in percentage points, a ratio, a multiple such as "twice as large", a
-share, a sum, an average, an elasticity or a regression estimate. Three things are not
-calculations and stay allowed: a comparison that produces no new number, such as which value is
-larger, a rank, or the direction of a change; writing a value in another notation, such as a
-fraction as a percentage; and rounding a value given with more digits than a reader can use, such
-as 0.0473918265 written as 4.74%. The writer's rule section and report review's check SHALL be
-built from this definition in one wording (`CALCULATION_DEFINITION`), so the two cannot drift
-apart.
+share, a sum, an average, an elasticity or a regression estimate. A comparison that produces no new
+number, such as which value is larger, a rank, or the direction of a change, is not a calculation
+and stays allowed. A change of unit, scale or notation that needs no rate, such as a fraction
+written as a percentage, and a rounding are not calculations, but they are not allowed either: the
+definition SHALL say that the faithful-relay rule "Each figure with its source's value, unit and
+period" forbids them (see **faithful-relay**, "Rule 4 — figures keep their source's value, unit and
+period"). The definition SHALL NOT list them as allowed. A conversion that needs a rate, such as
+into another currency, SHALL stay a calculation. The
+writer's rule section and report review's check SHALL be built from this definition in one wording
+(`CALCULATION_DEFINITION`), so the two cannot drift apart.
 
 - **Report writer.** Its prompt SHALL carry this rule as a section of its own, headed "No
   calculation by research or the report". Flagging a computed number as the report's own inference
@@ -598,8 +606,8 @@ apart.
 - **Report review.** The blind review's prompt SHALL carry a "No calculation by research or the
   report" check among its numbered checks: a number the draft presents as computed from other
   figures is a violation, even when the draft flags it as its own inference or a section's
-  description or a client-specific rule asked for it. The three allowed things above are not
-  violations. A number that carries its own citation, and that the draft does not present as
+  description or a client-specific rule asked for it. A comparison that produces no new number is
+  not a violation. A number that carries its own citation, and that the draft does not present as
   computed, is not report review's to judge, because report review cannot see the sources. A
   figure computed from values for different requested facts, such as the difference between two
   growth rates, falls within this check. The blind part of the source-selection rule "Every current
@@ -634,11 +642,14 @@ apart.
   number
 - **THEN** report review SHALL NOT report a "No calculation by research or the report" violation
 
-#### Scenario: Rounding is not a calculation
+#### Scenario: The definition allows no rounding and no conversion
 
-- **WHEN** a data query returned 0.0473918265 and the draft gives it as 4.74% with the query's
-  citation
-- **THEN** report review SHALL NOT report a "No calculation by research or the report" violation
+- **WHEN** the writer's "No calculation by research or the report" section and the blind review's
+  check of the same name are rendered
+- **THEN** neither SHALL list a rounding or a change of unit, scale or notation as allowed, both
+  SHALL say that the rule "Each figure with its source's value, unit and period" forbids them, and
+  both SHALL say that a conversion that needs a rate, such as into another currency, is a
+  calculation
 
 #### Scenario: A client rule asks for a computed figure
 
@@ -1120,6 +1131,56 @@ the draft with its markers in place, which is the form the citation rules are wr
 - **WHEN** the blind review approves a draft and the grounded review reports that a figure is
   not on the page cited for it
 - **THEN** the draft SHALL be revised against that item
+
+### Requirement: A revision applies the listed changes and keeps the rest of the draft
+
+When the review returns items, the revision call SHALL change the draft only where an item asks
+for a change, and SHALL keep every other sentence, table row and citation of the draft as it is. The
+loop's last draft is delivered without a review, so a passage that a revision changes without an
+item asking for it reaches the user unchecked.
+
+The revision call SHALL receive the report writer's system prompt, the research transcript with the
+image content it holds and without the status calls, and the first draft's report request — the
+same prefix as the first draft's call — followed by one revision request. The revision request
+SHALL carry:
+
+- the instruction to apply each listed change and to change nothing else;
+- that an item asking to add a value is applied by adding the value with its citation where the
+  item says;
+- that an item asking to correct or remove a passage changes only that passage;
+- the previous draft's measured word count, the count's exemptions and the word ceiling;
+- the review items, inside a `<revision_instruction>` tag;
+- the previous draft, inside a `<draft>` tag.
+
+The revision call SHALL bind no tools and SHALL return free text: the whole revised report, and
+only the report. It does not receive the review's reasoning, only its items.
+
+A length violation is one of the listed changes, and it asks to condense the whole report (see the
+ceiling requirement), so a revision for length MAY restate every section.
+
+#### Scenario: A review asks for two small fixes
+
+- **WHEN** a review returns two items, each naming one passage to correct
+- **THEN** the revision request SHALL tell the writer to change only those passages and to keep
+  every other sentence, table row and citation of the draft as it is
+
+#### Scenario: An item asks to add a value
+
+- **WHEN** a review item asks to add a value that the draft leaves out
+- **THEN** the revision request SHALL tell the writer to add that value with its citation, where
+  the item says
+
+#### Scenario: The revision still outputs the whole report
+
+- **WHEN** a revision is written
+- **THEN** its output SHALL be the whole revised report, not a list of edits, so the loop can review
+  it or deliver it as the answer
+
+#### Scenario: A revision for length condenses the report
+
+- **WHEN** the only item is the app's length violation
+- **THEN** the revision SHALL condense the report as the length violation asks, which MAY change
+  every section, and SHALL still drop no value to fit
 
 ### Requirement: A report cites only the retrieved sources, and carries no hyperlinks
 

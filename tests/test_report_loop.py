@@ -247,6 +247,29 @@ async def test_a_revision_is_written_whenever_a_draft_exists(
     assert result == {"reports": [previous, "the revised report"]}
 
 
+async def test_a_revision_applies_the_listed_changes_and_keeps_the_rest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The last draft is delivered unreviewed, so a revision changes only what an item names."""
+    previous = "The draft with a table."
+    llm = _RecordingReportLLM("the revised report")
+    node = _report_node(llm, monkeypatch)
+
+    await node(_state(reports=[previous], report_reviews=[_round("Add the 2027 value.")]))
+
+    revision_request = llm.calls[0][-1].content
+    assert "Apply each change listed below to the draft, and\nchange nothing else" in (
+        revision_request
+    )
+    assert "add it with its citation where the item says" in revision_request
+    assert "Keep every other sentence, table row and citation of the draft as it is." in (
+        revision_request
+    )
+    assert "Output the whole revised report, and only the report." in revision_request
+    assert "<revision_instruction>\n1. Add the 2027 value." in revision_request
+    assert f"<draft>\n{previous}\n</draft>" in revision_request
+
+
 async def test_a_revision_keeps_the_first_draft_message_prefix(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

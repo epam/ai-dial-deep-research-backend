@@ -36,14 +36,13 @@ from dial_deep_research.app.research.snapshot import (
 from dial_deep_research.app.turn_lifecycle import run_logged_turn
 from dial_deep_research.app_properties import DEPLOYMENT_NAME
 from dial_deep_research.settings import PLACEHOLDER_API_KEY, settings
+from dial_deep_research.utils.dial_stages import emit_debug_stage
 from dial_deep_research.utils.image_attachments import download_snapshot_images
 from dial_deep_research.utils.llm import LLMModelConfig
 from dial_deep_research.utils.tracing import build_opik_tracer, extract_thread_id
 
 _log = logging.getLogger(__name__)
 
-# "[DEBUG]" is only part of the title: the stages are always emitted, and a client that hides
-# Deep Research's debug stages hides them.
 _SNAPSHOT_REUSED_STAGE = "[DEBUG] reusing snapshot"
 _SNAPSHOT_DISCARDED_STAGE = "[DEBUG] existing snapshot discarded"
 
@@ -53,8 +52,11 @@ def _render_facts(facts: list[tuple[str, str]]) -> str:
 
 
 def _show_snapshot_stage(choice: Choice, *, title: str, facts: list[tuple[str, str]]) -> None:
-    with choice.create_stage(title) as stage:
-        stage.append_content("\n\n".join(f"**{key}** {value}" for key, value in facts))
+    emit_debug_stage(
+        choice=choice,
+        title=title,
+        body="\n\n".join(f"**{key}** {value}" for key, value in facts),
+    )
 
 
 class _FailureRecordReason(StrEnum):

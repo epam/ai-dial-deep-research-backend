@@ -42,21 +42,31 @@ def _reviewer(*, glossary_check: bool) -> str:
 
 def test_the_plan_never_asks_for_a_calculation() -> None:
     prompt = _words(PREP_AGENT_SYSTEM)
-    assert "The plan NEVER asks to calculate, compute, derive, estimate or model a figure" in prompt
-    assert "the plan item asks research to look for a source that states the figure" in prompt
+    assert (
+        "The plan never asks to calculate, compute, derive, estimate or model a figure." in prompt
+    )
+    assert "A plan step asks research to look for a source that states the figure." in prompt
+    assert "the step asks research to find the figures that it is computed from" in prompt
     assert "When the query names only a measure, such as an index" in prompt
+    assert "A comparison is not a calculation." in prompt
 
 
-def test_the_plan_rule_holds_when_the_user_insists() -> None:
+def test_the_rule_holds_when_the_user_insists() -> None:
     prompt = _words(PREP_AGENT_SYSTEM)
-    assert "This holds even when the user insists on a calculation" in prompt
-    assert "never promise a calculated result" in prompt
+    assert "This holds for every request, also when the user insists." in prompt
+    assert "Never promise or offer an operation." in prompt
 
 
-def test_query_review_never_asks_how_to_compute() -> None:
+def test_approval_is_checked_only_for_a_clear_approval() -> None:
+    prompt = _words(PREP_AGENT_SYSTEM)
+    assert "Call `approve_plan` only when the message clearly approves the plan" in prompt
+
+
+def test_query_review_never_asks_how_to_calculate_or_convert() -> None:
     prompt = _words(QUERY_REVIEW_SYSTEM)
-    assert "is a clear subject" in prompt
-    assert "Never ask about such a request" in prompt
+    assert "a figure in a unit or a currency that the user names, are clear subjects" in prompt
+    assert "Do not ask how to calculate or convert a figure" in prompt
+    assert "Do not ask which figure or unit to report instead." in prompt
 
 
 def test_the_research_agent_looks_for_a_stated_figure() -> None:
@@ -99,9 +109,13 @@ def test_report_review_checks_for_calculations_without_a_glossary() -> None:
 
 
 def test_the_writer_and_the_reviewer_share_one_definition() -> None:
-    """Rounding and the precedence over section descriptions and client rules reach both."""
+    """The referral to "Each figure with its source's value, unit and period" reaches both."""
     definition = _words(CALCULATION_DEFINITION)
-    assert "rounding a value given with more digits than a reader can use" in definition
+    assert "and a rounding are not calculations either, but the rule" in definition
+    assert "A conversion that needs a rate, such as into another currency, is a calculation" in (
+        definition
+    )
+    assert "stay allowed" not in definition
     assert (
         "This rule has the highest priority of all the rules: no client-specific rule" in definition
     )

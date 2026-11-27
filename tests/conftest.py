@@ -10,9 +10,16 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from dial_deep_research.app.factory import create_app  # noqa: E402
+from dial_deep_research.settings import settings  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def client() -> TestClient:
     app = create_app()
     return TestClient(app)
+
+
+@pytest.fixture
+def debug_stages_shown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Turn on the debug stages, which are hidden by default."""
+    monkeypatch.setattr(settings, "show_debug_stages", True)

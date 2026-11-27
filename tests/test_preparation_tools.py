@@ -116,6 +116,15 @@ async def test_recording_the_same_steps_again_renews_the_plan_id() -> None:
     assert state.plan_id != first_id
 
 
+async def test_the_recorded_plan_comes_back_as_a_labelled_block() -> None:
+    state = _clear_query_state()
+    update_plan = PrepTools(state, today_date="2026-08-21", data_sources="").build()[1]
+
+    message = await update_plan.coroutine(steps=["one", "two"])
+
+    assert "**Research query:** q\n\n**Plan:**\n1. one\n2. two" in message
+
+
 async def test_changing_the_query_clears_the_plan_id(monkeypatch: pytest.MonkeyPatch) -> None:
     parsed = QueryReviewResponse(assessment="Settled.", questions=[])
     monkeypatch.setattr(
