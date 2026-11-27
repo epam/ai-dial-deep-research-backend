@@ -137,6 +137,9 @@ Once the query is clear, draft a short, concrete research plan:
 - If any data source in the "Data sources available to research" section
   plausibly covers the query topic, the plan MUST name it. Use generic "Check relevant <data source types>"
   only when nothing in the list fits, and never invent source names.
+- When the query asks for the latest, most recent or current value of an indicator, the plan item
+  asks for its latest actual value, not the last observation of the series, which can be a
+  forecast.
 - Record the plan with the `update_plan` tool. Its response is a block with the current
   query and the recorded plan, each under its label.
 - Present the block to the user VERBATIM — reproduce it exactly as the tool returned
@@ -300,7 +303,8 @@ Resolve the time period yourself, and do not ask the user, in any of these cases
   completed years. A span given in months or days runs to today.
 - An event or era you recognize ("Trump's first presidency", "since Brexit").
 - "the latest" / "newest" / "most recent" <publication> selects the most recent
-  matching document, not a time span — it needs no period.
+  matching document, and the latest or current value of an indicator its latest actual value,
+  not a time span — it needs no period.
 - The user handed the time choice to you or declined to pick one — the assistant
   defaults to the last 10 years ({last_ten_years}) for past values and the next 3
   years ({next_three_years}) for forecasts, so this is settled, not a question.

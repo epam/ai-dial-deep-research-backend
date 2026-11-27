@@ -85,6 +85,8 @@ The check SHALL resolve the time period itself, without a question, in each of t
 - an event or an era that it recognizes (see "A period named by an event or an era is written with
   its years");
 - "the latest" or "the most recent" publication, which selects a document and needs no period;
+- the latest, most recent or current value of an indicator, which is its latest actual value and
+  needs no period;
 - a time choice that the user handed over or declined.
 
 The check SHALL ask for the time period in each of these cases:
@@ -130,6 +132,10 @@ the agent writes the query when it makes that call.
 - **WHEN** the request anchors the time period to an event or an era that the check recognizes, such
   as "since the 2008 financial crisis"
 - **THEN** the clarity check SHALL treat the time period as settled and SHALL record no question about it
+
+#### Scenario: The current value of an indicator needs no period
+- **WHEN** the request asks for the current unemployment rate of Canada, with no period given
+- **THEN** the clarity check SHALL record no question about the time period
 
 #### Scenario: A previously unanswered dimension is re-asked
 - **WHEN** a material dimension was asked in a prior round and the user's reply did not address it
@@ -352,6 +358,36 @@ calculated result.
 - **THEN** the restated query SHALL ask for the average inflation over 2010–2020 without the
   instruction, the plan SHALL look for a stated average and, if no source states it, retrieve the
   annual values, and the agent SHALL tell the user that Deep Research does not calculate figures
+
+### Requirement: The plan asks for the latest actual value of an indicator
+
+When the query asks for the latest, most recent or current value of an indicator, the plan item
+SHALL ask for its latest actual value, not the last observation of the series, because a dataset
+series can run past today with forecasts. The plan SHALL name no year for that value: which period
+is the latest actual one depends on the series. A query for a forecast, or for a stated period,
+SHALL be planned as asked.
+
+#### Scenario: The most recent value is planned as the latest actual value
+
+- **WHEN** the user asks for the most recent real GDP growth rate of Canada from the World Economic
+  Outlook dataset, whose series run several years past today with forecasts
+- **THEN** the plan SHALL ask for Canada's latest actual real GDP growth rate, and SHALL NOT ask
+  only for the latest observation of the series
+
+#### Scenario: The plan names no year for the latest actual value
+
+- **WHEN** the user asks for the current inflation rate of Canada
+- **THEN** the plan SHALL ask for the latest actual value without fixing it to one calendar year
+
+#### Scenario: A forecast query is planned as a forecast
+
+- **WHEN** the user asks for the furthest-ahead forecast of Canada's real GDP growth
+- **THEN** the plan SHALL ask for that forecast, and SHALL NOT ask for the latest actual value
+
+#### Scenario: A stated period is planned as asked
+
+- **WHEN** in March 2031 the user asks for Canada's real GDP growth rate last year
+- **THEN** the plan SHALL ask for the value for 2030
 
 ### Requirement: approve_plan independently verifies approval and plan integrity
 
